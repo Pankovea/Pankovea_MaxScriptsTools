@@ -1,3 +1,7 @@
+-- CropToAtlas version 1.1
+-- 17.05.2021
+-- added CoronaBitmap Support
+
 macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" tooltip:"CropToAtlas - Convert xml to crop" icon:#("Patches", 1)
 (
 	global MapToAtlasRollout
@@ -147,16 +151,52 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			tex.filtering = 1
 		)
 
+		fn ApplyCoronaBitmapCrop tex sheetWidth sheetHeight x y w h r nrmFile =
+		(
+			--GET THE PERCENT ON THE NEW SPRITE ATLUS
+			if tex.clippingOn == off then (
+				uOffset = ((x+.5)/sheetWidth)
+				vOffset = ((y+.5)/sheetHeight)
+				wOffset = ((w-1)/sheetWidth) --1-((sheetWidth-w)/sheetWidth)
+				hOffset = ((h-1)/sheetHeight) --1-((sheetHeight-h)/sheetHeight)
+			)else(
+				uOffset = (x/sheetWidth) + (tex.clippingU * (w/sheetWidth))
+				vOffset = (y/sheetHeight) + (tex.clippingV * (h/sheetHeight))
+				wOffset = (w/sheetWidth) * tex.clippingWidth
+				hOffset = (h/sheetHeight) * tex.clippingHeight
+			)
+			if nrmFile != "" then (
+				tex.filename = nrmFile
+			) else (
+				if chExtChk.enabled then (
+					case atlasExt.state of (
+					1: tex.filename = ((getFilenamePath edtXML.text) + (getFilenameFile Atlas.name) + ".jpg")
+					2: tex.filename = ((getFilenamePath edtXML.text) + (getFilenameFile Atlas.name) + ".png")
+					)
+				)else(
+					tex.filename = ((getFilenamePath edtXML.text) + Atlas.name)
+				)
+			)
+			tex.clippingOn = on
+			tex.clippingU = uOffset
+			tex.clippingV = vOffset
+			tex.clippingWidth = wOffset
+			tex.clippingHeight = hOffset
+			tex.wAngle = r
+			-- tex.interpolation = 1
+		)
+		
 		fn GetBitmapTextures theObjects = 
 		(
 			texMaps = #()
 			for obj in theObjects do
 			(
 				join texMaps (getClassInstances bitmapTexture target:obj asTrackViewPick:off)
+				join texMaps (getClassInstances CoronaBitmap target:obj asTrackViewPick:off)
 			)
 			makeUniqueArray texMaps
 		)
-		
+
 		fn mapObjToAtlas obj =
 		(
 			
@@ -170,21 +210,27 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 				
 					for t in TextureArray do
 					(
-						if matchPattern tName pattern:t.name ignoreCase:true do
-						(
-								if t.r == "y" then(
-								ApplyBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h -90 "")
-								else(ApplyBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h 0 "")
+						local functionName = "ApplyBitmapCrop"
+						local rot
+						case classof tex of (
+							Bitmaptexture: functionName = "ApplyBitmapCrop"
+							CoronaBitmap: functionName = "ApplyCoronaBitmapCrop" 
 						)
+						print functionName
+						if t.r == "y" then rot = -90 else rot = 0
+						if matchPattern tName pattern:t.name ignoreCase:true do
+							case functionName of
+							(	"ApplyBitmapCrop": ApplyBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h rot ""
+								"ApplyCoronaBitmapCrop": ApplyCoronaBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h rot ""
+							)
 						if nrmSufChk.checked then (
 							atlNameSuf = (getFilenameFile t.name) + MapNrmSuf.text --+ (getFilenameType t.name)
 							atlNrmFile = 	(getFilenamePath edtXML.text) + (getFilenameFile Atlas.name) + AtlNrmSuf.text --+ (getFilenameType Atlas.name)
 							if matchPattern tName pattern:atlNameSuf ignoreCase:true do
-							(
-								if t.r == "y" then(
-								ApplyBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h -90 atlNrmFile)
-								else(ApplyBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h 0 atlNrmFile)
-							)							
+							case functionName of
+							(	"ApplyBitmapCrop": ApplyBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h rot atlNrmFile
+								"ApplyCoronaBitmapCrop": ApplyCoronaBitmapCrop tex Atlas.w Atlas.h t.x t.y t.w t.h rot atlNrmFile
+							)
 						)
 					)
 				)
@@ -273,32 +319,33 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			)
 		)
 
-fn showInfo m title:"Maps Info" width: 260 =
-(
-	global AtlasMapsInfo
-	try(DestroyDialog AtlasMapsInfo)catch()	
-	global szStat = m
-	global iWidth = width
+		fn showInfo m title:"Maps Info" width: 260 =
+		(
+			global AtlasMapsInfo
+			try(DestroyDialog AtlasMapsInfo)catch()	
+			global szStat = m
+			global iWidth = width
 	
-	rollout AtlasMapsInfo title
-	(
-		edittext edtStat "" height: 260 width: iWidth offset: [-15, -2] readOnly: true
-		button btnCopy "Copy" align: #left width: 50 across: 2
-		button btnOK "Ok" align: #right  width: 35
-		
-		on btnOK pressed do try(DestroyDialog AtlasMapsInfo)catch()
-		on AtlasMapsInfo open do edtStat.text = szStat	
-		on btnCopy pressed do setClipBoardText (stripTab edtStat.text)
-		
-	)
+			rollout AtlasMapsInfo title
+			(
+				edittext edtStat "" height: 260 width: iWidth offset: [-15, -2] readOnly: true
+				button btnCopy "Copy" align: #left width: 50 across: 2
+				button btnOK "Ok" align: #right  width: 35
+				
+				on btnOK pressed do try(DestroyDialog AtlasMapsInfo)catch()
+				on AtlasMapsInfo open do edtStat.text = szStat	
+				on btnCopy pressed do setClipBoardText (stripTab edtStat.text)
+				
+			)
 
-	createDialog AtlasMapsInfo width 295
-)
+			createDialog AtlasMapsInfo width 295
+		)
 		
-		on btnMapList pressed do (
+		on btnMapList pressed do
+		(
 			local textinfo = ""
 			objMaps = GetBitmapTextures selection
-			listed = sort(for i in objMaps collect (filenamefrompath i.filename))
+			listed = sort(for i in objMaps collect (if i.filename != undefined then filenamefrompath i.filename else ""))
 			listed = makeuniquearray listed
 			for map in listed do textinfo = textinfo + map + "\n"
 			
