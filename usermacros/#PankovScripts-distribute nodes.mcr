@@ -1,14 +1,21 @@
+/*
+Скрипт для рапределения в пространстве
+Особенности:
+* Работает по пивотам
+* Автоматически определяет первый и последний объекты
+* Распределяет группированные объекты
+*/
+
 macroScript Distibute_objects
 category:"#PankovScripts"
 toolTip:"Distibute objects"
 icon:#("AutoGrid",2)
-buttontext:"Distr" 
+buttontext:"Distr" 	
 (
-
 	global DistibuteObjRollout
 	
 	try(destroyDialog DistibuteObjRollout) catch()
-	
+
 	rollout DistibuteObjRollout "Distribute objects" width:300
 	(
 		button btDistr1 "Simple" width:64
@@ -16,9 +23,19 @@ buttontext:"Distr"
 		button btDistr2 "Unify spaces between bounding boxes" width:64
 	)
 	
+	on isEnabled return (try ( selection.count > 1 ) catch false)
+	
+	on execute do (
+		
 local s = #()
-for n=1 to selection.count do s[n] = selection[n]
-
+s = selection as array	
+for n in selection do (
+	if n.children.count > 0 then (
+		for i in n.children do (
+			deleteItem s (findItem s i)
+		)
+	)
+)
 -- sort order
 
 fn mx ar = 
@@ -72,5 +89,7 @@ local step_Y = (s[s.count].pos[2] - s[1].pos[2]) / (s.count - 1)
 local step_Z = (s[s.count].pos[3] - s[1].pos[3]) / (s.count - 1)
 undo on
 for n = 1 to s.count do s[n].pos = Point3 (s[1].pos.x+step_X*(n-1)) (s[1].pos.y+step_Y*(n-1)) (s[1].pos.z+step_Z*(n-1))
+
+)
 
 )
