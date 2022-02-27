@@ -1,4 +1,4 @@
-macroScript AlbedoTune category:"#PankovScripts" buttontext:"Albedo" tooltip:"Albedo Tunner (Corona, Vray)" icon:#("VRayToolbar", 27)
+﻿macroScript AlbedoTune category:"#PankovScripts" buttontext:"Albedo" tooltip:"Albedo Tunner (Corona, Vray)" icon:#("VRayToolbar", 27)
 (
 try ( destroydialog AlbedoTune )catch()
 
@@ -45,8 +45,28 @@ rollout AlbedoTune "Tune Levels (albedo)" width:200 height:130
 				if mat.levelReflect > spnReflThres.value then
 					if chkMlt.checked then mat.levelReflect = mat.levelReflect * spnReflLvl.value else mat.levelReflect = spnReflLvl.value
 			)
+			
+			Cmats = #()
+			for obj in objs do (join Cmats (getClassInstances CoronaPhysicalMtl target:obj))
+			Cmats = makeUniqueArray Cmats
+			if chkDiff.checked then for mat in Cmats do (
+				if mat.metalnessMode == 0 then (
+				if mat.baseLevel > spnDiffThres.value then
+					if chkMlt.checked then mat.baseLevel = mat.baseLevel * spnDiffLvl.value else mat.baseLevel = spnDiffLvl.value
+				)
+			)
+			if chkRefl.checked then for mat in Cmats do (
+				if mat.metalnessMode == 1 then (
+				if mat.baseLevel > spnReflThres.value then
+					if chkMlt.checked then mat.baseLevel = mat.baseLevel * spnReflLvl.value else mat.baseLevel = spnReflLvl.value
+				)
+			)
+			
 			success = true
 		)
+		
+
+		
 		if getRender() == "VRay" then (
 			for obj in objs do (join Cmats (getClassInstances VrayMtl target:obj))
 			Cmats = makeUniqueArray Cmats
