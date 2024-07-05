@@ -1,3 +1,20 @@
+macroScript StandartRegionRender category:"#PankovScripts" buttontext:"StdRegionRenderToggle" tooltip:"Standart Region Render Toggle" icon:#("UVWUnwrapModes", 23)
+(
+	local state = false
+	on isChecked return (getRenderType() == #region)
+	on execute do (--if the Macro button was pressed,
+		if (getRenderType() == #region) then state = false else state = true
+		if state then (
+			EditRenderRegion.EditRegion()
+			if findstring (renderers.current as string) "corona" != undefined then renderers.current.vfb_clearBetweenRenders = false
+		)else(
+			setRenderType #normal
+			EditRenderRegion.UpdateRegion()
+			if findstring (renderers.current as string) "corona" != undefined then renderers.current.vfb_clearBetweenRenders = true
+		)
+	)
+)
+
 macroScript StdBlowUpRenderToggle category:"#PankovScripts" buttontext:"StdBlowUpRenderToggle" tooltip:"Standart BlowUp Render Toggle" icon:#("UVWUnwrapModes", 5)
 (
 	local state = false
@@ -15,7 +32,7 @@ macroScript StdBlowUpRenderToggle category:"#PankovScripts" buttontext:"StdBlowU
 	)
 )
 
-macroScript CoronaRenderSelected category:"#PankovScripts" buttontext:"CoronaRenderSelectedToggle" tooltip:"Corona Render Selected Toggle" icon:#("ViewportNavigationControls", 5)
+macroScript CoronaRenderSelected category:"#PankovScripts" buttontext:"CoronaRenderSelectedToggle" tooltip:"Corona Render Selected Toggle" icon:#("PankovScripts", 2)
 (	
 	on isChecked return (try ( renderers.current.renderSelected_mode == 1) catch false)
 	on isEnabled return (
@@ -24,14 +41,32 @@ macroScript CoronaRenderSelected category:"#PankovScripts" buttontext:"CoronaRen
 		) catch false
 	)
 	on execute do (
-		if renderers.current.renderSelected_mode == 1 then (
-			renderers.current.renderSelected_mode = 0
-		)else(
+		if renderers.current.renderSelected_mode == 0 then (
 			renderers.current.renderSelected_mode = 1
+			renderers.current.vfb_clearBetweenRenders = false
+		)else(
+			renderers.current.renderSelected_mode = 0
+			renderers.current.vfb_clearBetweenRenders = true
 		)
 	)
+	/*
+	on isChecked return (try ( renderers.current.renderSelected_mode == 0) catch false)
+	on isEnabled return (
+		try (
+			if findstring (renderers.current as string) "corona" != undefined then true else false
+		) catch false
+	)
+	on execute do (
+		if renderers.current.renderSelected_mode == -1 then (
+			renderers.current.renderSelected_mode = 0
+		)else(
+			renderers.current.renderSelected_mode = -1
+		)
+	)
+	*/
 )
 
+/*
 macroScript CoronaClearVFBonRender category:"#PankovScripts" buttontext:"CoronaClearVFBToggle" tooltip:"Corona Clear VFB inbetween renders Toggle" icon:#("VRayToolbar", 2)
 (	
 	on isChecked return (try renderers.current.vfb_clearBetweenRenders catch false)
@@ -48,64 +83,7 @@ macroScript CoronaClearVFBonRender category:"#PankovScripts" buttontext:"CoronaC
 		)
 	)
 )
-
-macroScript CoronaFinalRender category:"#PankovScripts" buttontext:"FinalRenderToggle" tooltip:"Corona Final Render Settings" icon:#("VRayToolbar", 3)
-(
-	local state = false
-
-	on isChecked return state
-	on isEnabled return (
-		try (
-			if findstring (renderers.current as string) "corona" != undefined then true else false
-		) catch false
-	)
-	on execute do (
-		if renderscenedialog.isOpen() == True then (p = true; renderscenedialog.close()) else p = false
-		state = not state
-		if state then (
-			if rendOutputFilename != "" then (
-				rendTimeType = 3
-				rendSaveFile = true
-				renderers.current.vfb_autosave_enable = true
-				renderers.current.vfb_autosave_interval = 30
-				exrfname = (getfilenamepath rendOutputFilename)+"EXR\\"
-				if not doesFileExist exrfname then (
-					if (queryBox ("Path doesn't exist. Create?\n"+exrfname) title:"Warning!") then makeDir exrfname
-					else renderers.current.vfb_autosave_enable = false
-				)
-				renderers.current.vfb_autosave_filename = exrfname+(getfilenamefile rendOutputFilename)
-				if (rendEnd - rendStart)+2 > renderers.current.vfb_autosave_countEnd then renderers.current.vfb_autosave_countEnd = (rendEnd - rendStart)+2
-			)
-		)else(
-			rendTimeType = 1
-			rendSaveFile = false
-			renderers.current.dr_enable = false
-			renderers.current.vfb_autosave_enable = false
-		)
-		if p then (renderscenedialog.open())
-	)
-)
-
-macroScript HalfResolution category:"#PankovScripts" buttontext:"HalfRes" tooltip:"Divide by Half Resolution" icon:#("TrackViewStatus", 19)
-(
-	local state = false
-
-	on isChecked return state
-		
-	on execute do (
-		if renderscenedialog.isOpen() == True then (p = true; renderscenedialog.close()) else p = false
-		state = not state
-		if state then (
-			renderWidth = renderWidth/2
-			renderHeight = renderHeight/2
-		)else(
-			renderWidth = renderWidth*2
-			renderHeight = renderHeight*2
-		)
-		if p then (renderscenedialog.open())
-	)
-)
-
+*/
 
 macroScript CoronaDistributeRenderToggle category:"#PankovScripts" buttontext:"DistrRndrTgl" tooltip:"Corona Distributed Render Toggle" icon:#("FileLinkActionItems", 7)
 (
@@ -118,19 +96,37 @@ macroScript CoronaDistributeRenderToggle category:"#PankovScripts" buttontext:"D
 	on execute do renderers.current.dr_enable = not renderers.current.dr_enable
 )
 
-macroScript CoronaShowVfb category:"#PankovScripts" buttontext:"DistrRndrTgl" tooltip:"Corona Show VFB" icon:#("Maintoolbar", 101)
+
+macroScript CoronaDenoiseOnRenderToggle category:"#PankovScripts" buttontext:"DenoiseOnRndrTgl" tooltip:"Corona Denoise on Render Toggle" icon:#("PankovScripts", 1)
 (
-	local state = false
-	on isChecked return state
-	on isEnabled return ( try (	if findstring (renderers.current as string) "corona" != undefined then true else false	) catch false	)
+	on isChecked return (try renderers.current.denoise_duringRender catch false)
+	on isEnabled return (
+		try (
+			if findstring (renderers.current as string) "corona" != undefined then true else false
+		) catch false
+	)
 	on execute do (
-		state = not state
-		CoronaRenderer.showVfb state
+		if renderers.current.denoise_duringRender then (
+			renderers.current.denoise_duringRender = false
+		)else(
+			renderers.current.denoise_duringRender = true
+		)
 	)
 )
 
-macroScript CoronaStartInteractiveRender category:"#PankovScripts" buttontext:"CrnInteractive" tooltip:"Corona Start Interactive Render" icon:#("Render", 11)
+macroScript CoronRenderMaskToggle category:"#PankovScripts" buttontext:"RenderMaskOnlyTgl" tooltip:"Corona Render Mask Only Toggle" icon:#("PankovScripts", 3)
 (
-	on isEnabled return ( try (	if findstring (renderers.current as string) "corona" != undefined then true else false	) catch false	)
-	on execute do CoronaRenderer.startInteractive()
+	on isChecked return (try renderers.current.shading_onlyElements catch false)
+	on isEnabled return (
+		try (
+			if findstring (renderers.current as string) "corona" != undefined then true else false
+		) catch false
+	)
+	on execute do (
+		if renderers.current.shading_onlyElements then (
+			renderers.current.shading_onlyElements = false
+		)else(
+			renderers.current.shading_onlyElements = true
+		)
+	)
 )
