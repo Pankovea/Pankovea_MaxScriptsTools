@@ -2,7 +2,7 @@
 category:"#PankovScripts"
 buttontext:"InstanceAll"
 tooltip:"Instance objects or groups, reference base object"
-icon:#("Systems",3)
+icon:#("pankov_instancseAll",1)
 (
 
 	rollout Pankov_InstanceAll "Instance All 1.0" width:162 height:360
@@ -32,7 +32,7 @@ icon:#("Systems",3)
 			local count = 0
 			if obj.modifiers.count > 0 then (
 				-- Collect only those modifiers on which the same objects depend as on the base object
-				for i in obj.modifiers.count to 1 by -1 do ( 
+				for i in obj.modifiers.count to 1 by -1 do (
 					if isEqualListObjects (refs.dependentNodes obj.baseobject) (refs.dependentNodes obj.modifiers[i]) then count += 1 else break
 				)
 			)
@@ -326,9 +326,10 @@ icon:#("Systems",3)
 	  
 	)
 
-	pos = getinisetting (getmaxinifile()) "Pankov_InstanceAll" "WindowPos"
-	if pos!="" then CreateDialog Pankov_InstanceAll pos:(execute pos) else CreateDialog Pankov_InstanceAll
-	global main_obj = undefined
-
+	on execute do
+	(
+		pos = getinisetting (getmaxinifile()) "Pankov_InstanceAll" "WindowPos"
+		if pos!="" then CreateDialog Pankov_InstanceAll pos:(execute pos) else CreateDialog Pankov_InstanceAll
+		global main_obj = undefined
+	)
 )
-
