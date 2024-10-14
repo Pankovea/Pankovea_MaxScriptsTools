@@ -35,8 +35,9 @@ fn getMinMaxVal arr = ( -- in: array of float
 		if arr[i] > arr[i+1] then minVal = arr[i+1]
 		if arr[i] < arr[i+1] then maxVal = arr[i+1]
 	)
-	local subrtaction = maxVal - minVal
-	return #(minVal, maxVal, subrtaction)
+	local subtraction
+	if minVal != undefined then subtraction = maxVal - minVal
+	return #(minVal, maxVal, subtraction)
 )
 
 -- Get maximum value index in array
