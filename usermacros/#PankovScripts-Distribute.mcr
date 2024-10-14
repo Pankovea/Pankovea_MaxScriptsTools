@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2024.07.10
+/* @Pankovea Scripts - 2024.07.10
 Скрипт для рапределения в пространстве
 
 Особенности:
@@ -43,9 +43,15 @@ fn getMinMaxVal arr = ( -- in: array of float
 fn getMaxValueIndex arr = ( -- in: array of float
 	local k=1
 	case of (
-		(arr.count>1): (for n=1 to arr.count-1 do if arr[n]<arr[n+1] then k=n+1)
-		(arr.count<1): k=0
+		(arr.count==0): k=0
 		(arr.count==1): k=1
+		(arr.count>1): (	k=1
+							max_val = arr[k]
+							for n=1 to arr.count-1 do if arr[n]>max_val then (
+								k=n+1
+								max_val = arr[k]
+							)
+						)
 	)
 	return k
 )
