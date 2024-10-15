@@ -1,17 +1,29 @@
-/* @Pankovea Scripts - 2024.07.10
-Скрипт для рапределения в пространстве
+﻿/* @Pankovea Scripts - 2024.10.15
+Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
 * Работает в режиме Объектов и в режиме подобъектов. 
-(пока реализованj только выравнивание вершин в EditableSpline
-Технически это озможно делать только на базовом объекте стека модификаторов - 
-на более высоком уровне в стеке - EditSpline не работает)
+(пока реализовано только выравнивание вершин в EditableSpline, EditaplePoly, и модификатор EditPoly
+модификатор EditSpline не работает)
 
 * объекты распределяет равномерно по пивотам
 * Автоматически определяет первый и последний объекты
 * Распределяет группированные объекты
 
 * для запуска необходимо находиться в нужном режиме выделения.
+--------
+Distribute: A script for distribution in space
+
+Features:
+* Works in Object mode and in subobject mode. 
+(so far, only vertex alignment has been implemented in EditableSpline, EditaplePoly, and the EditPoly modifier the EditSpline
+modifier does not work)
+
+* distributes objects evenly across pivots
+* Automatically detects the first and last objects
+* Distributes grouped objects
+
+* To start, you must be in the desired selection mode.
 */
 
 macroScript Distibute_objects
@@ -21,7 +33,7 @@ icon:#("AutoGrid",2)
 buttontext:"Distr" 	
 (
 
-struct Vertex (numSp, numVert, pos)
+struct Vertex (obj, numSp, numVert, pos)
 
 -------------------------------------
 -- Find maximum dimension and sort dimension order from max to min
@@ -103,19 +115,6 @@ fn sortPoints_st2 arr dimNum1 dimNum2 = ( -- In: array of Vertex struct; dimNum1
 )
 
 
-fn getSelectedKnotsPos obj = ( -- Out array of Vertex struct
-	local VertexArray = #()
-
-	if classof obj.baseobject == SplineShape then (
-		for sp in 1 to numSplines obj do
-			for vert in getKnotSelection obj sp do
-				append VertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint obj sp vert))
-		return VertexArray
-	) else return #()
-
-)
-
-
 fn calcNewPositions arr = ( -- In and Out: array of Vertex struct
 	local dimOrder = getDimOrder arr
 	
@@ -131,62 +130,196 @@ fn calcNewPositions arr = ( -- In and Out: array of Vertex struct
 	return newArr
 )
 
+on isEnabled return (
+	work_classes = #(
+		line,
+		SplineShape,
+		PolyMeshObject,
+		Editable_Poly
+	)
+	try ( 
+		-- list of conditions from the case statment on execute event handler
+			-- multiple objects
+			selection.count > 1 \
+			and subobjectLevel == 0 \
+		or	-- modifiers and instanced modifiers
+			selection.count > 0 \
+			and subobjectLevel > 0 \
+			and (finditem work_classes (classof selection[1])) != 0 \
+			and modpanel.getCurrentObject() != selection[1].baseobject \
+		or	-- EditableSpline on base object
+			selection.count == 1 \
+			and subobjectLevel != 0 \
+			and (finditem #(line, SplineShape) (classof selection[1])) != 0 \
+			and modPanel.getCurrentObject() == selection[1].baseobject 			
+	) catch false
+)
+
 on execute do (
-	if selection.count == 1 and classof selection[1].baseobject == SplineShape and subobjectLevel != 0 then (
-		case subobjectLevel of (
-			-- Vertex
-			1: (
-				vertArray = getSelectedKnotsPos selection[1]
-				undo on (
-					for vert in calcNewPositions vertArray do
-						setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
+	local vertexArray
+	
+	case of (
+		-------------------- Editable Spline -----------------------
+		(selection.count == 1 \
+		and (finditem #(line, SplineShape) (classof selection[1])) != 0 \
+		and modPanel.getCurrentObject() == selection[1].baseobject \
+		and subobjectLevel != 0): (
+			case subobjectLevel of (
+				-- Vertex
+				1: (vertexArray = array()
+					for sp in 1 to numSplines selection[1] do
+						for vert in getKnotSelection selection[1] sp do
+							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint selection[1] sp vert))
+					undo on (
+						for vert in calcNewPositions vertexArray do
+							setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
+					)
+					updateShape selection[1]
 				)
-				updateShape selection[1]
-			)
-			-- Segments
-			2: (
-				print "Segments on EditSpline Not implemented yet"
-			)
-			-- Splines
-			3: (
-				print "Splines on EditSpline Not implemented yet"
-			)
-		)
-	)
-	
-	if selection.count == 1 and classof selection[1].baseobject == Editable_Poly and subobjectLevel != 0 then (
-		case subobjectLevel of (
-			-- Vertex
-			1: (
-				print "Vertex on EditPoly Not implemented yet"
-			)
-			-- Edge
-			2: (
-				print "Edges on EditPoly Not implemented yet"
-			)
-			-- Faces
-			4: (
-				print "Faces on EditPoly Not implemented yet"
-			)
-			-- Objects
-			5: (
-				print "Objects on EditPoly Not implemented yet"
-			)
-		)
-	)
-	
-	if selection.count > 1 then (
-		local sel = #()
-		sel = selection as array
-		for n in selection do (
-			if n.children.count > 0 then (
-				for i in n.children do (
-					deleteItem sel (findItem sel i)
+				-- Segments
+				2: (
+					print "Segments on EditSpline not implemented yet"
+				)
+				-- Splines
+				3: (
+					print "Splines on EditSpline not implemented yet"
 				)
 			)
 		)
-		undo on (
-			calcNewPositions sel
+		
+		-------------------- Editable Poly -----------------------
+		(selection.count == 1 \
+		and classof selection[1].baseobject == Editable_Poly \
+		and subobjectLevel != 0 \
+		and modpanel.getCurrentObject() == selection[1].baseobject): (
+			case subobjectLevel of (
+				-- Vertex
+				1: (
+					obj = selection[1]
+					vertList = polyop.getVertSelection obj
+					vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj numVert)
+					for vert in calcNewPositions vertexArray do (
+						polyop.setVert obj vert.numVert vert.pos
+					)
+				)
+				-- Edge
+				2: (
+					print "Edges on EditablePoly not implemented yet"
+				)
+				-- Faces
+				4: (
+					print "Faces on EditablePoly not implemented yet"
+				)
+				-- Objects
+				5: (
+					print "Objects on EditablePoly not implemented yet"
+				)
+			)
+		)
+		
+		----- Instanced modifier in multiple nodes -----
+		(selection.count > 0 \
+		and subObjectLevel > 0 \
+		and modpanel.getCurrentObject() != selection[1].baseobject): (
+			local sel = selection as array
+			local modif = modpanel.getCurrentObject()
+			local nodes = for o in selection where (finditem o.modifiers modif)!=0 collect o
+			vertexArray = array()
+			case classof modif of (
+				Edit_Spline: (
+					print "Have not access to Edit Spline modifier selection. Please, do select on the base object"
+					/* -- Code to test this issue
+					case subobjectLevel of (
+						-- Vertex
+						1: (for obj in nodes do (
+								for spl = 1 to (numsplines obj) do (
+									for vert in (getKnotSelection obj spl) do (
+										append vertexArray (Vertex obj:obj numSp:spl numVert:vert pos:(getKnotPoint obj spl vert))
+									)
+								)				
+							)
+							print vertexArray
+							undo on (
+								for vert in calcNewPositions vertexArray do
+									setKnotPoint vert.obj vert.numSp vert.numVert vert.pos
+							)
+							updateShape selection[1]
+						)
+					)
+					*/
+				)
+
+				Edit_Poly: (undo on (
+					-- if objects in group then open it and remeber to close
+					groups = for obj in selection where isgrouphead obj collect obj
+					for obj in groups do setGroupOpen obj true
+						
+					case subobjectLevel of (
+						-- Vertex
+						1: (
+							local oldVertSel = array() -- remember old vertex selection
+							local curVertSel
+							-- get vertex positions
+							for obj in nodes do (
+								select obj
+								curVertSel = modif.EditPolyMod.GetSelection #Vertex
+								append oldVertSel #(obj, curVertSel)
+								for vert in curVertSel do (
+									append vertexArray (Vertex obj:obj numVert:vert pos:(modif.GetVertex vert))
+								)
+							)
+							-- set new vertex pos
+							for vert in calcNewPositions vertexArray do (
+								if selection[1] != vert.obj then select vert.obj
+								modif.SetSelection #Vertex #{vert.numVert}
+								modif.Select #Vertex #{vert.numVert}
+								modif.MoveSelection (vert.pos - (modif.GetVertex vert.numVert))
+								modif.Commit()
+							)
+							-- select old vertex selection
+							for sel in oldVertSel do (
+								select sel[1]
+								modif.SetSelection #Vertex sel[2]
+							)
+							-- #FIXME if select again, objects are diapearing. Testing in MAX 2023. It must be deselect and select manualy for work well
+							deselect $*
+							completeredraw()
+						)
+						-- Edge
+						2: (
+							print "Edges on EditPoly not implemented yet"
+						)
+						-- Faces
+						4: (
+							print "Faces on EditPoly not implemented yet"
+						)
+						-- Objects
+						5: (
+							print "Objects on EditPoly not implemented yet"
+						)
+					)
+					-- close groups
+					for obj in groups do setGroupOpen obj false
+					-- #FIXME if select then objects are diapearing from the viewport. Testing in MAX 2023
+					--select groups
+				))
+			)
+		)
+			
+		--------------------- Objects -----------------------
+		(selection.count > 1): (
+			local sel = #()
+			sel = selection as array
+			for n in selection do (
+				if n.children.count > 0 then (
+					for i in n.children do (
+						deleteItem sel (findItem sel i)
+					)
+				)
+			)
+			undo on (
+				calcNewPositions sel
+			)
 		)
 	)
 )
