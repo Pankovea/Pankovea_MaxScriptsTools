@@ -116,42 +116,48 @@ fn sortPoints_st2 arr dimNum1 dimNum2 = ( -- In: array of Vertex struct; dimNum1
 
 
 fn calcNewPositions arr = ( -- In and Out: array of Vertex struct
-	local dimOrder = getDimOrder arr
-	
-	local newArr = sortPoints_st1 arr dimOrder[1]
-	newArr = sortPoints_st2 newArr dimOrder[1] dimOrder[2]
+	if arr.count > 0 then ( 
+		local dimOrder = getDimOrder arr
+		
+		local newArr = sortPoints_st1 arr dimOrder[1]
+		newArr = sortPoints_st2 newArr dimOrder[1] dimOrder[2]
 
-	local step_X = (arr[arr.count].pos[1] - arr[1].pos[1]) / (arr.count - 1)
-	local step_Y = (arr[arr.count].pos[2] - arr[1].pos[2]) / (arr.count - 1)
-	local step_Z = (arr[arr.count].pos[3] - arr[1].pos[3]) / (arr.count - 1)
-	
-	for n = 1 to arr.count do newArr[n].pos = Point3 (newArr[1].pos.x+step_X*(n-1)) (newArr[1].pos.y+step_Y*(n-1)) (newArr[1].pos.z+step_Z*(n-1))
-	
-	return newArr
+		local step_X = (arr[arr.count].pos[1] - arr[1].pos[1]) / (arr.count - 1)
+		local step_Y = (arr[arr.count].pos[2] - arr[1].pos[2]) / (arr.count - 1)
+		local step_Z = (arr[arr.count].pos[3] - arr[1].pos[3]) / (arr.count - 1)
+		
+		for n = 1 to arr.count do newArr[n].pos = Point3 (newArr[1].pos.x+step_X*(n-1)) (newArr[1].pos.y+step_Y*(n-1)) (newArr[1].pos.z+step_Z*(n-1))
+		
+		return newArr
+	) else ( 
+		return arr
+	)
 )
 
 on isEnabled return (
-	work_classes = #(
-		line,
-		SplineShape,
-		PolyMeshObject,
-		Editable_Poly
-	)
 	try ( 
-		-- list of conditions from the case statment on execute event handler
-			-- multiple objects
-			selection.count > 1 \
-			and subobjectLevel == 0 \
-		or	-- modifiers and instanced modifiers
-			selection.count > 0 \
-			and subobjectLevel > 0 \
-			and (finditem work_classes (classof selection[1])) != 0 \
-			and modpanel.getCurrentObject() != selection[1].baseobject \
-		or	-- EditableSpline on base object
-			selection.count == 1 \
-			and subobjectLevel != 0 \
+		-- list of conditions. Copy from the case statement on execute event handler
+				-------------------- Editable Spline -----------------------
+			(selection.count == 1 \
 			and (finditem #(line, SplineShape) (classof selection[1])) != 0 \
-			and modPanel.getCurrentObject() == selection[1].baseobject 			
+			and modPanel.getCurrentObject() == selection[1].baseobject \
+			and subobjectLevel != 0) \
+		or	\	-------------------- Editable Poly -----------------------
+			(selection.count == 1 \
+			and classof selection[1].baseobject == Editable_Poly \
+			and subobjectLevel != 0 \
+			and modpanel.getCurrentObject() == selection[1].baseobject) \
+			\ -- Max not update enabled state while selecting subobjects
+			\ -- and not (polyop.getVertSelection $).isEmpty) \
+		or 	\	----- Instanced modifier in multiple nodes -----
+			(selection.count > 0 \
+			and subObjectLevel > 0 \
+			and modpanel.getCurrentObject() != selection[1].baseobject) \
+			\ -- Max not update enabled state while selecting subobjects
+			\ -- and not (EditPolyMod.GetSelection (modpanel.getCurrentObject()) #Vertex).isEmpty) \
+		or 	\	--------------------- Objects -----------------------
+			(selection.count > 1 \
+			and subobjectLevel == 0)
 	) catch false
 )
 
@@ -191,7 +197,8 @@ on execute do (
 		(selection.count == 1 \
 		and classof selection[1].baseobject == Editable_Poly \
 		and subobjectLevel != 0 \
-		and modpanel.getCurrentObject() == selection[1].baseobject): (
+		and modpanel.getCurrentObject() == selection[1].baseobject \
+		and not (polyop.getVertSelection $).isEmpty): (
 			case subobjectLevel of (
 				-- Vertex
 				1: (
@@ -220,7 +227,8 @@ on execute do (
 		----- Instanced modifier in multiple nodes -----
 		(selection.count > 0 \
 		and subObjectLevel > 0 \
-		and modpanel.getCurrentObject() != selection[1].baseobject): (
+		and modpanel.getCurrentObject() != selection[1].baseobject \
+		and not (EditPolyMod.GetSelection (modpanel.getCurrentObject()) #Vertex)): (
 			local sel = selection as array
 			local modif = modpanel.getCurrentObject()
 			local nodes = for o in selection where (finditem o.modifiers modif)!=0 collect o
@@ -307,7 +315,8 @@ on execute do (
 		)
 			
 		--------------------- Objects -----------------------
-		(selection.count > 1): (
+		(selection.count > 1 \
+		and subobjectLevel == 0): (
 			local sel = #()
 			sel = selection as array
 			for n in selection do (
@@ -321,6 +330,8 @@ on execute do (
 				calcNewPositions sel
 			)
 		)
+		
+		else: print "No Selection to distribute"
 	)
 )
 
