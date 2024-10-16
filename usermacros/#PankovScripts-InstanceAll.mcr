@@ -44,7 +44,7 @@ tooltip:"Instance objects or groups, reference base object"
 icon:#("pankov_instancseAll",1)
 (
 
-	rollout Pankov_InstanceAll "Instance All 1.01" width:162 height:430
+	rollout Pankov_InstanceAll "Instance All 1.01" width:162 height:450
 	(
 		--------------
 		-- FUNCTIONS
@@ -389,6 +389,7 @@ icon:#("pankov_instancseAll",1)
 			setIniSetting (getmaxinifile()) "Pankov_InstanceAll" "WindowPos" (GetDialogPos Pankov_InstanceAll as string)
 		)
 	  
+		HyperLink link_copyright "PankovEA @ Github" align:#center hovercolor:(color 255 133 85) color:(color 85 189 255) visitedColor:(color 155 17 6) address:"https://github.com/Pankovea/Pankovea_MaxScriptsTools"
 	)
 
 	on execute do
