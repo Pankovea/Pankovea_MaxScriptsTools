@@ -147,14 +147,10 @@ on isEnabled return (
 			and classof selection[1].baseobject == Editable_Poly \
 			and subobjectLevel != 0 \
 			and modpanel.getCurrentObject() == selection[1].baseobject) \
-			\ -- Max not update enabled state while selecting subobjects
-			\ -- and not (polyop.getVertSelection $).isEmpty) \
 		or 	\	----- Instanced modifier in multiple nodes -----
 			(selection.count > 0 \
 			and subObjectLevel > 0 \
 			and modpanel.getCurrentObject() != selection[1].baseobject) \
-			\ -- Max not update enabled state while selecting subobjects
-			\ -- and not (EditPolyMod.GetSelection (modpanel.getCurrentObject()) #Vertex).isEmpty) \
 		or 	\	--------------------- Objects -----------------------
 			(selection.count > 1 \
 			and subobjectLevel == 0)
@@ -176,11 +172,15 @@ on execute do (
 					for sp in 1 to numSplines selection[1] do
 						for vert in getKnotSelection selection[1] sp do
 							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint selection[1] sp vert))
-					undo on (
-						for vert in calcNewPositions vertexArray do
-							setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
+					if vertexArray.count > 0 then (
+						undo on (
+							for vert in calcNewPositions vertexArray do
+								setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
+						)
+						updateShape selection[1]
+					) else (
+						print "No Vertex selection to distribute"
 					)
-					updateShape selection[1]
 				)
 				-- Segments
 				2: (
@@ -197,38 +197,40 @@ on execute do (
 		(selection.count == 1 \
 		and classof selection[1].baseobject == Editable_Poly \
 		and subobjectLevel != 0 \
-		and modpanel.getCurrentObject() == selection[1].baseobject \
-		and not (polyop.getVertSelection $).isEmpty): (
-			case subobjectLevel of (
-				-- Vertex
-				1: (
-					obj = selection[1]
-					vertList = polyop.getVertSelection obj
-					vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj numVert)
-					for vert in calcNewPositions vertexArray do (
-						polyop.setVert obj vert.numVert vert.pos
+		and modpanel.getCurrentObject() == selection[1].baseobject): (
+			if not (polyop.getVertSelection selection[1]).isEmpty then (
+				case subobjectLevel of (
+					-- Vertex
+					1: (
+						obj = selection[1]
+						vertList = polyop.getVertSelection obj
+						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj numVert)
+						for vert in calcNewPositions vertexArray do (
+							polyop.setVert obj vert.numVert vert.pos
+						)
+					)
+					-- Edge
+					2: (
+						print "Edges on EditablePoly not implemented yet"
+					)
+					-- Faces
+					4: (
+						print "Faces on EditablePoly not implemented yet"
+					)
+					-- Objects
+					5: (
+						print "Objects on EditablePoly not implemented yet"
 					)
 				)
-				-- Edge
-				2: (
-					print "Edges on EditablePoly not implemented yet"
-				)
-				-- Faces
-				4: (
-					print "Faces on EditablePoly not implemented yet"
-				)
-				-- Objects
-				5: (
-					print "Objects on EditablePoly not implemented yet"
-				)
+			) else (
+				print "No Vertex selection to distribute"
 			)
 		)
 		
 		----- Instanced modifier in multiple nodes -----
 		(selection.count > 0 \
 		and subObjectLevel > 0 \
-		and modpanel.getCurrentObject() != selection[1].baseobject \
-		and not (EditPolyMod.GetSelection (modpanel.getCurrentObject()) #Vertex)): (
+		and modpanel.getCurrentObject() != selection[1].baseobject): (
 			local sel = selection as array
 			local modif = modpanel.getCurrentObject()
 			local nodes = for o in selection where (finditem o.modifiers modif)!=0 collect o
@@ -276,22 +278,26 @@ on execute do (
 									append vertexArray (Vertex obj:obj numVert:vert pos:(modif.GetVertex vert))
 								)
 							)
-							-- set new vertex pos
-							for vert in calcNewPositions vertexArray do (
-								if selection[1] != vert.obj then select vert.obj
-								modif.SetSelection #Vertex #{vert.numVert}
-								modif.Select #Vertex #{vert.numVert}
-								modif.MoveSelection (vert.pos - (modif.GetVertex vert.numVert))
-								modif.Commit()
-							)
-							-- select old vertex selection
-							for sel in oldVertSel do (
+							if vertexArray.count > 0 then (
+								-- set new vertex pos
+								for vert in calcNewPositions vertexArray do (
+									if selection[1] != vert.obj then select vert.obj
+									modif.SetSelection #Vertex #{vert.numVert}
+									modif.Select #Vertex #{vert.numVert}
+									modif.MoveSelection (vert.pos - (modif.GetVertex vert.numVert))
+									modif.Commit()
+									)
+								-- select old vertex selection
+								for sel in oldVertSel do (
 								select sel[1]
 								modif.SetSelection #Vertex sel[2]
+								)
+								-- #FIXME if select again, objects are diapearing. Testing in MAX 2023. It must be deselect and select manualy for work well
+								deselect $*
+								completeredraw()
+							) else (
+								print "No Vertex selection to distribute"
 							)
-							-- #FIXME if select again, objects are diapearing. Testing in MAX 2023. It must be deselect and select manualy for work well
-							deselect $*
-							completeredraw()
 						)
 						-- Edge
 						2: (
@@ -331,7 +337,7 @@ on execute do (
 			)
 		)
 		
-		else: print "No Selection to distribute"
+		else: print "Can not do it."
 	)
 )
 
