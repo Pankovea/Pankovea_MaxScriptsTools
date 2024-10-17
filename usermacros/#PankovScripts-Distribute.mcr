@@ -272,6 +272,7 @@ on execute do (
 							-- get vertex positions
 							for obj in nodes do (
 								select obj
+								modpanel.setCurrentObject modif
 								curVertSel = modif.EditPolyMod.GetSelection #Vertex
 								append oldVertSel #(obj, curVertSel)
 								for vert in curVertSel do (
