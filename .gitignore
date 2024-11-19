@@ -1,0 +1,10 @@
+# Ignore all
+*
+# But not these files
+!usermacros
+!usericons
+
+!.gitignore
+!usermacros/#PankovScripts-*.mcr
+!usericons/pankov_*.bmp
+!README*.md
