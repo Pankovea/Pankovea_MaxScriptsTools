@@ -1,4 +1,9 @@
-macroScript Pankov_Copy category:"#PankovScripts" buttontext:"Copy" tooltip:"COPY-paste selected to temporary file" icon:#("PhysX_Main", 25) (
+macroScript Pankov_Copy
+category:"#PankovScripts"
+buttontext:"Copy"
+tooltip:"COPY-paste selected to temporary file"
+icon:#("pankov_CopyPaste", 1)
+(
 	local FileBuffer = getdir #AutoBack + "\\CopyPaste.max"
 	
 	on isenabled return (
@@ -11,7 +16,12 @@ macroScript Pankov_Copy category:"#PankovScripts" buttontext:"Copy" tooltip:"COP
 	)
 )
 
-macroScript Pankov_Paste category:"#PankovScripts" buttontext:"Paste" tooltip:"copy-PASTE from temporary file. With Ctrl to clear" icon:#("PhysX_Main", 26) (
+macroScript Pankov_Paste
+category:"#PankovScripts"
+buttontext:"Paste"
+tooltip:"copy-PASTE from temporary file. With Ctrl to clear"
+icon:#("pankov_CopyPaste", 2)
+(
 	local FileBuffer = getdir #AutoBack + "\\CopyPaste.max"	
 	
 	on isenabled return (
@@ -26,5 +36,4 @@ macroScript Pankov_Paste category:"#PankovScripts" buttontext:"Paste" tooltip:"c
 			deletefile FileBuffer
 		)
 	)
-	
 )
