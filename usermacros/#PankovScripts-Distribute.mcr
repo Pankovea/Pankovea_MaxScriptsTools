@@ -3,11 +3,14 @@ Distribute: Скрипт для рапределения в пространст
 
 Особенности:
 * Работает в режиме Объектов и в режиме подобъектов. 
-(пока реализовано только выравнивание вершин в EditableSpline, EditaplePoly, и модификатор EditPoly
+(пока реализовано только выравнивание вершин в EditableSpline,
+всех подобъектов EditablePoly, и модификатора EditPoly
 модификатор EditSpline не работает)
 
-* объекты распределяет равномерно по пивотам
-* Автоматически определяет первый и последний объекты
+* объекты распределяет равномерно учитывая размер объекта таким боразом, чтобы расстояние между ними было одинаковым
+(нужно доработать смещение пивота от центра и точность определения размера. Сейчас размер определяется по Bounding box)
+* Автоматически определяет первый и последний объекты по наибольшему расстоянию между ними.
+* работает если модификатор наложен инстансом на месколько объектов (#FIXME пока отрабатывает не корректно в max2025)
 * Распределяет группированные объекты
 
 * для запуска необходимо находиться в нужном режиме выделения.
@@ -16,12 +19,15 @@ Distribute: A script for distribution in space
 
 Features:
 * Works in Object mode and in subobject mode. 
-(so far, only vertex alignment has been implemented in EditableSpline, EditaplePoly, and the EditPoly modifier the EditSpline
+(so far, only vertex alignment has been implemented in EditableSpline,
+all EditablePoly subobjects, and the EditPoly modifier the EditSpline
 modifier does not work)
 
-* distributes objects evenly across pivots
-* Automatically detects the first and last objects
-* Distributes grouped objects
+* distributes objects evenly, taking into account the size of the object in such a way that the distance between them is the same
+(you need to refine the pivot offset from the center and the accuracy of sizing. Now the size is determined by the Bounding box)
+* Automatically detects the first and last objects by the largest distance between them.
+* works if the modifier is imposed by the instance on several objects (#FIXME is not working correctly in max2025 yet)
+* * Distributes grouped objects
 
 * To start, you must be in the desired selection mode.
 */
@@ -33,7 +39,7 @@ icon:#("AutoGrid",2)
 buttontext:"Distr" 	
 (
 
-struct Vertex (obj, numSp, numVert, pos, size=0, pivot_offset=[0,0,0], dist=0)
+struct Vertex (obj, numSp, numVert, pos, size=0, subs_pos, pivot_offset=[0,0,0], dist=0)
 
 -- Функция для нахождения индексов двух наиболее удалённых точек. Между ними будем распределять точки / A function for finding the indices of the two most distant points. We will distribute the points between them
 fn findFurthestPoints arrOfVerts = ( -- in: array of Vertex struct; out: it's array indexes
@@ -94,9 +100,9 @@ fn sortPoints arrOfVerts = ( -- In: array of Vertex struct; out = sorted array o
 
 -- Calc sizes function
 fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
+	local vec = normalize (arrOfVerts[arrOfVerts.count].pos - arrOfVerts[1].pos)
+	local old_rotation
 	if arrOfVerts[1].numVert == undefined then (
-		local vec = normalize (arrOfVerts[arrOfVerts.count].pos - arrOfVerts[1].pos)
-		local old_rotation
 		for vert in arrOfVerts do (
 			obj = vert.obj
 			-- Поворачиваем объект, совмещая вектор распределения объектов с осью х / Rotate the object by combining the object distribution vector with the x-axis
@@ -108,6 +114,19 @@ fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
 			-- определяем размер по оси x и возвращаем поворот / we determine the size on the x axis and return the rotation
 			vert.size = (obj.max - obj.min).x
 			obj.rotation = old_rotation
+		)
+	)
+	if arrOfVerts[1].subs_pos != undefined then (
+		local _min, _max
+		local i_min, i_max
+		for vert in arrOfVerts do (
+			projectedVals = for sub in vert.subs_pos collect dot sub vec
+			_min = 1e9; _max = -1e9
+			for val in projectedVals do (
+				if val < _min do _min = val
+				if val > _max do _max = val
+			)
+			vert.size = _max - _min
 		)
 	)
 	return arrOfVerts
@@ -143,6 +162,71 @@ fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 	)
 )
 
+-------------------------------------
+-- Группировка полигонов
+-------------------------------------
+
+-- возвращает прилегающие полигоны к заданному
+fn getAdjacent obj index type =
+(
+    local adj = #()
+    local verts
+	case type of (
+		#Face: verts = polyOp.getFaceVerts obj index
+		#Edge: verts = polyOp.getEdgeVerts obj index
+    )
+    for v in verts do (
+        local connected
+		case type of (
+			#Face: connected = polyOp.getFacesUsingVert obj v
+			#Edge: connected = polyOp.getEdgesUsingVert obj v
+		)
+        for el in connected do (
+            if el != index and findItem adj el == 0 then (
+                append adj el
+            )
+        )
+    )
+    return adj
+)
+
+-- группирует прилегающие полигоны. Рабтает как с Editable Poly, так и с Edit Poly
+fn groupAdjacent obj selected type = ( -- in: obj,  selected: bitarray; out: array of bitarrays (groups of Face numbers)
+    local grouped = #()
+    local visited = #{}
+    
+    for index in selected do (
+        if not visited[index] then (
+            local _group = #{}
+            local queue = #(index)
+            
+            while queue.count > 0 do (
+                local current = queue[1]
+                deleteItem queue 1
+                
+                if not visited[current] then (
+                    _group[current] = true
+                    visited[current] = true
+                    
+                    local adj = getAdjacent obj current type
+                    for el in adj do (
+                        if selected[el] and not visited[el] then (
+                            append queue el
+                        )
+                    )
+                )
+            )
+            append grouped _group
+        )
+    )
+    return grouped
+)
+
+
+-------------------------------------
+-- Macroscript
+-------------------------------------
+
 on isEnabled return (
 	try ( 
 		-- list of conditions. Copy from the case statement on execute event handler
@@ -166,12 +250,8 @@ on isEnabled return (
 	) catch false
 )
 
--------------------------------------
--- Execute
--------------------------------------
-
 on execute do (
-	local vertexArray
+	local vertexArray = #()
 	
 	case of (
 		-------------------- Editable Spline -----------------------
@@ -212,9 +292,9 @@ on execute do (
 		and subobjectLevel != 0 \
 		and modpanel.getCurrentObject() == selection[1].baseobject): (
 			if not (polyop.getVertSelection selection[1]).isEmpty then (
-				case subobjectLevel of (
+				case of (
 					-- Vertex
-					1: (
+					(subobjectLevel == 1): (
 						obj = selection[1]
 						vertList = polyop.getVertSelection obj
 						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj numVert)
@@ -223,16 +303,51 @@ on execute do (
 						)
 					)
 					-- Edge
-					2: (
-						print "Edges on EditablePoly not implemented yet"
+					(subobjectLevel == 2 or subobjectLevel == 3): (
+						local groupCenters = array()
+						obj = selection[1]
+						edgeList = polyop.getEdgeSelection obj
+						local groupedFaces = groupAdjacent obj edgeList #Edge
+						for gr_number in 1 to groupedFaces.count do (
+							curVertSel = #{}
+							for edge in groupedFaces[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
+							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj curVertSel)
+							bbox = box3()
+							expandToInclude bbox vert.subs_pos
+							vert.pos = bbox.center
+							append groupCenters vert.pos
+							append vertexArray vert
+						)
+						-- move vertices
+						for vert in calcNewPositions vertexArray do (
+							curVertSel = #{}
+							for edge in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
+							polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+						)
 					)
 					-- Faces
-					4: (
-						print "Faces on EditablePoly not implemented yet"
-					)
-					-- Objects
-					5: (
-						print "Objects on EditablePoly not implemented yet"
+					(subobjectLevel == 4 or subobjectLevel == 5): (
+						local groupCenters = array()
+						obj = selection[1]
+						faceList = polyop.getFaceSelection obj
+						local groupedFaces = groupAdjacent obj faceList #Face
+						1
+						for gr_number in 1 to groupedFaces.count do (
+							curVertSel = #{}
+							for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
+							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj curVertSel)
+							bbox = box3()
+							expandToInclude bbox vert.subs_pos
+							vert.pos = bbox.center
+							append groupCenters vert.pos
+							append vertexArray vert
+						)
+						-- move vertices
+						for vert in calcNewPositions vertexArray do (
+							curVertSel = #{}
+							for face in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
+							polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+						)
 					)
 				)
 			) else (
@@ -277,9 +392,9 @@ on execute do (
 					groups = for obj in selection where isgrouphead obj collect obj
 					for obj in groups do setGroupOpen obj true
 						
-					case subobjectLevel of (
+					case of (
 						-- Vertex
-						1: (
+						(subobjectLevel == 1): (
 							local oldVertSel = array() -- remember old vertex selection
 							local curVertSel
 							-- get vertex positions
@@ -306,24 +421,104 @@ on execute do (
 									select sel[1]
 									modif.SetSelection #Vertex sel[2]
 								)
-								-- #FIXME if select again, objects are diapearing. Testing in MAX 2023. It must be deselect and select manualy for work well
-								deselect $*
-								completeredraw()
+								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
+								--deselect $*
+								--completeredraw()
 							) else (
 								print "No Vertex selection to distribute"
 							)
 						)
 						-- Edge
-						2: (
-							print "Edges on EditPoly not implemented yet"
+						(subobjectLevel == 2 or subobjectLevel == 3): (
+							local oldEdgeSel = array() -- #(obj, curEdgeSel: bitarray) remember old vertex selection
+							local curEdgeSel
+							local curVertSel
+							local groupedEdges
+							local groupCenters = array()
+							-- get Edge positions
+							for obj in nodes do (
+								select obj
+								modpanel.setCurrentObject modif
+								curEdgeSel = modif.GetSelection #Edge
+								append oldEdgeSel #(obj, curEdgeSel)
+								groupedEdges = groupAdjacent obj curEdgeSel #Edge
+								for gr_number in 1 to groupedEdges.count do (
+									curVertSel = #{}
+									for edge in groupedEdges[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
+									vert = Vertex obj:obj numVert:gr_number subs_pos:(for v in curVertSel collect polyOp.getVert obj v)
+									bbox = box3()
+									expandToInclude bbox vert.subs_pos
+									vert.pos = bbox.center
+									append groupCenters vert.pos
+									append vertexArray vert
+								)
+							)
+							if vertexArray.count > 0 then (
+								-- set new vertex pos
+								for vert in calcNewPositions vertexArray do (
+									if selection[1] != vert.obj then select vert.obj
+									modif.SetSelection #Edge groupedEdges[vert.numVert]
+									modif.Select #Edge groupedEdges[vert.numVert]
+									modif.MoveSelection (vert.pos - groupCenters[vert.numVert])
+									modif.Commit()
+								)
+								-- select old edge selection
+								for sel in oldEdgeSel do (
+									select sel[1]
+									modif.SetSelection #Edge sel[2]
+								)
+								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
+								-- deselect $*
+								-- completeredraw()
+							) else (
+								print "No edge selection to distribute"
+							)
 						)
 						-- Faces
-						4: (
-							print "Faces on EditPoly not implemented yet"
-						)
-						-- Objects
-						5: (
-							print "Objects on EditPoly not implemented yet"
+						(subobjectLevel == 4 or subobjectLevel == 5): (
+							local oldFaceSel = array() -- #(obj, curFaceSel: bitarray) remember old vertex selection
+							local curFaceSel
+							local curVertSel
+							local groupedFaces
+							local groupCenters = array()
+							-- get Face positions
+							for obj in nodes do (
+								select obj
+								modpanel.setCurrentObject modif
+								curFaceSel = modif.GetSelection #Face
+								append oldFaceSel #(obj, curFaceSel)
+								groupedFaces = groupAdjacent obj curFaceSel #Face
+								for gr_number in 1 to groupedFaces.count do (
+									curVertSel = #{}
+									for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
+									vert = Vertex obj:obj numVert:gr_number subs_pos:(for v in curVertSel collect polyOp.getVert obj v)
+									bbox = box3()
+									expandToInclude bbox vert.subs_pos
+									vert.pos = bbox.center
+									append groupCenters vert.pos
+									append vertexArray vert
+								)
+							)
+							if vertexArray.count > 0 then (
+								-- set new vertex pos
+								for vert in calcNewPositions vertexArray do (
+									if selection[1] != vert.obj then select vert.obj
+									modif.SetSelection #Face groupedFaces[vert.numVert]
+									modif.Select #Face groupedFaces[vert.numVert]
+									modif.MoveSelection (vert.pos - groupCenters[vert.numVert])
+									modif.Commit()
+								)
+								-- select old Face selection
+								for sel in oldFaceSel do (
+									select sel[1]
+									modif.SetSelection #Face sel[2]
+								)
+								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
+								-- deselect $*
+								-- completeredraw()
+							) else (
+								print "No Face selection to distribute"
+							)
 						)
 					)
 					-- close groups
