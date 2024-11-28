@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2024.10.15
+﻿/* @Pankovea Scripts - 2024.11.28
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
@@ -33,101 +33,110 @@ icon:#("AutoGrid",2)
 buttontext:"Distr" 	
 (
 
-struct Vertex (obj, numSp, numVert, pos)
+struct Vertex (obj, numSp, numVert, pos, size=0, pivot_offset=[0,0,0], dist=0)
 
--------------------------------------
--- Find maximum dimension and sort dimension order from max to min
--------------------------------------
-
--- Get minimum and maximum values from array
-fn getMinMaxVal arr = ( -- in: array of float
-	local minVal = arr[1]
-	local maxVal = arr[1]
-	for i in 1 to arr.count-1 do (
-		if arr[i] > arr[i+1] then minVal = arr[i+1]
-		if arr[i] < arr[i+1] then maxVal = arr[i+1]
-	)
-	local subtraction
-	if minVal != undefined then subtraction = maxVal - minVal
-	return #(minVal, maxVal, subtraction)
+-- Функция для нахождения индексов двух наиболее удалённых точек. Между ними будем распределять точки / A function for finding the indices of the two most distant points. We will distribute the points between them
+fn findFurthestPoints arrOfVerts = ( -- in: array of Vertex struct; out: it's array indexes
+    local maxDistance = 0
+    local furthestPoints
+    local dist
+    for i = 1 to arrOfVerts.count-1 do (
+        for j = i+1 to arrOfVerts.count do (
+            dist = length (arrOfVerts[i].pos - arrOfVerts[j].pos)
+            if dist > maxDistance then (
+                maxDistance = dist
+                furthestPoints = #(i, j)
+            )
+        )
+    )
+    return furthestPoints
 )
 
--- Get maximum value index in array
-fn getMaxValueIndex arr = ( -- in: array of float
-	local k=1
-	case of (
-		(arr.count==0): k=0
-		(arr.count==1): k=1
-		(arr.count>1): (	k=1
-							max_val = arr[k]
-							for n=1 to arr.count-1 do if arr[n]>max_val then (
-								k=n+1
-								max_val = arr[k]
-							)
-						)
+
+-- Функция проецирует точки на линию между двумя точками. не создаётся новый массив, а меняется старый / The function projects points onto a line between two points. a new array is not created, but the old one is changed
+fn projectVertexToVector arrOfVerts p1 p2 = ( -- in: Vertex struct, point_start index, point_end index; out: array of Vertex struct
+	local p1_pos = arrOfVerts[p1].pos
+	local p2_pos = arrOfVerts[p2].pos
+	local vec = p2_pos - p1_pos
+	local t
+	for vert in arrOfVerts do (
+		t = (dot (vert.pos - p1_pos) vec) / (length vec)^2
+		vert.pos = p1_pos + t * vec
 	)
-	return k
+	return arrOfVerts
 )
 
--- Find longest dimension of selection. 1 = x, 2 = y, 3 = z
-fn getDimOrder arr = ( -- in: array of Vertex struct; out: array indexes of dimensions
-	local dim = #()
-	local dimOrder = #()
-	xArr = (getMinMaxVal (for vert in arr collect vert.pos[1]))[3]
-	yArr = (getMinMaxVal (for vert in arr collect vert.pos[2]))[3]
-	zArr = (getMinMaxVal (for vert in arr collect vert.pos[3]))[3]
-	dim = #(xArr, yArr, zArr)
-	-- Find order sortion by dimensions (XYZ)
-	for n=1 to 3 do (
-		dimOrder[n] = getMaxValueIndex dim
-		dim[dimOrder[n]] = -10^9 -- fill big negativ number for find next maximum
-	)
-	return dimOrder
-)
 
--------------------------------------
--- Sort functions
--------------------------------------
-
--- sort order 1
-fn sortPoints_st1 arr dimNum = ( -- In: array of Vertex struct, dimNum: integer; out = array of Vertex struct
-	for i=1 to arr.count-1 do (
-    for j=1 to arr.count-i do (
-        if arr[j].pos[dimNum] > arr[j+1].pos[dimNum] then (
-            local k = arr[j]
-            arr[j] = arr[j+1]
-			arr[j+1] = k
-	)))
-return arr)
-
--- sort order 2
-fn sortPoints_st2 arr dimNum1 dimNum2 = ( -- In: array of Vertex struct; dimNum1, dimNum2: integer; out = array of Vertex struct
-	for i=1 to arr.count-1 do (
-    for j=1 to arr.count-i do (
-		if (arr[j].pos[dimNum1] == arr[j+1].pos[dimNum1]) AND (arr[j].pos[dimNum2] > arr[j+1].pos[dimNum2]) then
-		(
-            local k = arr[j]
-            arr[j] = arr[j+1]
-			arr[j+1] = k
+-- Sort function
+fn sortPoints arrOfVerts = ( -- In: array of Vertex struct; out = sorted array of Vertex struct
+	local dist
+	local tmp
+	local FurthestVertsInd = findFurthestPoints arrOfVerts
+	-- Распределяем все точки вдоль вектора / We distribute all points along the vector
+	distributedVerts = projectVertexToVector arrOfVerts FurthestVertsInd[1] FurthestVertsInd[2]
+	startVert = distributedVerts[FurthestVertsInd[1]]
+	
+	-- Calc distances
+	for vert in distributedVerts do vert.dist = length (startVert.pos - vert.pos)
+	-- sort array
+	for i=1 to distributedVerts.count-1 do (
+		for j=1 to distributedVerts.count-i do (
+			if distributedVerts[j].dist > distributedVerts[j+1].dist then (
+				-- swap items
+				tmp = distributedVerts[j]
+				distributedVerts[j] = distributedVerts[j+1]
+				distributedVerts[j+1] = tmp
+			)
 		)
-	))
-	return arr
+	)
+	return distributedVerts
 )
 
+-- Calc sizes function
+fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
+	if arrOfVerts[1].numVert == undefined then (
+		local vec = normalize (arrOfVerts[arrOfVerts.count].pos - arrOfVerts[1].pos)
+		local old_rotation
+		for vert in arrOfVerts do (
+			obj = vert.obj
+			-- Поворачиваем объект, совмещая вектор распределения объектов с осью х / Rotate the object by combining the object distribution vector with the x-axis
+			old_rotation = obj.rotation
+			targetAxis = [1, 0, 0]
+			ang = acos(dot vec targetAxis)
+			rotationAxis = normalize (cross vec targetAxis)
+			rotate obj (angleAxis ang rotationAxis)
+			-- определяем размер по оси x и возвращаем поворот / we determine the size on the x axis and return the rotation
+			vert.size = (obj.max - obj.min).x
+			obj.rotation = old_rotation
+		)
+	)
+	return arrOfVerts
+)
 
-fn calcNewPositions arr = ( -- In and Out: array of Vertex struct
-	if arr.count > 0 then ( 
-		local dimOrder = getDimOrder arr
-		
-		local newArr = sortPoints_st1 arr dimOrder[1]
-		newArr = sortPoints_st2 newArr dimOrder[1] dimOrder[2]
+-------------------------------------
+-- Calc new positions
+-------------------------------------
 
-		local step_X = (arr[arr.count].pos[1] - arr[1].pos[1]) / (arr.count - 1)
-		local step_Y = (arr[arr.count].pos[2] - arr[1].pos[2]) / (arr.count - 1)
-		local step_Z = (arr[arr.count].pos[3] - arr[1].pos[3]) / (arr.count - 1)
+fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
+	if arrOfVerts.count > 0 then ( 
+		local newArr = sortPoints arrOfVerts
+		StartVert = newArr[1]
+		EndVert = newArr[newArr.count]
 		
-		for n = 1 to arr.count do newArr[n].pos = Point3 (newArr[1].pos.x+step_X*(n-1)) (newArr[1].pos.y+step_Y*(n-1)) (newArr[1].pos.z+step_Z*(n-1))
+		calcSizes newArr
 		
+		sum_radiuses = StartVert.size/2
+		for i in 2 to newArr.count-1 do sum_radiuses += newArr[i].size
+		sum_radiuses += EndVert.size / 2
+		---
+		path_vec = EndVert.pos - StartVert.pos
+		path_length = length path_vec
+		path_vec_nrm = normalize path_vec
+		---
+		step = (path_length - sum_radiuses) / (newArr.count - 1)
+					
+		for i=2 to newArr.count-1 do newArr[i].pos = newArr[i-1].pos + path_vec_nrm*newArr[i-1].size/2 + path_vec_nrm*step + path_vec_nrm*newArr[i].size/2
+
 		return newArr
 	) else ( 
 		return arr
@@ -153,9 +162,13 @@ on isEnabled return (
 			and modpanel.getCurrentObject() != selection[1].baseobject) \
 		or 	\	--------------------- Objects -----------------------
 			(selection.count > 1 \
-			and subobjectLevel == 0)
+			and (subobjectLevel == 0 or subobjectLevel == undefined))
 	) catch false
 )
+
+-------------------------------------
+-- Execute
+-------------------------------------
 
 on execute do (
 	local vertexArray
@@ -287,11 +300,11 @@ on execute do (
 									modif.Select #Vertex #{vert.numVert}
 									modif.MoveSelection (vert.pos - (modif.GetVertex vert.numVert))
 									modif.Commit()
-									)
+								)
 								-- select old vertex selection
 								for sel in oldVertSel do (
-								select sel[1]
-								modif.SetSelection #Vertex sel[2]
+									select sel[1]
+									modif.SetSelection #Vertex sel[2]
 								)
 								-- #FIXME if select again, objects are diapearing. Testing in MAX 2023. It must be deselect and select manualy for work well
 								deselect $*
@@ -324,17 +337,13 @@ on execute do (
 		--------------------- Objects -----------------------
 		(selection.count > 1 \
 		and subobjectLevel == 0): (
-			local sel = #()
-			sel = selection as array
-			for n in selection do (
-				if n.children.count > 0 then (
-					for i in n.children do (
-						deleteItem sel (findItem sel i)
-					)
-				)
-			)
+			-- Create Vertex struct for nodes
+			local sel = for obj in selection where obj.children.count == 0 collect Vertex obj:obj pos:obj.pos
+			-- set new positions
 			undo on (
-				calcNewPositions sel
+				for vert in calcNewPositions sel do (
+					vert.obj.pos = vert.pos
+				)
 			)
 		)
 		
