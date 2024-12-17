@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2024.10.17
+﻿/* @Pankovea Scripts - 2024.12.17
 InstanceAll: Скрипт для замены объектов инстансами и рефернесами
 
 Возможности:
@@ -43,8 +43,49 @@ buttontext:"InstanceAll"
 tooltip:"Instance objects or groups, reference base object"
 icon:#("pankov_instancseAll",1)
 (
+	local version = "1.02"
+	local ini_file = getmaxinifile()
+	local ini_section = "Pankov_InstanceAll_" + version
+	local main_obj = undefined
+	
+	--( -- Settings INI Functions
+	fn saveDefaultsToINI fname ini_section roll_list exclude_list:#() = (
+		local ctrlName = ""
+		for roll in roll_list do (
+			for ctrl in (execute (roll+".controls")) do (
+				ctrlName = (substring (ctrl as string) ((findstring (ctrl as string) ":")+1) 100)
+				if (findItem exclude_list ctrlName)==0 then (
+					ctrlData = case (classof ctrl) of (
+						SpinnerControl:		#(#value, ctrl.value)
+						CheckBoxControl:	#(#state, ctrl.state)
+						CheckButtonControl:	#(#state, ctrl.state)
+						RadioControl:		#(#state, ctrl.state)
+						editTextControl:	#(#text,"\\\""+ctrl.text+"\\\"")
+						SliderControl:		#(#range, ctrl.range)
+					)
+					if ctrlData != undefined then setIniSetting fname ini_section (roll+"."+ctrlName) (ctrlData as string)
+				)
+			)
+		)
+	)
 
-	rollout Pankov_InstanceAll "Instance All 1.01" width:162 height:450
+	fn loadDefaultsFromINI fname ini_section exclude_list:#() = (
+		local data
+		local str
+		if doesFileExist fname then (
+			for ctrl in (getIniSetting fname ini_section) do (
+				dot_pos = findstring ctrl "."
+				if dot_pos != undefined and finditem exclude_list (substring ctrl (dot_pos+1) 100) == 0 then (
+					data = execute (getIniSetting fname ini_section ctrl)
+					if data!="" then execute (ctrl+"."+(data[1] as string)+"="+(data[2] as string))
+				)
+			)
+		)
+	)
+	--) -- Settings INI Functions
+
+	
+	rollout Pankov_InstanceAll ("Instance All " + version)
 	(
 		--------------
 		-- FUNCTIONS
@@ -110,33 +151,30 @@ icon:#("pankov_instancseAll",1)
 			sleep 0.15
 			select cur_sel
 			if cur_sel.count == 0 then deselect obj
-			global main_obj = obj
+			main_obj = obj
 		)
 		
 		
 		group "Make instances" (
 			label lbl1 "will create new nodes"
-			checkbox rep "and replace old objects" checked:true	
+			checkbox chk_replace "and replace old objects" checked:true	
 			label lbl2 "and keep old objects params:"
 			
-			--checkbox pos "pos" checked:true enabled:false across:2
-			radioButtons pos_type "Transform" labels:#("Pivot pos", "Center pos") default:1 columns:2 align:#left
+			radioButtons rad_pos_type "Position" labels:#("Pivot pos", "Center pos") default:1 columns:2 align:#left
 			
-			radioButtons scale_type "Scale" labels:#("off", "obj", "fit") default:2 columns:3 align:#left
-			--checkbox sca "Scale" checked:true across:2
-			checkbox rot "Rotation" checked:true
+			radioButtons rad_scale_type "Scale" labels:#("off", "obj", "fit") default:2 columns:3 align:#left
+			checkbox chk_rotation "Rotation" checked:true
 			
-			checkbox mat "Material" checked:true offset:[0,10] across:2
-			checkbox lay "Layer" checked:true offset:[0,10]
-			
-			checkbox wire_col "Wirecolor" checked:true
-			
+			checkbox chk_material "Material" checked:true offset:[0,10] across:2
+			checkbox chk_wire_col "Wirecolor" checked:true offset:[0,10]
+			checkbox chk_layer "Layer and group" checked:true
+
 			button go_inst "[ make instances ]" width:130 enabled:false
 		)
 		
-		on scale_type changed state do (
+		on rad_scale_type changed state do (
 			case state of (
-				3: Pankov_InstanceAll.pos_type.state = 2
+				3: Pankov_InstanceAll.rad_pos_type.state = 2
 			)
 		)
 		
@@ -170,39 +208,40 @@ icon:#("pankov_instancseAll",1)
 							
 							append new_objects n
 							
-							n.name = old_obj.name
-							if wire_col.checked then 
+							if chk_replace.checked == true do n.name = old_obj.name
+							
+							if chk_wire_col.checked then 
 								(n.wirecolor = old_obj.wirecolor)
 							else (n.wirecolor = main_obj.wirecolor)
 								
 							if main_obj.target != undefined then (
 								n.target = instance(main_obj.target)
-								if wire_col.checked then n.target.wirecolor = main_obj.target.wirecolor
+								if chk_wire_col.checked then n.target.wirecolor = main_obj.target.wirecolor
 							)
 							
 							-- locate new object
 							-- If obj have a target
 							if n.target == undefined then (
 								if old_obj.target == undefined then (
-									if rot.checked == true do ( n.rotation = old_obj.rotation )
+									if chk_rotation.checked == true do ( n.rotation = old_obj.rotation )
 								)
-								case scale_type.state of (
+								case rad_scale_type.state of (
 									2: n.scale = old_obj.scale
 									3: scale n ((old_obj.max - old_obj.min) / (n.max - n.min))
 								)
 							) else (
 								if old_obj.target == undefined then (
 									n.targeted = false
-									if rot.checked == true do ( n.rotation = old_obj.rotation )
+									if chk_rotation.checked == true do ( n.rotation = old_obj.rotation )
 								) else (
 									-- locate target
-									if rot.checked == true do ( n.target.rotation = old_obj.target.rotation )
+									if chk_rotation.checked == true do ( n.target.rotation = old_obj.target.rotation )
 									n.target.position = old_obj.target.position
 									-- scale object
-									if scale_type.state == 2 do ( n.scale = old_obj.scale )
+									if rad_scale_type.state == 2 do ( n.scale = old_obj.scale )
 								)
 							)
-							case pos_type.state of (
+							case rad_pos_type.state of (
 								1: n.position = old_obj.position
 								2: (old_center_pos = old_obj.max - (old_obj.max - old_obj.min)
 									new_center_pos = n.max - (n.max - n.min)
@@ -211,7 +250,7 @@ icon:#("pankov_instancseAll",1)
 							)
 							
 							-- If old_obj is in group
-							if old_obj.parent != undefined then (
+							if chk_layer.checked and old_obj.parent != undefined then (
 								if isGroupHead old_obj.parent then (
 									if isGroupMember n then detachNodesFromGroup n
 									attachNodesToGroup n old_obj.parent
@@ -234,15 +273,14 @@ icon:#("pankov_instancseAll",1)
 							
 							-- Replace material
 							-- #FIXME not works with groups
-							if not mat.checked then (
+							if chk_material.checked then (
 								n.material = old_obj.material
 							)
 
 							-- Replace layer
-							if not lay.checked then (
-								layer = old_obj.layer
-								addNodeIerarchyToLayer n layer
-							)
+							if chk_layer.checked then layer = old_obj.layer
+											else layer = main_obj.layer
+							addNodeIerarchyToLayer n layer
 							
 							if use_progress then (
 								progressUpdate (100 * evaluted_count / (old_objects.count + 1) ) 
@@ -254,7 +292,7 @@ icon:#("pankov_instancseAll",1)
 							setGroupOpen main_obj true
 						)
 						
-						if rep.checked == true do (
+						if chk_replace.checked == true do (
 						  old_objects = clearDeadNodes old_objects
 						  delete old_objects
 						)
@@ -384,18 +422,23 @@ icon:#("pankov_instancseAll",1)
 				)
 			)
 		)
+		
+		button btn_save_defaults "Save settings"
+		
+		on btn_save_defaults pressed do (
+			saveDefaultsToINI ini_file ini_section #("Pankov_InstanceAll")
+		)
 
 		on Pankov_InstanceAll close do (
-			setIniSetting (getmaxinifile()) "Pankov_InstanceAll" "WindowPos" (GetDialogPos Pankov_InstanceAll as string)
+			setIniSetting ini_file ini_section "WindowPos" (GetDialogPos Pankov_InstanceAll as string)
 		)
-	  
+		
 		HyperLink link_copyright "PankovEA @ Github" align:#center hovercolor:(color 255 133 85) color:(color 85 189 255) visitedColor:(color 155 17 6) address:"https://github.com/Pankovea/Pankovea_MaxScriptsTools"
 	)
-
-	on execute do
-	(
-		pos = getinisetting (getmaxinifile()) "Pankov_InstanceAll" "WindowPos"
+	
+	on execute do (
+		pos = getinisetting ini_file ini_section "WindowPos"
 		if pos!="" then CreateDialog Pankov_InstanceAll pos:(execute pos) else CreateDialog Pankov_InstanceAll
-		global main_obj = undefined
+		loadDefaultsFromINI ini_file ini_section
 	)
 )
