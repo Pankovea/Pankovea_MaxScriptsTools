@@ -80,7 +80,7 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 					local cName 
 					
 					try(cName = c.Name)catch(cName = "")
-					
+					if cName == undefined then cName = ""
 					local controlValue = getINISetting thisINI thisRol.name cName
 					
 					if controlValue != "" do
