@@ -272,9 +272,15 @@ icon:#("pankov_instancseAll",1)
 							)
 							
 							-- Replace material
-							-- #FIXME not works with groups
 							if chk_material.checked then (
 								n.material = old_obj.material
+								if old_obj.children.count == 0 then (
+									for child in n.children do child.material = old_obj.material
+								) else (
+									local mats = for obj in old_obj.children collect obj.material
+									if old_obj.material==undefined then n.material = mats[1]
+									for i in 1 to n.children.count do n.children[i].material = mats[(mod (i-1) mats.count)+1]
+								)
 							)
 
 							-- Replace layer
@@ -286,10 +292,6 @@ icon:#("pankov_instancseAll",1)
 								progressUpdate (100 * evaluted_count / (old_objects.count + 1) ) 
 								evaluted_count += 1
 							)
-						)
-					
-						if isgrouphead main_obj then (
-							setGroupOpen main_obj true
 						)
 						
 						if chk_replace.checked == true do (
