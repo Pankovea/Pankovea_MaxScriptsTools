@@ -47,6 +47,7 @@ icon:#("pankov_instancseAll",1)
 	local ini_file = getmaxinifile()
 	local ini_section = "Pankov_InstanceAll_" + version
 	local main_obj = undefined
+	global Pankov_InstanceAll
 	
 	--( -- Settings INI Functions
 	fn saveDefaultsToINI fname ini_section roll_list exclude_list:#() = (
