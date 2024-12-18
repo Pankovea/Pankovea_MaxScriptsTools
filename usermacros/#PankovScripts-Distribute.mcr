@@ -137,7 +137,7 @@ fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
 -------------------------------------
 
 fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
-	if arrOfVerts.count > 0 then ( 
+	if arrOfVerts.count > 2 then (
 		local newArr = sortPoints arrOfVerts
 		StartVert = newArr[1]
 		EndVert = newArr[newArr.count]
@@ -265,7 +265,7 @@ on execute do (
 					for sp in 1 to numSplines selection[1] do
 						for vert in getKnotSelection selection[1] sp do
 							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint selection[1] sp vert))
-					if vertexArray.count > 0 then (
+					if vertexArray.count > 2 then (
 						undo on (
 							for vert in calcNewPositions vertexArray do
 								setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
@@ -298,8 +298,10 @@ on execute do (
 						obj = selection[1]
 						vertList = polyop.getVertSelection obj
 						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj numVert)
-						for vert in calcNewPositions vertexArray do (
-							polyop.setVert obj vert.numVert vert.pos
+						if vertexArray.count > 2 then undo on (
+							for vert in calcNewPositions vertexArray do (
+								polyop.setVert obj vert.numVert vert.pos
+							)
 						)
 					)
 					-- Edge
@@ -319,10 +321,12 @@ on execute do (
 							append vertexArray vert
 						)
 						-- move vertices
-						for vert in calcNewPositions vertexArray do (
-							curVertSel = #{}
-							for edge in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
-							polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+						if vertexArray.count > 2 then undo on (
+							for vert in calcNewPositions vertexArray do (
+								curVertSel = #{}
+								for edge in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
+								polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+							)
 						)
 					)
 					-- Faces
@@ -343,10 +347,12 @@ on execute do (
 							append vertexArray vert
 						)
 						-- move vertices
-						for vert in calcNewPositions vertexArray do (
-							curVertSel = #{}
-							for face in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
-							polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+						if vertexArray.count > 2 then undo on (
+							for vert in calcNewPositions vertexArray do (
+								curVertSel = #{}
+								for face in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
+								polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+							)
 						)
 					)
 				)
@@ -407,7 +413,7 @@ on execute do (
 									append vertexArray (Vertex obj:obj numVert:vert pos:(modif.GetVertex vert))
 								)
 							)
-							if vertexArray.count > 0 then (
+							if vertexArray.count > 2 then undo on (
 								-- set new vertex pos
 								for vert in calcNewPositions vertexArray do (
 									if selection[1] != vert.obj then select vert.obj
@@ -453,7 +459,7 @@ on execute do (
 									append vertexArray vert
 								)
 							)
-							if vertexArray.count > 0 then (
+							if vertexArray.count > 2 then undo on (
 								-- set new vertex pos
 								for vert in calcNewPositions vertexArray do (
 									if selection[1] != vert.obj then select vert.obj
@@ -499,7 +505,7 @@ on execute do (
 									append vertexArray vert
 								)
 							)
-							if vertexArray.count > 0 then (
+							if vertexArray.count > 2 then undo on (
 								-- set new vertex pos
 								for vert in calcNewPositions vertexArray do (
 									if selection[1] != vert.obj then select vert.obj
@@ -535,7 +541,7 @@ on execute do (
 			-- Create Vertex struct for nodes
 			local sel = for obj in selection where obj.children.count == 0 collect Vertex obj:obj pos:obj.pos
 			-- set new positions
-			undo on (
+			if sel.count > 2 then undo on (
 				for vert in calcNewPositions sel do (
 					vert.obj.pos = vert.pos
 				)
