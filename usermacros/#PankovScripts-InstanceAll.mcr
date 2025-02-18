@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2024.12.17
+﻿/* @Pankovea Scripts - 2025.02.18
 InstanceAll: Скрипт для замены объектов инстансами и рефернесами
 
 Возможности:
@@ -43,12 +43,12 @@ buttontext:"InstanceAll"
 tooltip:"Instance objects or groups, reference base object"
 icon:#("pankov_instancseAll",1)
 (
-	local version = "1.02"
+	local version = "1.03"
 	local ini_file = getmaxinifile()
 	local ini_section = "Pankov_InstanceAll_" + version
 	local main_obj = undefined
 	global Pankov_InstanceAll
-	
+
 	--( -- Settings INI Functions
 	fn saveDefaultsToINI fname ini_section roll_list exclude_list:#() = (
 		local ctrlName = ""
@@ -183,7 +183,7 @@ icon:#("pankov_instancseAll",1)
 			if not isValidNode main_obj then (
 				messagebox "no main object picked"
 			) else (
-				obj_list = #() + selection
+				obj_list = selection as array
 				old_objects = for obj in selection where findItem obj_list obj.parent == 0 collect obj
 				if old_objects.count > 100 then local use_progress = true else local use_progress = false
 				if old_objects.count>0 then (
@@ -267,8 +267,6 @@ icon:#("pankov_instancseAll",1)
 									for obj in old_obj.children do (
 										obj.parent = n
 									)
-								) else (
-									delete old_obj.children
 								)
 							)
 							
@@ -286,18 +284,22 @@ icon:#("pankov_instancseAll",1)
 
 							-- Replace layer
 							if chk_layer.checked then layer = old_obj.layer
-											else layer = main_obj.layer
+												 else layer = main_obj.layer
 							addNodeIerarchyToLayer n layer
 							
 							if use_progress then (
 								progressUpdate (100 * evaluted_count / (old_objects.count + 1) ) 
 								evaluted_count += 1
 							)
+							
+							if (not isgrouphead main_obj) and (isGroupHead old_obj) and chk_replace.checked then (
+								delete old_obj.children
+							)
 						)
 						
 						if chk_replace.checked == true do (
-						  old_objects = clearDeadNodes old_objects
-						  delete old_objects
+							old_objects = clearDeadNodes old_objects
+							delete old_objects
 						)
 						
 						select new_objects
