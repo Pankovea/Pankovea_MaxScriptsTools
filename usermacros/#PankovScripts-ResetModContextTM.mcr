@@ -1,4 +1,4 @@
-/* @Pankovea Scripts - 2024.11.25
+/* @Pankovea Scripts - 2025.03.20
 ResetModContextTM: Сбрасывает матрицу трансформаций в контексте модификатора к состоянию как если бы модификатор был только что применён к объектам или одному объекту.
 
 особенности:
@@ -101,3 +101,50 @@ on execute do (
 ) -- end on execute
 
 ) -- end macroscript
+
+macroScript Pankov_Copy_ModContextTM
+category:"#PankovScripts"
+buttontext:"CopyModTM"
+tooltip:"Copy modifier context tranform"
+( 
+	global Pankov_Copy_ModContextTM_buffer = #()
+	
+	rollout Copy_ModContextTM "Copy ModContextTM" width:162 height:35 (
+		button cp "Copy" across:2
+		button pst "Paste"
+		
+		on cp pressed do (
+			if selection.count > 0 then (
+				local modif = modPanel.getCurrentObject()
+				srcObj = selection[1]
+				if modPanel.validModifier modif then (
+                    -- Сохраняем мировую трансформацию объекта и трансформацию контекста модификатора
+                    Pankov_Copy_ModContextTM_buffer = #(srcObj.transform, (getModContextTM srcObj modif))
+				)
+			)
+		)
+		
+
+		on pst pressed do (
+			if selection.count > 0 and Pankov_Copy_ModContextTM_buffer.count == 2 then (
+				local modif = modPanel.getCurrentObject()
+				trgetObj = selection[1]
+				if modPanel.validModifier modif then (
+                    -- Получаем сохраненные матрицы
+                    srcWorldTM = Pankov_Copy_ModContextTM_buffer[1] -- Мировая трансформация исходного объекта
+                    srcModContextTM = Pankov_Copy_ModContextTM_buffer[2] -- Трансформация контекста модификатора
+                    
+                    -- Вычисляем новую матрицу контекста модификатора
+                    trgetTM = trgetObj.transform * (inverse srcWorldTM) * srcModContextTM
+                    
+                    -- Применяем новую матрицу к целевому объекту
+                    undo on (setModContextTM trgetObj modif trgetTM)
+				)
+			)
+		)
+	)
+	
+	on execute do (
+		CreateDialog Copy_ModContextTM
+	)
+)
