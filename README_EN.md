@@ -12,8 +12,10 @@ Pankovea utilities for working in 3dsmax with architectural visualization
 - [Corona Toggles](#corona-toggles)
 - [Crop To Atlas](#crop-to-atlas)
 - [Distribute](#distribute)
+- [Link Material](#link-material)
 - [Extract Instance](#extract-instance)
 - [Instance All](#instance-all)
+- [Reset ModContextTM](#Reset-ModContextTM)
 
 ## Installation
 1. Option via repository cloning:
@@ -63,18 +65,29 @@ Features:
 
 
 ## Copy-Paste
-[Version 2024.11.19](usermacros/%23PankovScripts-CopyPaste.mcr)
+[Version 2025.03.20](usermacros/%23PankovScripts-CopyPaste.mcr)
+### Working with objects
 
 Adds buttons for copying and pasting objects between different 3dsmax projects/windows
-
-You can assign keyboard shortcuts via the menu: `Customize -> Hotkey Editor -> find Copy-Paste action -> Assign hotkey`
+You can assign keyboard shortcuts via the menu: `Customize -> Hotkey Editor -> find Copy-Paste action -> Assign hotkey'.
+For example, I have Alt+C and Alt+V.
 
 In the case of an individual installation, you need to copy the icons [1](usericons/pankov_CopyPaste_24i.bmp) and [2](usericons/pankov_CopyPaste_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
+### Working with modifiers
+A macro script for assigning keyboard shortcuts. It has no icons.
+Instead of selecting with the mouse -> right-> select copy modifier in the menu, then do the same for pasting.
+You can use the keyboard shortcuts: `Customize -> Hotkey Editor -> find Copy-Paste Modifier action -> Assign hotkey'.
+For example, I have Ctrl+Shift+C and Ctrl+Shift+V, which is very convenient. (but you will have to remove the quick button from Chamfer Mode on EditSpline and EditPoly)
+
+Useful features:
+* You can insert a modifier on several selected objects at once. It will be inserted by the instance.
+* The EditPoly and EditSpline modifiers are inserted without local data.
+  In other words, the instance remains connected to change a group of objects, but the other object does not break.
 
 ## Corona Toggles
 [Version 2024.07.05](usermacros/%23PankovScripts-CoronaToggles.mcr)
 
-Brings the Corona Render quick settings to the panel
+Displays the quick settings of Corona Render on the panel
 Includes:
 * Standart Region Render Toggle
 * Standart BlowUp Render Toggle
@@ -95,26 +108,40 @@ Using the program, you can create an Atlas of textures, while reducing the numbe
 
 
 ## Distribute
-[Version 2024.10.15](usermacros/%23PankovScripts-Distribute.mcr)
+[Version 2025.03.20](usermacros/%23PankovScripts-Distribute.mcr)
 
 The script for the distribution in space
 
 Features:
-* Works in Object mode and in subobject mode. 
-(so far, only vertex alignment has been implemented in EditableSpline, EditaplePoly, and the EditPoly modifier the EditSpline
-modifier does not work)
+* Works in object mode and in subobject mode. 
+(so far, only vertex alignment has been implemented in EditableSpline, EditaplePoly, and the EditPoly modifier.
+EditSpline does not work in the modifier)
 
-* distributes objects evenly across pivots
-* Automatically detects the first and last objects
-* Distributes grouped objects
+* distributes objects evenly, taking into account the size of the object, while maintaining the same distance between objects.
+* Automatically detects the first and last objects as the furthest from each other in space
+* Distributes grouped objects (defines parent objects and operates on them)
 * To start, you must be in the desired selection mode.
+* In the subobject mode, it groups selected faces and operates on them as objects, taking into account their size.
+  The vertices are distributed individually.
 
+## Link material
+[Version 2025.03.20](usermacros/%23PankovScripts-LinkMaterial.mcr)
+
+The idea is taken from Blender.
+With a quick click, you can quickly take material from a nearby object. 
+Assign keyboard shortcuts in: `Customize -> Hotkey Editor`
+* `Link material` -> Assign hotkey **Ctrl+L**
+* `Select by material` -> Assign hotkey` **Ctrl+Shift+L**
+
+The principle is this:
+* Link material: First, you need to select all the objects to assign the matrix, and at the end, select the object from which you want to take a sample of the material and press the keyboard shortcut.
+* Select by material: Select an object and press a keyboard shortcut. I will highlight all objects in the field of view that have the same material.(s)
 
 ## Extract Instance
 [version 2024.07.10](usermacros/%23PankovScripts-ExtractInstance.mcr)
 
 Retrieves the instance object from the reference object
-Just select the reference object and run the macro script
+Just select the reference object and run the macro script.
 
 In the case of an individual installation, you need to copy the icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
 
@@ -122,7 +149,7 @@ In the case of an individual installation, you need to copy the icons [1](useric
 ## Instance All
 [version 2024.10.17](usermacros/%23PankovScripts-InstanceAll.mcr)
 
-Script for replacing objects with instances and references
+The script for replacing objects with instances and references
 
 In the case of an individual installation, you need to copy the icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
 
@@ -133,10 +160,32 @@ That is, if some instances were allocated, then the unallocated part will not be
 * When replacing a large number of objects (>100), the progress bar is displayed
 
 1. The `Make Instances` group
-    * Can clone both parallel objects and grouped objects with an instance
+* Can clone both parallel objects and grouped objects with an instance
 * Can adjust the size of the new instance to the size of the objects being replaced
 
 2. The `Get instance part from reference object` group
 Retrieves the base object (the lower one in the modifier stack) and replaces the selected objects with it.
 At the same time, no new objects are created and all dependencies in the scene are saved.
-    * It can also replace the entire stack of modifiers
+* It can also replace the entire stack of modifiers.
+
+## Reset ModContextTM
+[version 2025.03.20](usermacros/%23PankovScripts-ResetModContextTM.mcr)
+
+Resets the transformation matrix in the context of the modifier to the state as if the modifier had just been applied to objects or a single object.
+
+Reference:
+
+Each modifier has a so-called transformation context. For example, if we applied a modifier to one object, then the transformation context will be zero, but if the modifier is applied to several objects at once, then the transformation point is placed in the center of the objects' masses. So the modifier will act the same way on objects in the virtual space, but each object will have its own context. And if we shift the objects, we will see that the context is tied to local coordinates. This script is for such cases. After the objects are shifted, place the context again at one point in world coordinates. 
+
+Features:
+* Works with a dedicated modifier in the modifier stack
+* when Shift is pressed, resets ModContextBBox for each object individually
+* when Esc is pressed, Gizmo resets
+* when changing the transformation point, it is not possible to keep the object in its original position
+.:
+* undo does not work
+
+### Macro script Pankov_Copy_ModContextTM
+Copies and inserts the transformation matrix for the modifier, preserving its global position as in the original object.
+
+This is a good way to combine the context of modifiers by adjusting only one of them and not changing all the others (unlike the previous script).
