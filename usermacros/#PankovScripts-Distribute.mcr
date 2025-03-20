@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2024.11.28
+﻿/* @Pankovea Scripts - 2025.03.20
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
@@ -539,7 +539,7 @@ on execute do (
 		(selection.count > 1 \
 		and subobjectLevel == 0): (
 			-- Create Vertex struct for nodes
-			local sel = for obj in selection where obj.children.count == 0 collect Vertex obj:obj pos:obj.pos
+			local sel = for obj in selection where (finditem (selection as array) obj.parent) == 0 collect Vertex obj:obj pos:obj.pos
 			-- set new positions
 			if sel.count > 2 then undo on (
 				for vert in calcNewPositions sel do (
