@@ -242,6 +242,7 @@ on isEnabled return (
 			and modpanel.getCurrentObject() == selection[1].baseobject) \
 		or 	\	----- Instanced modifier in multiple nodes -----
 			(selection.count > 0 \
+			and subObjectLevel != undefined \
 			and subObjectLevel > 0 \
 			and modpanel.getCurrentObject() != selection[1].baseobject) \
 		or 	\	--------------------- Objects -----------------------
@@ -363,6 +364,7 @@ on execute do (
 		
 		----- Instanced modifier in multiple nodes -----
 		(selection.count > 0 \
+		and subObjectLevel != undefined \
 		and subObjectLevel > 0 \
 		and modpanel.getCurrentObject() != selection[1].baseobject): (
 			local sel = selection as array
@@ -537,7 +539,7 @@ on execute do (
 			
 		--------------------- Objects -----------------------
 		(selection.count > 1 \
-		and subobjectLevel == 0): (
+		and (subobjectLevel == 0 or subobjectLevel == undefined)): (
 			-- Create Vertex struct for nodes
 			local sel = for obj in selection where (finditem (selection as array) obj.parent) == 0 collect Vertex obj:obj pos:obj.pos
 			-- set new positions
