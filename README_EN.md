@@ -1,4 +1,4 @@
-[Русская версия](README.md)
+[на Русском](README.md)
 # Pankovea_MaxScriptsTools
 Pankovea utilities for working in 3dsmax with architectural visualization
 
@@ -17,6 +17,8 @@ Pankovea utilities for working in 3dsmax with architectural visualization
 - [Instance All](#instance-all)
 - [Reset ModContextTM](#Reset-ModContextTM)
 
+[scripts/](scripts/)
+- [Simplify-Spline-by-Remove-Selected-Vertices](#simplify-spline-by-remove-selected-vertices)
 ## Installation
 1. Option via repository cloning:
     - Go to your folder `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX-version_\ENU ` Replace `_USER_` with your operating system username, `_MAX-version_` with your 3dsmax version
@@ -27,6 +29,17 @@ Pankovea utilities for working in 3dsmax with architectural visualization
     - Download the required script from the usermacros folder and place it in the folder `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX_version_\ENU\usermacros ` In the address bar, replace _USER with your operating system username, _MAX_version_ with your 3dsmax version <a name="#individual-icons-install"></a>
     - If necessary, download `usericons` and put them in the folder `..\ENU\usericons`
 
+## Simplify Spline by Remove Selected Vertices
+[Version 2025.04.01 - alpha](/scripts/Simplify-Spline-by-Remove-Selected-Vertices.ms)
+
+Removes a group of consecutive vertices in a spline and strives to create a shape.
+
+To work, you need [Matrix.ms ](/scripts/Matrix.ms) in the script folder. [Matrix docs](/docs/Matrix.ms_EN.md)
+
+You need to select the vertices to be deleted in the spline (not in the modifier) and run run_simplifySpline(). I'm still trying to figure out how to format the macro script.
+
+It doesn't process the extreme vertices yet. You will not be able to delete the first and last in a closed spline.
+There are also problems if the vertices are angular. They should all have guides in this implementation.
 
 ## Albedo Tuner
 [Version 2022.02.27](usermacros/%23PankovScripts-Albedo%20Tuner.mcr)
