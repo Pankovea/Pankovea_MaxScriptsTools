@@ -26,38 +26,53 @@ There are also problems if the vertices are angular. They should all have guides
 fileIn "Matrix.ms" -- Добавить функционал для работы с матриами. Файл должен лежать в одной папке с данным скриптом
 
 -- Вспомогательная функция сэмплирования с выводом координат сэмплов и их расстояния от начала участка.
-fn sampleSpline spline s_num startIdx endIdx samplesPerSegment:10 =
-(
-	local segData = getSegLengths spline s_num cum:true byVertex:true
-    local numSegs = (segData.count - 1) / 2
-    local totalLength = segData[segData.count] -- Полная длина сплайна
-    local samples = #()
-    
-    local realStart = segData[startIdx + numSegs]
-    local realEnd = segData[endIdx + numSegs]
-    local totalLengthReal = realEnd - realStart
-    
-    for seg = startIdx to endIdx-1 do
-    (
-        local segStartReal = segData[seg + numSegs]
-        local segEndReal = segData[seg + 1 + numSegs]
-        local segLengthReal = segEndReal - segStartReal
-        local segSamples = ceil (samplesPerSegment * (segLengthReal / totalLengthReal))
-        if segSamples < 1 then segSamples = 1
-        
-        for i = 0 to segSamples do
-        (
-            local paramSeg = i as float / segSamples
-            local cumulativeLength = segStartReal - realStart + paramSeg * segLengthReal
-            local paramAbs = (segData[seg] + paramSeg * (segData[seg+1] - segData[seg])) / 1.0 -- Нормализуем относительно сегмента
-            local pos = interpCurve3D spline s_num paramAbs
+fn sampleSpline spline s_num vertSelection totalSamples:100 = (
+    local segDataCum = getSegLengths spline s_num cum:true
+	local segData = getSegLengths spline s_num 
+	local totalLength = segData[segData.count]
+	/*
+    format "segDataCum %\n" segDataCum
+	format "segData %\n" segData
+	format "vertSelection %\n" vertSelection
+	format "totalLength %\n" totalLength
+	*/
+    if vertSelection.count < 2 then return #()
 
-            append samples #(pos, cumulativeLength)
+    -- Вычисляем длины сегментов и общую длину
+	local selParamLen = 0.0
+    local segLengths = for i = 1 to vertSelection.count - 1 do (
+		selParamLen += segData[vertSelection[i]]
+	)
+	
+	--format "selParamLen %\n" selParamLen
+	
+    -- Распределяем сэмплы пропорционально длинам сегментов
+    local samples = #()
+	local cumLen = 0.0
+    for i = 1 to vertSelection.count - 1 do (
+        local seg = vertSelection[i]
+        local segParamLen = segData[seg]
+        local numSegSamples = if i == vertSelection.count - 1 then (
+            totalSamples - samples.count -- Оставшиеся сэмплы для последнего сегмента
+        ) else (
+            floor (segParamLen / selParamLen * totalSamples + 0.5) -- Пропорциональное количество сэмплов
         )
-        if seg != endSeg then deleteItem samples samples.count
+		--format "seg segParamLen numSegSamples: % % % \n" seg segParamLen numSegSamples
+		-- Сэмплируем
+        if numSegSamples > 0 then (
+            local step = segParamLen / (numSegSamples - (if numSegSamples > 1 then 1 else 0)) -- Шаг внутри сегмента
+            local startParam = if seg>1 then segDataCum[seg-1] else 0
+            local endParam = segDataCum[seg]
+            --format "step startParam endParam: % % % \n" step startParam endParam
+			for paramAbs in startParam to endParam by step do (
+				local currentLen = cumLen + (paramAbs - startParam) * totalLength
+                local pos = interpCurve3D spline s_num paramAbs
+                append samples #(pos, currentLen)
+			)
+        )
+		cumLen += segParamLen * totalLength
     )
-    
-    samples[samples.count] = #(interpCurve3D spline s_num segData[endIdx], totalLengthReal)
+	format "samples.count: %\n" samples.count
     samples
 )
 
@@ -214,11 +229,22 @@ fn fitBezierToSamples samples origOutVec:[0,0,0] origInVec:[0,0,0] =
 
 
 -- Основная функция для удаления подряд идущих вершин (не крайних) с сохранением кривизны
-fn simplifySpline spline s_num startIdx endIdx useOriginalDirections:true samplesPerSegment:100 =
+fn simplifySpline spline s_num vert_selection samplesPerSegment:100 = -- useOriginalDirections:true
 (
-	test = false 
+	local test = false 
+	local start = vert_selection[1]
+	local end = vert_selection[vert_selection.count]
+	local nknots = numknots spline s_num
 	
-    local samples = sampleSpline spline s_num (startIdx-1) (endIdx+1) samplesPerSegment:samplesPerSegment
+	local pre_start = if vert_selection[1] == 1 then nknots else (vert_selection[1] - 1)
+	local after_end = if vert_selection[vert_selection.count] == nknots then 1 else (vert_selection[vert_selection.count] + 1)		
+
+	local work_range = for i in vert_selection collect i -- code replace `copy vert_selection`, that returns `OK`
+	insertitem pre_start work_range 1
+	append work_range after_end
+	format "work_range=% \n" work_range
+	
+    local samples = sampleSpline spline s_num work_range totalSamples:samplesPerSegment
     local P0 = samples[1][1]
     local P3 = samples[samples.count][1]
     
@@ -227,38 +253,45 @@ fn simplifySpline spline s_num startIdx endIdx useOriginalDirections:true sample
 	if test then (
 		format "samples:\n"
 		for s in samples do (
-			format "point=%; t=%\n" s[1] s[2])
+			format "point=%; paam=%\n" s[1] s[2])
 		format "end samples\n"
-		--drawSamples samples "samples" 
+		drawSamples samples "samples" 
 	)
-		
-	if useOriginalDirections then (    
-		local origOutVec = getOutVec spline 1 (startIdx-1) - P0
-		local origInVec = getInVec spline 1 (endIdx+1) - P3
-		--format "origOutVec=% origInVec=%\n" origOutVec origInVec
+	
+	local origOutVec = getOutVec spline s_num pre_start - P0
+	local origInVec = getInVec spline s_num after_end - P3
+	--format "origOutVec=% origInVec=%\n" origOutVec origInVec
 
-		local params = fitBezierToSamples samples origOutVec:origOutVec origInVec:origInVec
-	) else (
-		local params = fitBezierToSamples samples
-	)
+	local params = fitBezierToSamples samples origOutVec:origOutVec origInVec:origInVec
 
 	local P1 = params[1]
-    local P2 = params[2]
-    
+	local P2 = params[2]
 	
 	if not test then (
-		-- проиведём удаление 
-		setOutVec spline s_num (startIdx-1) P1
-		setInVec spline s_num (endIdx+1) P2
-		
-		for i = endIdx to startIdx by -1 do (
-			setKnotType spline s_num i #smooth
-			deleteKnot spline s_num i
-		)
+		-- произведём удаление
 		setKnotSelection spline s_num #()
-		updateShape spline
+
+		for i in #(pre_start, after_end) do (
+			case (getknottype spline s_num i) of (
+				#smooth: (setKnotType spline s_num i #bezier)
+				#corner: (setKnotType spline s_num i #bezierCorner)
+			)
+		)
+		format "pre_start: %\n" (getknottype spline s_num pre_start)
+		format "after_end: %\n" (getknottype spline s_num after_end)
 		
-		checkSamples spline s_num (startIdx-1) samples 
+		setOutVec spline s_num pre_start P1
+		setInVec spline s_num after_end P2
+		
+		local sortedVertSel = sort vert_selection
+		for i = sortedVertSel.count to 1 by -1 do (
+			deleteKnot spline s_num sortedVertSel[i]
+		)
+		
+		updateShape spline
+		CompleteRedraw()
+		
+		checkSamples spline s_num pre_start samples 
 	) else (		
 		-- вариант с созданием сплайна для тестов вместо удаления --
 		local newSpline = splineShape()
@@ -306,12 +339,17 @@ fn run_simplifySpline = (
 		undo on (
 			for s_num = 1 to numSplines spline do (
 				knots = getKnotSelection spline s_num
-				groups = getGroups knots (isClosed spline s_num) (numKnots spline s_num)
+				nKnots = numKnots spline s_num
+				isClosedSpline = isClosed spline s_num
+				groups = getGroups knots isClosedSpline nKnots
 				if groups.count == 0 and knots.count > 0 then format "Ошибка: Некорректная выборка в сплайне %\n" s_num
 				-- запустить основную функцию для групп
-				for g in groups do (
+				for vert_selection in groups do (
 					--format "simplifySpline % % % %\n" spline s_num g[1] g[g.count]
-					simplifySpline spline s_num g[1] g[g.count] useOriginalDirections:true
+					if (vert_selection[1] != 1 and vert_selection[vert_selection.count] != nknots) \
+					or ((vert_selection[1] == 1 or vert_selection[vert_selection.count] == nknots) and isClosedSpline) then (
+						simplifySpline spline s_num vert_selection -- useOriginalDirections:true
+					)
 				)
 			)
 		)
