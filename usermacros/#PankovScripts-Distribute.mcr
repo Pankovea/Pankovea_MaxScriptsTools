@@ -292,7 +292,10 @@ on execute do (
 		and classof selection[1].baseobject == Editable_Poly \
 		and subobjectLevel != 0 \
 		and modpanel.getCurrentObject() == selection[1].baseobject): (
-			if not (polyop.getVertSelection selection[1]).isEmpty then (
+			if subobjectLevel == 1 then sub_sel = polyop.getVertSelection selection[1]
+			if subobjectLevel == 2 or subobjectLevel == 3 then sub_sel = polyop.getEdgeSelection selection[1]
+			if subobjectLevel == 4 or subobjectLevel == 5 then sub_sel = polyop.getFaceSelection selection[1]
+			if not sub_sel.isEmpty then (
 				case of (
 					-- Vertex
 					(subobjectLevel == 1): (
@@ -358,7 +361,7 @@ on execute do (
 					)
 				)
 			) else (
-				print "No Vertex selection to distribute"
+				print "No selection to distribute"
 			)
 		)
 		
