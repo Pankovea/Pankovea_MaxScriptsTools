@@ -292,16 +292,16 @@ on execute do (
 		and classof selection[1].baseobject == Editable_Poly \
 		and subobjectLevel != 0 \
 		and modpanel.getCurrentObject() == selection[1].baseobject): (
-			if subobjectLevel == 1 then sub_sel = polyop.getVertSelection selection[1]
-			if subobjectLevel == 2 or subobjectLevel == 3 then sub_sel = polyop.getEdgeSelection selection[1]
-			if subobjectLevel == 4 or subobjectLevel == 5 then sub_sel = polyop.getFaceSelection selection[1]
+			if subobjectLevel == 1 then sub_sel = polyop.getVertSelection selection[1].baseobject
+			if subobjectLevel == 2 or subobjectLevel == 3 then sub_sel = polyop.getEdgeSelection selection[1].baseobject
+			if subobjectLevel == 4 or subobjectLevel == 5 then sub_sel = polyop.getFaceSelection selection[1].baseobject
 			if not sub_sel.isEmpty then (
 				case of (
 					-- Vertex
 					(subobjectLevel == 1): (
 						obj = selection[1]
-						vertList = polyop.getVertSelection obj
-						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj numVert)
+						vertList = polyop.getVertSelection obj.baseobject
+						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj.baseobject numVert)
 						if vertexArray.count > 2 then undo on (
 							for vert in calcNewPositions vertexArray do (
 								polyop.setVert obj vert.numVert vert.pos
@@ -312,12 +312,12 @@ on execute do (
 					(subobjectLevel == 2 or subobjectLevel == 3): (
 						local groupCenters = array()
 						obj = selection[1]
-						edgeList = polyop.getEdgeSelection obj
-						local groupedFaces = groupAdjacent obj edgeList #Edge
+						edgeList = polyop.getEdgeSelection obj.baseobject
+						local groupedFaces = groupAdjacent obj.baseobject edgeList #Edge
 						for gr_number in 1 to groupedFaces.count do (
 							curVertSel = #{}
-							for edge in groupedFaces[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
-							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj curVertSel)
+							for edge in groupedFaces[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj.baseobject edge) as bitArray)
+							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj.baseobject curVertSel)
 							bbox = box3()
 							expandToInclude bbox vert.subs_pos
 							vert.pos = bbox.center
@@ -328,8 +328,8 @@ on execute do (
 						if vertexArray.count > 2 then undo on (
 							for vert in calcNewPositions vertexArray do (
 								curVertSel = #{}
-								for edge in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
-								polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+								for edge in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getEdgeVerts obj.baseobject edge) as bitArray)
+								polyop.moveVert obj.baseobject curVertSel (vert.pos - groupCenters[vert.numVert])
 							)
 						)
 					)
@@ -337,13 +337,13 @@ on execute do (
 					(subobjectLevel == 4 or subobjectLevel == 5): (
 						local groupCenters = array()
 						obj = selection[1]
-						faceList = polyop.getFaceSelection obj
-						local groupedFaces = groupAdjacent obj faceList #Face
+						faceList = polyop.getFaceSelection obj.baseobject
+						local groupedFaces = groupAdjacent obj.baseobject faceList #Face
 						1
 						for gr_number in 1 to groupedFaces.count do (
 							curVertSel = #{}
-							for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
-							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj curVertSel)
+							for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj.baseobject face) as bitArray)
+							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj.baseobject curVertSel)
 							bbox = box3()
 							expandToInclude bbox vert.subs_pos
 							vert.pos = bbox.center
@@ -354,8 +354,8 @@ on execute do (
 						if vertexArray.count > 2 then undo on (
 							for vert in calcNewPositions vertexArray do (
 								curVertSel = #{}
-								for face in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
-								polyop.moveVert obj curVertSel (vert.pos - groupCenters[vert.numVert])
+								for face in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getFaceVerts obj.baseobject face) as bitArray)
+								polyop.moveVert obj.baseobject curVertSel (vert.pos - groupCenters[vert.numVert])
 							)
 						)
 					)
