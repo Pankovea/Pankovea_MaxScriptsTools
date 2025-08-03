@@ -32,13 +32,17 @@ Pankovea utilities for working in 3dsmax with architectural visualization
 ## Simplify Spline by Remove Selected Vertices
 [Version 2025.04.01 - alpha](/scripts/Simplify-Spline-by-Remove-Selected-Vertices.ms)
 
-Removes a group of consecutive vertices in a spline and strives to create a shape.
+Script to simplify splines. The base EditableSpline or Line object is required. The modifier won't work.
+
+* If vertices are selected, it deletes a group of consecutive vertices and strives to restore the shape.
+* If splines are selected, it determines which vertices can be deleted and deletes them. (This mode is experimental)
 
 To work, you need [Matrix.ms ](/scripts/Matrix.ms) in the script folder. [Matrix docs](/docs/Matrix.ms_EN.md)
 
-You need to select the vertices to be deleted in the spline (not in the modifier) and run run_simplifySpline(). I'm still trying to figure out how to format the macro script.
+You need to select the vertices to be deleted in the spline (not in the modifier) and run run_simplifySpline().
+I'm still trying to figure out how to format the macro script.
 
-It doesn't process the extreme vertices yet. You will not be able to delete the first and last in a closed spline.
+Does not process extreme vertices. You will not be able to delete the first and last in a closed spline.
 There are also problems if the vertices are angular. They should all have guides in this implementation.
 
 ## Albedo Tuner

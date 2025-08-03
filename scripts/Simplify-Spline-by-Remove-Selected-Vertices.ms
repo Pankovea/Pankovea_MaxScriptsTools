@@ -1,29 +1,244 @@
-/* @PankovEA scripts - 2025.04.01 alpha
+/* @PankovEA scripts - 2025.08.03 alpha
 
-Удаляет группу последовательных вершин в сплайне и стремится созранить форму.
+Скрипт для упрощения сплайнов. Обязательно базовый объект EditableSpline или Line. Модификатор работать не будет.
+
+* В случае выделения вершин, удаляет группу последовательных вершин и стремится созранить форму.
+* В случае выделения сплайнов сам определяет какие вершины можно удалить и удалет их. (данный режим экспериментальный)
 
 Для работы необходим Matrix.ms в папке со скриптом.
 
 Нужно выделить удаляемые вершины в сплайне (не в модификаторе) и запустить run_simplifySpline(). Пока общумываю в каком виде оформить макроскрипт.
 
-Пока не обрабатывает крайние вершины. Первую и последнюю в замкнутом сплайне удалить не получится.
+Не обрабатывает крайние вершины. Первую и последнюю в замкнутом сплайне удалить не получится.
 Так же есть проблемы, если вершины угловые. Они все должны иметь направляющие в данной реализации
 
 --
 
-Removes a group of consecutive vertices in a spline and strives to create a shape.
+Script to simplify splines. The base EditableSpline or Line object is required. The modifier won't work.
+
+* If vertices are selected, it deletes a group of consecutive vertices and strives to restore the shape.
+* If splines are selected, it determines which vertices can be deleted and deletes them. (This mode is experimental)
 
 To work, you need Matrix.ms in the script folder. Matrix docs
 
 You need to select the vertices to be deleted in the spline (not in the modifier) and run run_simplifySpline().
 I'm still trying to figure out how to format the macro script.
 
-It doesn't process the extreme vertices yet. You will not be able to delete the first and last in a closed spline.
+Does not process extreme vertices. You will not be able to delete the first and last in a closed spline.
 There are also problems if the vertices are angular. They should all have guides in this implementation.
 */
 
 
 fileIn "Matrix.ms" -- Добавить функционал для работы с матриами. Файл должен лежать в одной папке с данным скриптом
+
+/* --------------------
+--
+-- Функции для выделения базовых вершин
+--
+*/ --------------------
+
+fn calculatePlaneNormal p1 p2 p3 =
+(
+    local v1 = normalize (p2 - p1)
+    local v2 = normalize (p3 - p2)
+    local normal = cross v1 v2
+    if (length normal) > 0.0001 then normal = normalize normal
+    return normal
+)
+
+fn computeSignedAngle v1 v2 referenceNormal =
+(
+    v1 = normalize v1
+    v2 = normalize v2
+    local ang = acos (dot v1 v2)
+    local crossProduct = cross v1 v2
+    local direction = dot crossProduct referenceNormal
+    return if direction >= 0 then ang else -ang
+)
+
+fn getSplinePoint points index isClosedSpline =
+(
+    local pointCount = points.count
+    if isClosedSpline then
+    (
+        local wrappedIndex = mod (index - 1 + pointCount) pointCount + 1
+        return points[wrappedIndex]
+    )
+    else
+    (
+        local clampedIndex = clamp index 1 pointCount
+        return points[clampedIndex]
+    )
+)
+
+fn findSupportPoints points isClosedSpline =
+(
+    local pointCount = points.count
+    if pointCount < 3 then return #(1, pointCount)
+    
+    local supportPoints = #()
+    
+    -- Инициализация для первых точек
+    local p0 = getSplinePoint points (if isClosedSpline then pointCount else 1) isClosedSpline
+    local p1 = getSplinePoint points 1 isClosedSpline
+    local p2 = getSplinePoint points 2 isClosedSpline
+    
+    local referencePlaneNormal = calculatePlaneNormal p0 p1 p2
+    local lastPlaneNormal = referencePlaneNormal
+    
+    -- Счётчики
+    local currentPlanarAngleSum = 0.0
+    local currentTorsionAngleSum = 0.0
+    local inflectionCount = 0
+    local torsionInflectionCount = 0
+    local lastPlanarAngleSign = 0
+    local lastTorsionAngleSign = 0
+    local planarDirectionAfterInflection = 0
+    local torsionDirectionAfterInflection = 0
+    
+    local endIndex = if isClosedSpline then pointCount else (pointCount - 1)
+    
+    for i = 2 to endIndex do
+    (
+        -- Получаем точки с учётом замкнутости
+        local prevPoint = getSplinePoint points (i-1) isClosedSpline
+        local currPoint = getSplinePoint points i isClosedSpline
+        local nextPoint = getSplinePoint points (i+1) isClosedSpline
+        local nextNextPoint = getSplinePoint points (i+2) isClosedSpline
+        
+        -- Плоскостные вычисления (для кручения)
+        if (i >= 3) or (isClosedSpline and i >= 2) then
+        (
+            local currentPlaneNormal = calculatePlaneNormal prevPoint currPoint nextPoint
+            
+            if (i > 3) or (isClosedSpline and i >= 3) then
+            (
+                local dotProduct = dot lastPlaneNormal currentPlaneNormal
+                dotProduct = clamp dotProduct -1.0 1.0
+                local torsionAngle = acos dotProduct
+                
+                local torsionAxis = cross lastPlaneNormal currentPlaneNormal
+                local torsionDirection = dot torsionAxis referencePlaneNormal
+                local torsionAngleSigned = if torsionDirection >= 0 then torsionAngle else -torsionAngle
+                
+                currentTorsionAngleSum += abs torsionAngle
+                
+                local torsionAngleSign = if torsionAngleSigned > 0.001 then 1 else if torsionAngleSigned < -0.001 then -1 else 0
+                
+                if (torsionAngleSign != lastTorsionAngleSign) and (lastTorsionAngleSign != 0) then
+                (
+                    torsionInflectionCount += 1
+                    if torsionInflectionCount == 1 then
+                    (
+                        torsionDirectionAfterInflection = torsionAngleSign
+                    )
+                    else if torsionAngleSign != torsionDirectionAfterInflection then
+                    (
+                        append supportPoints (i-1)
+                        -- Сброс счётчиков
+                        currentPlanarAngleSum = 0.0
+                        currentTorsionAngleSum = 0.0
+                        inflectionCount = 0
+                        torsionInflectionCount = 0
+                        lastPlanarAngleSign = 0
+                        lastTorsionAngleSign = 0
+                        planarDirectionAfterInflection = 0
+                        torsionDirectionAfterInflection = 0
+                        continue
+                    )
+                )
+            )
+            lastPlaneNormal = currentPlaneNormal
+        )
+        
+        -- Планарные вычисления
+        local v1 = currPoint - prevPoint
+        local v2 = nextPoint - currPoint
+        
+        if (length v1) < 0.0001 or (length v2) < 0.0001 then continue
+        
+        local planarAngle = computeSignedAngle v1 v2 lastPlaneNormal
+        
+        if (abs planarAngle) < 2.0 then continue -- MIN_ANGLE_THRESHOLD
+        
+        currentPlanarAngleSum += abs planarAngle
+        
+        local planarAngleSign = if planarAngle > 0.001 then 1 else if planarAngle < -0.001 then -1 else 0
+        
+        if (planarAngleSign != lastPlanarAngleSign) and (lastPlanarAngleSign != 0) then
+        (
+            inflectionCount += 1
+            if inflectionCount == 1 then
+            (
+                planarDirectionAfterInflection = planarAngleSign
+            )
+            else if planarAngleSign != planarDirectionAfterInflection then
+            (
+                append supportPoints (i-1)
+                -- Сброс счётчиков
+                currentPlanarAngleSum = 0.0
+                currentTorsionAngleSum = 0.0
+                inflectionCount = 0
+                torsionInflectionCount = 0
+                lastPlanarAngleSign = 0
+                lastTorsionAngleSign = 0
+                planarDirectionAfterInflection = 0
+                torsionDirectionAfterInflection = 0
+                continue
+            )
+        )
+        
+        -- Проверка лимитов
+        if (currentPlanarAngleSum >= 90.0) or 
+           (currentTorsionAngleSum >= 90.0) or
+           (inflectionCount > 1) or 
+           (torsionInflectionCount > 2) then
+        (
+            append supportPoints (i-1)
+            -- Сброс счётчиков
+            currentPlanarAngleSum = 0.0
+            currentTorsionAngleSum = 0.0
+            inflectionCount = 0
+            torsionInflectionCount = 0
+            lastPlanarAngleSign = 0
+            lastTorsionAngleSign = 0
+            planarDirectionAfterInflection = 0
+            torsionDirectionAfterInflection = 0
+        )
+        
+        lastPlanarAngleSign = planarAngleSign
+        lastTorsionAngleSign = torsionAngleSign
+    )
+    
+    -- Добавляем первую и последнюю точки
+    if (findItem supportPoints 1) == 0 then append supportPoints 1
+    if (findItem supportPoints pointCount) == 0 then append supportPoints pointCount
+    
+    -- Для замкнутого сплайна проверяем замыкание
+    if isClosedSpline then
+    (
+        local firstTangent = (points[2]) - (points[1])
+        local lastTangent = (points[1]) - (points[pointCount])
+        if (length firstTangent) > 0.0001 and (length lastTangent) > 0.0001 then
+        (
+            firstTangent = normalize firstTangent
+            lastTangent = normalize lastTangent
+            local closingAngle = acos (dot firstTangent lastTangent)
+            if closingAngle > 45.0 then
+            (
+                if (findItem supportPoints 1) == 0 then append supportPoints 1
+            )
+        )
+    )
+    
+    return supportPoints
+)
+
+/* --------------------
+--
+-- Функции для удаления выделенных вершин
+--
+*/ --------------------
 
 -- Вспомогательная функция сэмплирования с выводом координат сэмплов и их расстояния от начала участка.
 fn sampleSpline spline s_num vertSelection totalSamples:100 = (
@@ -279,7 +494,7 @@ fn simplifySpline spline s_num vert_selection samplesPerSegment:100 = -- useOrig
 		)
 		format "pre_start: %\n" (getknottype spline s_num pre_start)
 		format "after_end: %\n" (getknottype spline s_num after_end)
-		
+
 		setOutVec spline s_num pre_start P1
 		setInVec spline s_num after_end P2
 		
@@ -287,7 +502,7 @@ fn simplifySpline spline s_num vert_selection samplesPerSegment:100 = -- useOrig
 		for i = sortedVertSel.count to 1 by -1 do (
 			deleteKnot spline s_num sortedVertSel[i]
 		)
-		
+
 		updateShape spline
 		CompleteRedraw()
 		
@@ -309,20 +524,14 @@ fn simplifySpline spline s_num vert_selection samplesPerSegment:100 = -- useOrig
 
 -- вспомогательная функция для выделения групп выделенных вершин
 fn getGroups knots isClosedSpline nknots = (
-    if knots.count == 0 then return #()
+    if knots.count == 0 then return #(#())
+	if knots.count == 1 then return #(knots)
     groups = #(); currentGroup = #(knots[1])
     for i = 2 to knots.count do (
-        if knots[i] == knots[i-1] + 1 or (isClosedSpline and knots[i-1] == nknots and knots[i] == 1) then append currentGroup knots[i] 
+        if knots[i] == knots[i-1] + 1 then append currentGroup knots[i] 
         else (append groups currentGroup; currentGroup = #(knots[i]))
     )
     append groups currentGroup
-    if isClosedSpline and (findItem knots 1 > 0 and findItem knots nknots > 0) then (
-        endIdx = findItem knots nknots; group = #()
-        for i = endIdx to knots.count do append group knots[i]
-        for i = 1 to endIdx - 1 do append group knots[i]
-        return #(group)
-    )
-    if not isClosedSpline then groups = for g in groups where (findItem g 1 == 0 and findItem g nknots == 0) collect g
     groups
 )
 
@@ -332,24 +541,68 @@ fn run_simplifySpline = (
 	local obj = selection[1]
 	if selection.count == 1 \
 		and modPanel.getCurrentObject() == obj.baseobject \
-		and subObjectLevel == 1 \ 
+		and (subObjectLevel == 1 or subObjectLevel == 3)\ 
 		and finditem #(SplineShape, Line) (classof obj.baseobject) > 0 \
 	then (
 		local spline = obj
 		undo on (
-			for s_num = 1 to numSplines spline do (
+			-- выделение опорных точек на выделеннчх сплайнах
+			if subobjectlevel == 3 do (
+				for s = 1 to numSplines spline do setKnotSelection spline s #() -- нять выделение вершин
+				for s_num in getsplineselection spline do (
+					local isClosedSpline = isClosed spline s_num
+
+					-- Создаем массив точек для текущего сплайна
+					local nKnots = numKnots spline s_num
+					local points = for i = 1 to nKnots collect (getKnotPoint spline s_num i)
+					
+					local supportPoints = findSupportPoints points isClosedSpline
+					-- Инвертируем выделение
+					deletePoints = for i = 1 to nKnots where (finditem supportPoints i) == 0 collect i
+					
+					-- Выделяем точки для удаления
+					subobjectlevel = 1
+					setKnotSelection spline s_num deletePoints
+				)
+			)
+			-- Удаление выделенных вершин
+			if subObjectLevel == 1 do for s_num = 1 to numSplines spline do (
+				-- format "s_num = %\n" s_num
 				knots = getKnotSelection spline s_num
 				nKnots = numKnots spline s_num
 				isClosedSpline = isClosed spline s_num
+				isCircularSelection = isClosedSpline and knots[1] == 1 and knots[knots.count] == nKnots
 				groups = getGroups knots isClosedSpline nKnots
-				if groups.count == 0 and knots.count > 0 then format "Ошибка: Некорректная выборка в сплайне %\n" s_num
+				if groups.count == 0 and knots.count > 0 then (
+					format "Ошибка: Некорректная выборка в сплайне %\n" s_num
+					continue
+				)
+				if nKnots - knots.count < 2 then (
+					format "Ошибка: после удаления в сплайне % останется менее 2 вершин. выделено % из %\n" s_num knots.count nKnots
+					continue
+				)
+				if groups.count == 0 then continue
 				-- запустить основную функцию для групп
-				for vert_selection in groups do (
-					--format "simplifySpline % % % %\n" spline s_num g[1] g[g.count]
-					if (vert_selection[1] != 1 and vert_selection[vert_selection.count] != nknots) \
-					or ((vert_selection[1] == 1 or vert_selection[vert_selection.count] == nknots) and isClosedSpline) then (
-						simplifySpline spline s_num vert_selection -- useOriginalDirections:true
-					)
+				-- сначала удаляем серединное выделение. Порядок с конца, что бы не нарушить нумерацию
+				if isCircularSelection then (
+					start_i = 2
+					end_i = groups.count-1
+				) else (
+					start_i = 1
+					end_i = groups.count
+				)
+				for i in end_i to start_i by -1 do (
+					vert_selection = groups[i]
+					simplifySpline spline s_num vert_selection -- useOriginalDirections:true
+				)
+				-- в конце, если круговое выделение, то нужно пересчитать индесы выделения, потому что они изменились
+				if isCircularSelection then (
+					rest_of_knots = numKnots spline s_num
+					diff = nKnots - rest_of_knots
+					renum_knots = for num_knot in groups[groups.count] collect num_knot - diff
+					final_group = renum_knots + groups[1]
+					-- format "final_group = % \n" final_group
+					simplifySpline spline s_num final_group
 				)
 			)
 		)
