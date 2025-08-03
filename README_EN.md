@@ -121,21 +121,22 @@ Using the program, you can create an Atlas of textures, while reducing the numbe
 
 
 ## Distribute
-[Version 2025.03.20](usermacros/%23PankovScripts-Distribute.mcr)
+[Version 2025.08.04](usermacros/%23PankovScripts-Distribute.mcr)
 
 The script for the distribution in space
 
 Features:
-* Works in object mode and in subobject mode. 
-(so far, only vertex alignment has been implemented in EditableSpline, EditaplePoly, and the EditPoly modifier.
-EditSpline does not work in the modifier)
+* Works in Object mode and in subobject mode. 
+Has been implemented in all subobjects EditableSpline, EditablePoly, and the EditPoly modifier.
+The EditSpline modifier does not work)
 
-* distributes objects evenly, taking into account the size of the object, while maintaining the same distance between objects.
-* Automatically detects the first and last objects as the furthest from each other in space
-* Distributes grouped objects (defines parent objects and operates on them)
+* distributes objects evenly, taking into account the size of the object in such a way that the distance between them is the same
+(you need to refine the pivot offset from the center and the accuracy of sizing. Now the size is determined by the Bounding box)
+* Automatically detects the first and last objects by the largest distance between them.
+* works if the modifier is imposed by the instance on several objects (#FIXME is not working correctly in max2025 yet)
+* * Distributes grouped objects
+
 * To start, you must be in the desired selection mode.
-* In the subobject mode, it groups selected faces and operates on them as objects, taking into account their size.
-  The vertices are distributed individually.
 
 ## Link material
 [Version 2025.03.20](usermacros/%23PankovScripts-LinkMaterial.mcr)

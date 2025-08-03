@@ -1,11 +1,10 @@
-﻿/* @Pankovea Scripts - 2025.03.20
+﻿/* @Pankovea Scripts - 2025.08.04
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
 * Работает в режиме Объектов и в режиме подобъектов. 
-(пока реализовано только выравнивание вершин в EditableSpline,
-всех подобъектов EditablePoly, и модификатора EditPoly
-модификатор EditSpline не работает)
+Реализовано выравнивание подобъектов в EditableSpline, EditablePoly, и модификатора EditPoly.
+модификатор EditSpline технически не доступен и работать не будет)
 
 * объекты распределяет равномерно учитывая размер объекта таким боразом, чтобы расстояние между ними было одинаковым
 (нужно доработать смещение пивота от центра и точность определения размера. Сейчас размер определяется по Bounding box)
@@ -19,9 +18,8 @@ Distribute: A script for distribution in space
 
 Features:
 * Works in Object mode and in subobject mode. 
-(so far, only vertex alignment has been implemented in EditableSpline,
-all EditablePoly subobjects, and the EditPoly modifier the EditSpline
-modifier does not work)
+Has been implemented in all subobjects EditableSpline, EditablePoly, and the EditPoly modifier.
+The EditSpline modifier does not work)
 
 * distributes objects evenly, taking into account the size of the object in such a way that the distance between them is the same
 (you need to refine the pivot offset from the center and the accuracy of sizing. Now the size is determined by the Bounding box)
@@ -222,6 +220,30 @@ fn groupAdjacent obj selected type = ( -- in: obj,  selected: bitarray; out: arr
     return grouped
 )
 
+-- Группирует выделенные вершины
+fn getSplineVertexGroups spline s_num vertSelection = ( -- in: spline: spline object, s_num: number of selected spline; vertSelection: array of nums selected vertices; out: array of arrays of arrays (groups of (spline number, Vertex numbers))
+	
+    if vertSelection.count == 0 then return #(#())
+	if vertSelection.count == 1 then return #(vertSelection)
+
+	local nKnots = numKnots spline s_num
+	local isClosedSpline = isClosed spline s_num
+	local isCircularSelection = isClosedSpline and vertSelection[1] == 1 and vertSelection[vertSelection.count] == nKnots
+    
+	local groups = #()
+	local currentGroup = #(vertSelection[1])
+    for i = 2 to vertSelection.count do (
+        if vertSelection[i] == vertSelection[i-1] + 1 then append currentGroup vertSelection[i] 
+        else (append groups currentGroup; currentGroup = #(vertSelection[i]))
+    )
+    append groups currentGroup
+	if isCircularSelection and groups.count >= 2 then (
+		groups = #(groups[1] + groups[groups.count]) + (for i in 2 to groups.count - 1 collect groups[i])
+	)
+    groups
+	
+)
+
 
 -------------------------------------
 -- Macroscript
@@ -268,8 +290,15 @@ on execute do (
 							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint selection[1] sp vert))
 					if vertexArray.count > 2 then (
 						undo on (
-							for vert in calcNewPositions vertexArray do
+							for vert in calcNewPositions vertexArray do (
+								KnotPoint = getKnotPoint selection[1] vert.numSp vert.numVert
+								diff = vert.pos - KnotPoint
+								outVec = getOutVec selection[1] vert.numSp vert.numVert
+								inVec = getinVec selection[1] vert.numSp vert.numVert
 								setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
+								setOutVec selection[1] vert.numSp vert.numVert (outVec + diff)
+								setInVec selection[1] vert.numSp vert.numVert (inVec + diff)
+							)
 						)
 						updateShape selection[1]
 					) else (
@@ -277,12 +306,108 @@ on execute do (
 					)
 				)
 				-- Segments
-				2: (
-					print "Segments on EditSpline not implemented yet"
+				2: (vertexArray = array()
+					obj = selection[1]
+					for numSp in 1 to numSplines obj do (
+						local segSelection = getSegSelection obj numSp
+						if segSelection.count == 0 then continue
+						local groupedSegments = getSplineVertexGroups obj numSp segSelection
+						-- convert seg selection to vert selection
+						local knots = numKnots obj numSp
+						local isClosedSpline = isClosed obj numSp
+						local isCircularSelect = isClosedSpline and segSelection[segSelection.count] == knots
+						groupedVertices = for segsGroup in groupedSegments collect (
+							vertGroup = (for segNum in segsGroup collect (segNum + 1)) as bitArray
+							vertGroup += segsGroup as bitArray
+							if isCircularSelect and vertGroup[knots] then (
+								vertGroup += #{1}
+								vertGroup -= #{knots+1}
+							)
+							vertGroup as array
+						)
+						-- get positions of groups
+						for verts_group in groupedVertices do (
+							groupedVertsPos = for vert_num in verts_group collect (getKnotPoint obj numSp vert_num)
+							vert = Vertex obj:obj numSp:numSp numVert:verts_group subs_pos:groupedVertsPos
+							bbox = box3()
+							expandToInclude bbox groupedVertsPos
+							vert.pos = bbox.center
+							append vertexArray vert
+						)
+					)
+					-- move vertices
+					if vertexArray.count > 2 then (
+						undo on (
+							for vert in calcNewPositions vertexArray do (
+								for i in 1 to vert.numVert.count do (
+									vertIndex = vert.numVert[i]
+									
+									bbox = box3()
+									expandToInclude bbox vert.subs_pos
+									old_group_pos = bbox.center
+									new_group_pos = vert.pos 
+									diff = new_group_pos - old_group_pos
+									old_vert_pos = vert.subs_pos[i]
+									new_vert_pos = old_vert_pos + diff
+									
+									outVec = getOutVec obj vert.numSp vertIndex
+									inVec = getinVec obj vert.numSp vertIndex
+									setKnotPoint obj vert.numSp vertIndex new_vert_pos
+									setOutVec obj vert.numSp vertIndex (outVec + diff)
+									setInVec obj vert.numSp vertIndex (inVec + diff)
+								)
+							)
+						)
+						updateShape obj
+					) else (
+						print "No Segment selection to distribute"
+					)
 				)
 				-- Splines
-				3: (
-					print "Splines on EditSpline not implemented yet"
+				3: (vertexArray = array()
+					obj = selection[1]
+					local splinelection = getSplineSelection obj
+					for numSp in splinelection do (
+						local knots = numKnots obj numSp
+						local vertSelection = (#{1..knots} as array)
+						local groupedVertices = getSplineVertexGroups obj numSp vertSelection
+						-- get positions of groups
+						for verts_group in groupedVertices do (
+							groupedVertsPos = for vert_num in verts_group collect (getKnotPoint obj numSp vert_num)
+							vert = Vertex obj:obj numSp:numSp numVert:verts_group subs_pos:groupedVertsPos
+							bbox = box3()
+							expandToInclude bbox groupedVertsPos
+							vert.pos = bbox.center
+							append vertexArray vert
+						)
+					)
+					-- move vertices
+					if vertexArray.count > 2 then (
+						undo on (
+							for vert in calcNewPositions vertexArray do (
+								for i in 1 to vert.numVert.count do (
+									vertIndex = vert.numVert[i]
+									
+									bbox = box3()
+									expandToInclude bbox vert.subs_pos
+									old_group_pos = bbox.center
+									new_group_pos = vert.pos 
+									diff = new_group_pos - old_group_pos
+									old_vert_pos = vert.subs_pos[i]
+									new_vert_pos = old_vert_pos + diff
+									
+									outVec = getOutVec obj vert.numSp vertIndex
+									inVec = getinVec obj vert.numSp vertIndex
+									setKnotPoint obj vert.numSp vertIndex new_vert_pos
+									setOutVec obj vert.numSp vertIndex (outVec + diff)
+									setInVec obj vert.numSp vertIndex (inVec + diff)
+								)
+							)
+						)
+						updateShape obj
+					) else (
+						print "No Spline selection to distribute"
+					)
 				)
 			)
 		)
