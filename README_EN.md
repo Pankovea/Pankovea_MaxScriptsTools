@@ -125,7 +125,7 @@ Using the program, you can create an Atlas of textures, while reducing the numbe
 
 
 ## Distribute
-[Version 2025.08.04](usermacros/%23PankovScripts-Distribute.mcr)
+[Version 2025.09.04](usermacros/%23PankovScripts-Distribute.mcr)
 
 The script for the distribution in space
 

@@ -125,7 +125,7 @@ Pankovea утилиты для работы в 3dsmax с аритектурно�
 
 
 ## Distribute
-[Версия 2025.08.04](usermacros/%23PankovScripts-Distribute.mcr)
+[Версия 2025.09.04](usermacros/%23PankovScripts-Distribute.mcr)
 
 Скрипт для рапределения в пространстве
 

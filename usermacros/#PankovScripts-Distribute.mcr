@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2025.08.04
+﻿/* @Pankovea Scripts - 2025.09.04
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
@@ -253,15 +253,11 @@ on isEnabled return (
 	try ( 
 		-- list of conditions. Copy from the case statement on execute event handler
 				-------------------- Editable Spline -----------------------
-			(selection.count == 1 \
-			and (finditem #(line, SplineShape) (classof selection[1])) != 0 \
-			and modPanel.getCurrentObject() == selection[1].baseobject \
-			and subobjectLevel != 0) \
+			(subobjectLevel != 0 \
+			and (finditem #(line, SplineShape) (classof (modPanel.getCurrentObject())) ) != 0 ) \
 		or	\	-------------------- Editable Poly -----------------------
-			(selection.count == 1 \
-			and classof selection[1].baseobject == Editable_Poly \
-			and subobjectLevel != 0 \
-			and modpanel.getCurrentObject() == selection[1].baseobject) \
+			(subobjectLevel != 0 \
+			and (classof (modPanel.getCurrentObject())) == Editable_Poly) \
 		or 	\	----- Instanced modifier in multiple nodes -----
 			(selection.count > 0 \
 			and subObjectLevel != undefined \
@@ -278,36 +274,35 @@ on execute do (
 	
 	case of (
 		-------------------- Editable Spline -----------------------
-		(selection.count == 1 \
-		and (finditem #(line, SplineShape) (classof selection[1])) != 0 \
-		and modPanel.getCurrentObject() == selection[1].baseobject \
-		and subobjectLevel != 0): (
+		(subobjectLevel != 0 \
+		and (finditem #(line, SplineShape) (classof (modPanel.getCurrentObject())) ) != 0 ): (
+			base_obj = modPanel.getCurrentObject()
+			obj = (refs.dependentNodes base_obj)[1]
 			case subobjectLevel of (
 				-- Vertex
 				1: (vertexArray = array()
-					for sp in 1 to numSplines selection[1] do
-						for vert in getKnotSelection selection[1] sp do
-							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint selection[1] sp vert))
+					for sp in 1 to numSplines obj do
+						for vert in getKnotSelection obj sp do
+							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint obj sp vert))
 					if vertexArray.count > 2 then (
 						undo on (
 							for vert in calcNewPositions vertexArray do (
-								KnotPoint = getKnotPoint selection[1] vert.numSp vert.numVert
+								KnotPoint = getKnotPoint obj vert.numSp vert.numVert
 								diff = vert.pos - KnotPoint
-								outVec = getOutVec selection[1] vert.numSp vert.numVert
-								inVec = getinVec selection[1] vert.numSp vert.numVert
-								setKnotPoint selection[1] vert.numSp vert.numVert vert.pos
-								setOutVec selection[1] vert.numSp vert.numVert (outVec + diff)
-								setInVec selection[1] vert.numSp vert.numVert (inVec + diff)
+								outVec = getOutVec obj vert.numSp vert.numVert
+								inVec = getinVec obj vert.numSp vert.numVert
+								setKnotPoint obj vert.numSp vert.numVert vert.pos
+								setOutVec obj vert.numSp vert.numVert (outVec + diff)
+								setInVec obj vert.numSp vert.numVert (inVec + diff)
 							)
 						)
-						updateShape selection[1]
+						updateShape obj
 					) else (
 						print "No Vertex selection to distribute"
 					)
 				)
 				-- Segments
 				2: (vertexArray = array()
-					obj = selection[1]
 					for numSp in 1 to numSplines obj do (
 						local segSelection = getSegSelection obj numSp
 						if segSelection.count == 0 then continue
@@ -365,7 +360,6 @@ on execute do (
 				)
 				-- Splines
 				3: (vertexArray = array()
-					obj = selection[1]
 					local splinelection = getSplineSelection obj
 					for numSp in splinelection do (
 						local knots = numKnots obj numSp
@@ -413,18 +407,17 @@ on execute do (
 		)
 		
 		-------------------- Editable Poly -----------------------
-		(selection.count == 1 \
-		and classof selection[1].baseobject == Editable_Poly \
-		and subobjectLevel != 0 \
-		and modpanel.getCurrentObject() == selection[1].baseobject): (
+		(subobjectLevel != 0 \
+		and (classof (modPanel.getCurrentObject())) == Editable_Poly): (
 			if subobjectLevel == 1 then sub_sel = polyop.getVertSelection selection[1].baseobject
 			if subobjectLevel == 2 or subobjectLevel == 3 then sub_sel = polyop.getEdgeSelection selection[1].baseobject
 			if subobjectLevel == 4 or subobjectLevel == 5 then sub_sel = polyop.getFaceSelection selection[1].baseobject
 			if not sub_sel.isEmpty then (
+				base_obj = modPanel.getCurrentObject()
+				obj = (refs.dependentNodes base_obj)[1]
 				case of (
 					-- Vertex
 					(subobjectLevel == 1): (
-						obj = selection[1]
 						vertList = polyop.getVertSelection obj.baseobject
 						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj.baseobject numVert)
 						if vertexArray.count > 2 then undo on (
@@ -436,7 +429,6 @@ on execute do (
 					-- Edge
 					(subobjectLevel == 2 or subobjectLevel == 3): (
 						local groupCenters = array()
-						obj = selection[1]
 						edgeList = polyop.getEdgeSelection obj.baseobject
 						local groupedFaces = groupAdjacent obj.baseobject edgeList #Edge
 						for gr_number in 1 to groupedFaces.count do (
@@ -461,7 +453,6 @@ on execute do (
 					-- Faces
 					(subobjectLevel == 4 or subobjectLevel == 5): (
 						local groupCenters = array()
-						obj = selection[1]
 						faceList = polyop.getFaceSelection obj.baseobject
 						local groupedFaces = groupAdjacent obj.baseobject faceList #Face
 						1
@@ -641,7 +632,8 @@ on execute do (
 									if selection[1] != vert.obj then select vert.obj
 									modif.SetSelection #Face groupedFaces[vert.numVert]
 									modif.Select #Face groupedFaces[vert.numVert]
-									modif.MoveSelection (vert.pos - groupCenters[vert.numVert])
+									diff = vert.pos - groupCenters[vert.numVert]
+									modif.MoveSelection diff
 									modif.Commit()
 								)
 								-- select old Face selection
@@ -651,7 +643,7 @@ on execute do (
 								)
 								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
 								-- deselect $*
-								-- completeredraw()
+								redrawViews()
 							) else (
 								print "No Face selection to distribute"
 							)
