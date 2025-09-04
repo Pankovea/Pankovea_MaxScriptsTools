@@ -13,12 +13,15 @@ icon:#("PhysX_Main", 23)
 		if selection.count > 1 then (
 			local mat, modif
 			local i = selection.count
-			do (mat = selection[i].material; i-=1) while mat == udefined
-			ref_obj = selection[i+1]
-			i=1; do (modif=ref_obj.modifiers[i];i+=1) while not (i<ref_obj.modifiers.count or classof modif != Materialmodifier)
-			deselect ref_obj
-			for obj in selection do obj.material = mat
-			if modif == Materialmodifier then for obj in selection do addmodifier obj modif
+			do (mat = selection[i].material; i-=1) while (mat == udefined and i>0)
+			if mat != undefined do (
+				ref_obj = selection[i+1]
+				i=1; do (modif=ref_obj.modifiers[i];i+=1) while not (i<ref_obj.modifiers.count or classof modif != Materialmodifier)
+				deselect ref_obj
+				for obj in selection do obj.material = mat
+				if modif == Materialmodifier then for obj in selection do addmodifier obj modif
+			)
+			redrawViews()
 		)
 	)
 )

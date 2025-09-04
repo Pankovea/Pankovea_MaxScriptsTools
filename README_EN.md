@@ -143,7 +143,7 @@ The EditSpline modifier does not work)
 * To start, you must be in the desired selection mode.
 
 ## Link material
-[Version 2025.03.20](usermacros/%23PankovScripts-LinkMaterial.mcr)
+[Version 2025.09.04](usermacros/%23PankovScripts-LinkMaterial.mcr)
 
 The idea is taken from Blender.
 With a quick click, you can quickly take material from a nearby object. 
