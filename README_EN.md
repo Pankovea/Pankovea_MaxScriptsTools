@@ -172,19 +172,33 @@ The script for replacing objects with instances and references
 In the case of an individual installation, you need to copy the icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
 
 Features:
-* Replacing any object with an instance of the selected object
-by creating an instance and applying the original transformations, layer, and material, depending on the settings.
-That is, if some instances were allocated, then the unallocated part will not be replaced.
-* When replacing a large number of objects (>100), the progress bar is displayed
+* Replace any object with an instance of the selected object by creating an instance
+  and applying original transforms, layer, and material according to the settings.
+  Note: if only some instances were selected, unselected instance objects will not be replaced.
 
-1. The `Make Instances` group
-* Can clone both parallel objects and grouped objects with an instance
-* Can adjust the size of the new instance to the size of the objects being replaced
+* Replace a reference part of an object with the ability to choose the source reference level.
 
-2. The `Get instance part from reference object` group
-Retrieves the base object (the lower one in the modifier stack) and replaces the selected objects with it.
-At the same time, no new objects are created and all dependencies in the scene are saved.
-* It can also replace the entire stack of modifiers.
+* When replacing a large number of objects (>100), a progress bar is shown.
+
+Details:
+
+1. Make Instances group
+* Can create instances of both individual objects and grouped objects.
+* Can fit the new instance size to match the size of the objects being replaced.
+
+2. Replace Reference Target group
+Extracts a reference object from the chosen main object and replaces the specified reference level
+in the selected objects. This section works only in object mode (when the source object is geometry,
+not a group).
+
+Behavior depending on selection:
+* If a single destination object is selected, the script will prompt to choose the insertion level.
+* If multiple destination objects are selected, you can choose:
+  - Top layer (Top) — replace the whole object. In this case, unselected instance objects will not be affected.
+  - Instance part (Instance part) — the lower reference level including modifiers up to the first "break".
+    This may match the base level. In this case all objects referencing this part will be changed.
+  - Base object (Base object) — replace only the base object (the first entry on which the modifier stack is built).
+    In this case unselected instance objects will not be affected.
 
 ## Reset ModContextTM
 [version 2025.03.20](usermacros/%23PankovScripts-ResetModContextTM.mcr)
