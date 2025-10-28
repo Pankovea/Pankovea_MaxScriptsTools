@@ -206,4 +206,17 @@ Features:
 ### Macro script Pankov_Copy_ModContextTM
 Copies and inserts the transformation matrix for the modifier, preserving its global position as in the original object.
 
+## Align Pivot PCA
+[version 2025.09.30](usermacros/%23PankovScripts-AlignPivotPCA.mcr)
+
 This is a good way to combine the context of modifiers by adjusting only one of them and not changing all the others (unlike the previous script).
+
+This script analyzes the geometry of the selected object, computes the covariance matrix of its vertices,
+and extracts the principal components (Principal Component Analysis - PCA) to determine the natural orientation
+of the shape. The first and second principal axes define the plane in which an angular search is performed
+to find the orientation with the minimal-area bounding rectangle. The Z axis is automatically adjusted
+so that it always points upward (toward +Z in world coordinates).
+
+The object's pivot is then moved to the centroid and rotated to match the found coordinate system,
+while the geometry itself remains stationary in the scene.
+The script also handles initially offset pivots correctly by precisely recalculating the objectOffset parameters.
