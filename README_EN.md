@@ -204,28 +204,37 @@ No new objects are created and all scene dependencies are preserved.
 [back (contents)](#contents)
 
 ## Reset ModContextTM
-[Version 2025.03.20](usermacros/%23PankovScripts-ResetModContextTM.mcr)
+[version 2025.10.28](usermacros/%23PankovScripts-ResetModContextTM.mcr)
 
-Resets the modifier transformation context matrix as if the modifier was just applied to one or multiple objects.
+This package contains several macroscripts for manipulating a modifier's transform context matrix.
 
-Notes:
+Overview:
 
-Each modifier has a transform context. For example, when a modifier is applied to a single object the transform context is zero, but if the modifier is applied to multiple objects the transform pivot is placed at the center of mass. This makes the modifier behave consistently in world space while each object retains its own context. After moving objects, the context remains tied to local coordinates. This script recenters the context in world coordinates.
+Every modifier has a transform context. For example, when a modifier is applied to a single object the transform context is zero; but when a modifier is applied to multiple objects the transform pivot is placed at the objects' center of mass. This makes the modifier behave consistently in world space while each object retains its own context. If objects are moved, the context stays tied to local coordinates. This script is intended for such cases — after moving objects it recenters the modifier context to a single point in world coordinates.
+
+### Main macro: Reset ModContextTM
+Resets the modifier's transform context matrix to the state as if the modifier had just been applied to the object(s).
 
 Features:
-* Works with the selected modifier in the modifier stack.
-* Hold Shift to reset ModContextBBox per object individually.
-* Press Esc to reset the Gizmo.
-* Note: changing the transform pivot may not preserve the object's original position.
+* Works with the selected modifier in the modifier stack
+* Hold Shift to reset ModContextBBox per object individually
+* Press Esc to reset the Gizmo
+* Changing the transform pivot may not preserve the object's original position
+
 Warning:
-* Undo does not work.
+* Undo does not work
+
+### ResetModContextBBox
+Same as above, but resets the modifier's context BBox
 
 ### Copy ModContextTM
-Located in the same file.
+Copies and pastes the transform matrix for a modifier, preserving its global placement as in the source object.
 
-Copies and pastes the transform matrix for a modifier, preserving its global placement relative to the source object.
+This is an alternative method to align modifier contexts by adjusting only one of them and not changing the others (unlike the previous script).
 
-This is an alternate method to match modifier contexts by adjusting only one and not changing others (unlike the previous script).
+### TransformModContextTM
+Allows transforming a modifier's context matrix using an auxiliary Dummy object that serves as a Gizmo.
+For example, you can use a single dependent instance of a UVWMap modifier on many objects and tweak its orientation via the context.
 
 [back (contents)](#contents)
 
