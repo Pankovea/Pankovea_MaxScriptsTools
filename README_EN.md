@@ -1,8 +1,8 @@
 [на Русском](README.md)
 # Pankovea_MaxScriptsTools
-Pankovea utilities for working in 3dsmax with architectural visualization
+Pankovea utilities for working in 3ds Max with architectural visualization
 
-# Content
+# Contents
 [usermacros/](usermacros/)
 - [Albedo Tuner](#albedo-tuner) 
 - [Camera Animator](#camera-animator)
@@ -15,208 +15,226 @@ Pankovea utilities for working in 3dsmax with architectural visualization
 - [Link Material](#link-material)
 - [Extract Instance](#extract-instance)
 - [Instance All](#instance-all)
-- [Reset ModContextTM](#Reset-ModContextTM)
+- [Reset ModContextTM](#reset-modcontexttm)
+- [Align Pivot PCA](#align-pivot-pca)
+
 
 [scripts/](scripts/)
-- [Simplify-Spline-by-Remove-Selected-Vertices](#simplify-spline-by-remove-selected-vertices)
+- [Simplify Spline by Remove Selected Vertices](#simplify-spline-by-remove-selected-vertices)
+
 ## Installation
-1. Option via repository cloning:
-    - Go to your folder `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX-version_\ENU ` Replace `_USER_` with your operating system username, `_MAX-version_` with your 3dsmax version
-    - In the address bar, run `git clone https://github.com/Pankovea/Pankovea_MaxScriptsTools.git `
-    - Start/restart 3dsmax
-    - Menu `Cutomize -> Cutomize user interface` -> `Toolbars tab -> group Main UI -> Category #PankovScripts` -> Drag the desired script to the panel 
-2. The option of downloading a separate script
-    - Download the required script from the usermacros folder and place it in the folder `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX_version_\ENU\usermacros ` In the address bar, replace _USER with your operating system username, _MAX_version_ with your 3dsmax version <a name="#individual-icons-install"></a>
-    - If necessary, download `usericons` and put them in the folder `..\ENU\usericons`
+1. Option: clone the repository:
+    - Open your folder `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX-version_\ENU` — replace `_USER_` with your OS username and `_MAX-version_` with your 3ds Max version.
+    - In the address bar run: `git clone https://github.com/Pankovea/Pankovea_MaxScriptsTools.git`
+    - Start/restart 3ds Max.
+    - Go to: Customize -> Customize User Interface -> Toolbars -> group Main UI -> Category `#PankovScripts` -> drag the desired script to a toolbar.
+2. Option: download a single script
+    - Download the desired script from the usermacros folder and place it into:
+      `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX_version_\ENU\usermacros` (replace `_USER_` and `_MAX_version_` appropriately).
+    - If needed, download `usericons` and put them into the `..\ENU\usericons` folder.
 
 ## Simplify Spline by Remove Selected Vertices
-[Version 2025.04.01 - alpha](/scripts/Simplify-Spline-by-Remove-Selected-Vertices.ms)
 
-Script to simplify splines. The base EditableSpline or Line object is required. The modifier won't work.
+[Version 2025.08.03 - alpha](/scripts/Simplify-Spline-by-Remove-Selected-Vertices.ms)
 
-* If vertices are selected, it deletes a group of consecutive vertices and strives to restore the shape.
-* If splines are selected, it determines which vertices can be deleted and deletes them. (This mode is experimental)
+A script to simplify splines. Requires the base object to be Editable Spline or Line. It will not work as a modifier.
 
-To work, you need [Matrix.ms ](/scripts/Matrix.ms) in the script folder. [Matrix docs](/docs/Matrix.ms_EN.md)
+* If vertices are selected, it removes groups of consecutive selected vertices while attempting to preserve the shape.
+* If splines are selected, the script automatically determines which vertices can be removed and removes them (this mode is experimental).
 
-You need to select the vertices to be deleted in the spline (not in the modifier) and run run_simplifySpline().
-I'm still trying to figure out how to format the macro script.
+Requires [Matrix.ms](/scripts/Matrix.ms) in the same scripts folder. Documentation for [Matrix](/docs/Matrix.ms.md).
 
-Does not process extreme vertices. You will not be able to delete the first and last in a closed spline.
-There are also problems if the vertices are angular. They should all have guides in this implementation.
+Select vertices to remove in the spline (not inside a modifier) and run run_simplifySpline(). Planning macro integration later.
+
+Does not process end vertices. You cannot remove the first or last vertex in a closed spline.
+There are also issues if vertices are corner points — in this implementation they must all have handles.
+
+[back (contents)](#contents)
 
 ## Albedo Tuner
 [Version 2022.02.27](usermacros/%23PankovScripts-Albedo%20Tuner.mcr)
 
-A script for correcting the Albedo parameter in the materials of selected objects. Originally made for Corona render, but it also works in Vray (it may not work correctly)
+A script to adjust the Albedo parameter for materials on selected objects. Initially designed for Corona renderer, but it can also work with V-Ray (may be inaccurate).
 
-It is necessary in order to reduce the reflectivity of materials. Increases the contrast of the image by reducing the reflected light flux. This way you can set up a more natural image in scenes with a high content of white surfaces.
+Purpose: reduce material reflectance to increase image contrast by lowering reflected light contribution. Useful for achieving more natural looks in scenes with many white surfaces.
 
+[back (contents)](#contents)
 
 ## Camera Animator
 [Version 2024.07.06](usermacros/%23PankovScripts-CameraAnimator.mcr)
 
-The script creates an animated camera from the selected cameras in the scene
+Creates an animated camera from selected cameras in the scene.
 
-* Supports: Standart camera, Vray camera, Corona camera
-* If an animated camera is highlighted, you can run the script with the Shift key pressed. This action will perform the reverse operation, create cameras from animation frames
+* Supports: Standard camera, V-Ray camera, Corona camera
+* If an animated camera is selected, run the script with Shift pressed to perform the inverse operation: create cameras from animation frames.
 
+[back (contents)](#contents)
 
 ## Camera From View
 [Version 2024.07.06](usermacros/%23PankovScripts-CameraFromView.mcr)
 
-It will create a camera from a perspective view, depending on the Vray or Corona render used
+Creates a camera from the current perspective view depending on the active renderer (V-Ray or Corona).
 
+[back (contents)](#contents)
 
 ## Concentric Cycles
 [Version 2024.10.12](usermacros/%23PankovScripts-ConcentricCircles.mcr)
 
-The script creates a modifiable object with concentric circles with the specified parameters
+Creates a parametric object with concentric circles and configurable parameters.
 
 Features:
-* the object is created at the origin or in the center of the selected volume of the border box (boundibg box)
-* the object is assigned personalized parameters (custom attributes), which are then used to change the object
-* if one such object is selected, the corresponding object parameters are loaded when the script is opened. if you change the parameters, the object will be changed
-* if only a few objects are selected, the parameters will be applied to all objects at once (only ConcentricCycles)
-* if the parameters are set incorrectly, it is possible to cancel the action in the standard way.
+* The object is created at the origin or at the center of the selected bounding box.
+* The object has custom attributes used to tweak parameters.
+* If one such object is selected, opening the script loads its current parameters; changing them updates the object.
+* If multiple objects are selected, parameters are applied to all selected ConcentricCycles objects.
+* You can undo parameter changes via standard Undo if parameters are set incorrectly.
 
+[back (contents)](#contents)
 
 ## Copy-Paste
 [Version 2025.03.20](usermacros/%23PankovScripts-CopyPaste.mcr)
-### Working with objects
 
-Adds buttons for copying and pasting objects between different 3dsmax projects/windows
-You can assign keyboard shortcuts via the menu: `Customize -> Hotkey Editor -> find Copy-Paste action -> Assign hotkey'.
-For example, I have Alt+C and Alt+V.
+### Object copy/paste
+Adds copy and paste buttons to transfer objects between different 3ds Max projects/windows. You can assign hotkeys in: Customize -> Hotkey Editor -> find Copy-Paste action -> Assign hotkey. Example: Alt+C and Alt+V.
 
-In the case of an individual installation, you need to copy the icons [1](usericons/pankov_CopyPaste_24i.bmp) and [2](usericons/pankov_CopyPaste_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
-### Working with modifiers
-A macro script for assigning keyboard shortcuts. It has no icons.
-Instead of selecting with the mouse -> right-> select copy modifier in the menu, then do the same for pasting.
-You can use the keyboard shortcuts: `Customize -> Hotkey Editor -> find Copy-Paste Modifier action -> Assign hotkey'.
-For example, I have Ctrl+Shift+C and Ctrl+Shift+V, which is very convenient. (but you will have to remove the quick button from Chamfer Mode on EditSpline and EditPoly)
+For single-script installation, copy icons [1](usericons/pankov_CopyPaste_24i.bmp) and [2](usericons/pankov_CopyPaste_16i.bmp) into your 3ds Max `usericons` folder (see Installation step 2).
 
-Useful features:
-* You can insert a modifier on several selected objects at once. It will be inserted by the instance.
-* The EditPoly and EditSpline modifiers are inserted without local data.
-  In other words, the instance remains connected to change a group of objects, but the other object does not break.
+### Modifier copy/paste
+A macro for assigning hotkeys to copy/paste modifiers. It has no icons.
+Instead of right-clicking and choosing copy/paste from the modifier menu, use hotkeys: Customize -> Hotkey Editor -> find Copy-Paste Modifier action -> Assign hotkey. Example: Ctrl+Shift+C and Ctrl+Shift+V — very convenient (you may need to remove a hotkey from Chamfer Mode on EditSpline/EditPoly).
+
+Useful notes:
+* You can paste a modifier onto multiple selected objects — it will be inserted as an instance.
+* EditPoly and EditSpline modifiers are pasted without local data. This preserves instance links across objects without breaking others.
+
+[back (contents)](#contents)
 
 ## Corona Toggles
 [Version 2024.07.05](usermacros/%23PankovScripts-CoronaToggles.mcr)
 
-Displays the quick settings of Corona Render on the panel
-Includes:
-* Standart Region Render Toggle
-* Standart BlowUp Render Toggle
-* Corona Render Selected Toggle. Also disables/enables the `clear Between Renders` setting
+Exposes quick Corona render toggles on a toolbar:
+* Standard Region Render Toggle
+* Standard BlowUp Render Toggle
+* Corona Render Selected Toggle (also toggles "Clear Between Renders")
 * Corona Distributed Render Toggle
 * Corona Denoise on Render Toggle
 * Corona Render Mask Only Toggle
 
-In the case of an individual installation, you need to copy the icons [1](usericons/PankovScripts_24i.bmp) and [2](usericons/PankovScripts_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
+For single-script installation, copy icons [1](usericons/PankovScripts_24i.bmp) and [2](usericons/PankovScripts_16i.bmp) into your 3ds Max `usericons` folder (see Installation step 2).
 
+[back (contents)](#contents)
 
 ## Crop To Atlas
-The script is used in conjunction with the free version of the [TexturePacker](https://www.codeandweb.com/texturepacker) program
+This script works with the free TexturePacker tool (https://www.codeandweb.com/texturepacker).
 
-Using the program, you can create an Atlas of textures, while reducing the number of assets. This is done in the case of using a decor that uses many small textures. They can be reduced and combined into a single file. After that, use this script, which will change the links in the materials to a new file and make the correct cropping.
+Use TexturePacker to create a texture atlas and reduce asset count for many small decoration textures. Then run this script to update material bitmap references to the atlas and adjust cropping accordingly.
 
-* Works with Bitmap and CoronaBitmap 
+* Works with Bitmap and CoronaBitmap.
 
+[back (contents)](#contents)
 
 ## Distribute
 [Version 2025.09.04](usermacros/%23PankovScripts-Distribute.mcr)
 
-The script for the distribution in space
+A script for spatial distribution.
 
 Features:
-* Works in Object mode and in subobject mode. 
-Has been implemented in all subobjects EditableSpline, EditablePoly, and the EditPoly modifier.
-The EditSpline modifier does not work)
+* Works in Object mode and sub-object modes.
+  Implemented alignment for sub-objects in EditableSpline, EditablePoly, and the EditPoly modifier.
+  (EditSpline modifier is not technically accessible and will not work.)
+* Distributes objects evenly taking object size into account so spacing between objects is uniform
+  (pivot offset and bounding accuracy need improvement; currently size is determined by bounding box).
+* Automatically determines first and last objects by largest distance between them.
+* Works inside EditPoly even when the modifier is instanced on multiple objects (#FIXME: currently unstable in Max2025).
+* Distributes grouped objects.
+* Requires being in the appropriate selection mode to run.
 
-* distributes objects evenly, taking into account the size of the object in such a way that the distance between them is the same
-(you need to refine the pivot offset from the center and the accuracy of sizing. Now the size is determined by the Bounding box)
-* Automatically detects the first and last objects by the largest distance between them.
-* works if the modifier is imposed by the instance on several objects (#FIXME is not working correctly in max2025 yet)
-* * Distributes grouped objects
+[back (contents)](#contents)
 
-* To start, you must be in the desired selection mode.
-
-## Link material
+## Link Material
 [Version 2025.09.04](usermacros/%23PankovScripts-LinkMaterial.mcr)
 
-The idea is taken from Blender.
-With a quick click, you can quickly take material from a nearby object. 
-Assign keyboard shortcuts in: `Customize -> Hotkey Editor`
-* `Link material` -> Assign hotkey **Ctrl+L**
-* `Select by material` -> Assign hotkey` **Ctrl+Shift+L**
+Idea borrowed from Blender.
+A quick button to take a material from a neighboring object.
+Assign hotkeys in: Customize -> Hotkey Editor
+* Link material -> Assign hotkey (e.g. Ctrl+L)
+* Select by material -> Assign hotkey (e.g. Ctrl+Shift+L)
 
-The principle is this:
-* Link material: First, you need to select all the objects to assign the matrix, and at the end, select the object from which you want to take a sample of the material and press the keyboard shortcut.
-* Select by material: Select an object and press a keyboard shortcut. I will highlight all objects in the field of view that have the same material.(s)
+Workflow:
+* Link material: Select all target objects first, then select the source object last and press the hotkey.
+* Select by material: Select any object and press the hotkey to select all visible objects that share the same material(s).
 
 ## Extract Instance
-[version 2024.07.10](usermacros/%23PankovScripts-ExtractInstance.mcr)
+[Version 2024.07.10](usermacros/%23PankovScripts-ExtractInstance.mcr)
 
-Retrieves the instance object from the reference object
-Just select the reference object and run the macro script.
+Extracts the instance object from a reference object.
+Select a reference object and run the macro.
 
-In the case of an individual installation, you need to copy the icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
+For single-script installation, copy icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to your 3ds Max `usericons` folder (see Installation step 2).
 
+[back (contents)](#contents)
 
 ## Instance All
-[version 2024.10.17](usermacros/%23PankovScripts-InstanceAll.mcr)
+[Version 2024.10.17](usermacros/%23PankovScripts-InstanceAll.mcr)
 
-The script for replacing objects with instances and references
+Script to replace objects with instances and reference parts.
 
-In the case of an individual installation, you need to copy the icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to the `usericons` folder of your 3dsmax settings ([see Installation of item 2](#installation))
+For single-script installation, copy icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to your 3ds Max `usericons` folder (see Installation step 2).
 
 Features:
-* Replacing any object with an instance of the selected object
-by creating an instance and applying the original transformations, layer, and material, depending on the settings.
-That is, if some instances were allocated, then the unallocated part will not be replaced.
-* When replacing a large number of objects (>100), the progress bar is displayed
+* Replace any object with an instance of a selected source object by creating an instance and applying original transforms, layer, and material depending on settings.
+  If only some instances are selected, unselected instances will not be replaced.
+* Shows a progress bar when processing a large number of objects (>100).
 
-1. The `Make Instances` group
-* Can clone both parallel objects and grouped objects with an instance
-* Can adjust the size of the new instance to the size of the objects being replaced
+1. "Make Instances" group:
+    * Can clone by instance both individual objects and grouped objects.
+    * Can fit the new instance to the size of the objects being replaced.
 
-2. The `Get instance part from reference object` group
-Retrieves the base object (the lower one in the modifier stack) and replaces the selected objects with it.
-At the same time, no new objects are created and all dependencies in the scene are saved.
-* It can also replace the entire stack of modifiers.
+2. "Get instance part from reference object" group:
+Extracts the base object (the bottom of the modifier stack) and replaces selected objects with it.
+No new objects are created and all scene dependencies are preserved.
+    * Can also replace the entire modifier stack.
+
+[back (contents)](#contents)
 
 ## Reset ModContextTM
-[version 2025.03.20](usermacros/%23PankovScripts-ResetModContextTM.mcr)
+[Version 2025.03.20](usermacros/%23PankovScripts-ResetModContextTM.mcr)
 
-Resets the transformation matrix in the context of the modifier to the state as if the modifier had just been applied to objects or a single object.
+Resets the modifier transformation context matrix as if the modifier was just applied to one or multiple objects.
 
-Reference:
+Notes:
 
-Each modifier has a so-called transformation context. For example, if we applied a modifier to one object, then the transformation context will be zero, but if the modifier is applied to several objects at once, then the transformation point is placed in the center of the objects' masses. So the modifier will act the same way on objects in the virtual space, but each object will have its own context. And if we shift the objects, we will see that the context is tied to local coordinates. This script is for such cases. After the objects are shifted, place the context again at one point in world coordinates. 
+Each modifier has a transform context. For example, when a modifier is applied to a single object the transform context is zero, but if the modifier is applied to multiple objects the transform pivot is placed at the center of mass. This makes the modifier behave consistently in world space while each object retains its own context. After moving objects, the context remains tied to local coordinates. This script recenters the context in world coordinates.
 
 Features:
-* Works with a dedicated modifier in the modifier stack
-* when Shift is pressed, resets ModContextBBox for each object individually
-* when Esc is pressed, Gizmo resets
-* when changing the transformation point, it is not possible to keep the object in its original position
-.:
-* undo does not work
+* Works with the selected modifier in the modifier stack.
+* Hold Shift to reset ModContextBBox per object individually.
+* Press Esc to reset the Gizmo.
+* Note: changing the transform pivot may not preserve the object's original position.
+Warning:
+* Undo does not work.
 
-### Macro script Pankov_Copy_ModContextTM
-Copies and inserts the transformation matrix for the modifier, preserving its global position as in the original object.
+### Copy ModContextTM
+Located in the same file.
+
+Copies and pastes the transform matrix for a modifier, preserving its global placement relative to the source object.
+
+This is an alternate method to match modifier contexts by adjusting only one and not changing others (unlike the previous script).
+
+[back (contents)](#contents)
 
 ## Align Pivot PCA
-[version 2025.09.30](usermacros/%23PankovScripts-AlignPivotPCA.mcr)
+[Version 2025.09.30](usermacros/%23PankovScripts-AlignPivotPCA.mcr)
 
-This is a good way to combine the context of modifiers by adjusting only one of them and not changing all the others (unlike the previous script).
+Aligns the local axes along the long and short dimensions of the object's geometry.
 
-This script analyzes the geometry of the selected object, computes the covariance matrix of its vertices,
-and extracts the principal components (Principal Component Analysis - PCA) to determine the natural orientation
-of the shape. The first and second principal axes define the plane in which an angular search is performed
-to find the orientation with the minimal-area bounding rectangle. The Z axis is automatically adjusted
-so that it always points upward (toward +Z in world coordinates).
+This script analyzes the selected object's geometry, computes the covariance matrix of its vertices,
+and extracts principal components (Principal Component Analysis - PCA) to determine the object's natural orientation.
 
-The object's pivot is then moved to the centroid and rotated to match the found coordinate system,
-while the geometry itself remains stationary in the scene.
-The script also handles initially offset pivots correctly by precisely recalculating the objectOffset parameters.
+The first and second principal axes define the plane used for an angular search to find the orientation
+with the minimal-area bounding rectangle. The Z axis is automatically adjusted to point upward (+Z world).
+The object's pivot is moved to the centroid and rotated to the found coordinate system while the geometry remains stationary.
+
+The script handles initially offset pivots correctly by precisely recalculating objectOffset parameters.
+
+[back (contents)](#contents)
