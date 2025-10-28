@@ -17,6 +17,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Instance All](#instance-all)
 - [Reset ModContextTM](#reset-modcontexttm)
 - [Align Pivot PCA](#align-pivot-pca)
+- [Renumber Material #X and Map #X](#renumber-material-x-and-map-x)
 
 
 [scripts/](scripts/)
@@ -236,5 +237,31 @@ with the minimal-area bounding rectangle. The Z axis is automatically adjusted t
 The object's pivot is moved to the centroid and rotated to the found coordinate system while the geometry remains stationary.
 
 The script handles initially offset pivots correctly by precisely recalculating objectOffset parameters.
+
+[back (contents)](#contents)
+
+## Renumber Material #X and Map #X
+[Version 2025.09.13](usermacros/%23PankovScripts-Renumber_Material%23X_Maps%23X.mcr)
+
+Renames all materials and maps in the scene whose names match the patterns:
+  "Material #<number>" or "Map #<number>"
+including negative and very large numbers.
+
+After processing:
+  Material #2135464, Material #45646489 ... → Material #1, Material #2, ...
+  Maps  Map #145654, Map #2546587, ... → Map #1, Map #2, ...
+
+Notes:
+To force 3ds Max to reset internal naming counters for newly created materials and maps,
+reload the scene (save > open).
+
+Installation:
+1. Copy the script to:
+   "C:\Users\%username%\AppData\Local\Autodesk\3dsMax\20## - 64bit\ENU\usermacros" (adjust path for your setup)
+2. Go to: Customize → Customize User Interface → Toolbars
+   Find category "#PankovScripts" and the command "Renumber Material #X / Map #X names"
+3. Drag the command onto a toolbar — done!
+
+The icons for the buttons are located here: [1](usericons/renum#X_24i.bmp) and [2](usericons/usericons/renum#X_16i.bmp). Copy them to the `usericons` folder in your 3dsmax settings ([see Installation step 2](#installation)).
 
 [back (contents)](#contents)
