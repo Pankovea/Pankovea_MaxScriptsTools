@@ -108,6 +108,11 @@ Useful notes:
 * You can paste a modifier onto multiple selected objects — it will be inserted as an instance.
 * EditPoly and EditSpline modifiers are pasted without local data. This preserves instance links across objects without breaking others.
 
+### Select Modifier Instances
+For the currently selected modifier, finds its instances and selects all objects that contain it.
+Enabled when the modifier has instances.
+
+
 [back (contents)](#contents)
 
 ## Corona Toggles
