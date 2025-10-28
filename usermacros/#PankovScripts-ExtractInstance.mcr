@@ -1,4 +1,20 @@
-﻿macroScript Pankov_ExtractInstanceFromReference
+﻿/* @Pankovea Scripts - 2025.10.20
+ExtractInstanceFromReference: Скрипт извлекает инстансную часть объекта.
+
+Воздаёт новый объект и заменяет ссылку на геометрию на инстансную часть.
+Можно применять несколько раз подряд чтобы извлечь более глубокие части.
+
+----------------------------------------------------------------
+
+ExtractInstanceFromReference: This script extracts the instanced part of an object.
+
+Creates a new object and replaces the geometry reference with the instanced part.
+Can be applied multiple times in succession to extract deeper parts.
+
+*/
+
+
+macroScript Pankov_ExtractInstanceFromReference
 category:"#PankovScripts"
 buttontext:"ExtractInstanceFromReference"
 tooltip:"Extract instance from reference"
@@ -10,50 +26,60 @@ icon:#("pankov_instancseAll",2)
 		for i in 1 to a.count do if a[i] != b[i] then return false
 		return true
 	)
-
-	fn getBaseInstanceModifiersCount obj = (
-		local count = 0
-		if obj.modifiers.count > 0 then (
-			-- Collect only those modifiers on which the same objects depend as on the base object
-			for i in obj.modifiers.count to 1 by -1 do (
-				if isEqualListObjects (refs.dependentNodes obj.baseobject) (refs.dependentNodes obj.modifiers[i]) then count += 1 else break
-			)
-		)
-		return count
-	)
 	
 	on isenabled return (
-		selection.count == 1 AND
-		selection[1].modifiers.count > 0 AND
-		(refs.dependentNodes selection[1].baseobject).count > 1 AND
-		not isEqualListObjects (refs.dependentNodes selection[1].baseobject) (refs.dependentNodes selection[1].modifiers[1])
+		if selection.count != 1 or selection[1].modifiers.count == 0 do return false
+		local base_refs = refs.dependentNodes selection[1].baseobject
+		if base_refs.count > 1 do (
+			for modif in selection[1].modifiers do (
+				if not isEqualListObjects base_refs (refs.dependentNodes modif) do (
+					return true
+				)
+			)
+		)
+		false
 	)
 	
-	on execute do
-	(
-		main_obj = selection[1]
-		target_obj = copy main_obj
-		for i in 1 to target_obj.modifiers.count do deleteModifier target_obj 1
-		if isgroupmember main_obj then (
-			setGroupMember target_obj true
-			setgroupopen target_obj.parent false
-			setgroupopen target_obj.parent true
-		)
-
-		undo on (
-			local baseInstanceModifiersCount = getBaseInstanceModifiersCount main_obj
-			-- reference base object to target
-			target_obj.baseobject = main_obj.baseobject
-			-- clear old modifiers stack
-			for i in 1 to target_obj.modifiers.count do deleteModifier target_obj 1
-			-- move modifiers to target object
-			for i in 1 to baseInstanceModifiersCount do (
-				local current_mod = main_obj.modifiers[main_obj.modifiers.count-i+1]
-				addModifierWithLocalData target_obj current_mod main_obj current_mod
-				deleteModifier main_obj main_obj.modifiers[main_obj.modifiers.count-i]
+	on execute do (
+		obj = selection[1]
+		modifiedObjSub = obj[4]  -- SubAnim:Modified_Object
+		i = 1; subObjects = #() -- list of modifiers or Modified_Object
+		while modifiedObjSub[i] != undefined do (append subObjects modifiedObjSub[i]; i+=1)
+        modObjSubAnim = subObjects[subObjects.count]  -- SubAnim для #Modified_Object
+		if modObjSubAnim.name == "Modified Object" do
+			derivedObj = modObjSubAnim.value  -- ReferenceTarget:DerivedObject
+		
+		undo "Extract instance" on (
+			-- Создаем tempNode того же типа, что и obj
+			tempNode = copy obj
+			if derivedObj != undefined and superclassOf derivedObj == GenDerivedObjectClass then (
+				-- Находим индекс референса для .object в tempNode
+				/*
+				refIndex = 0
+				for i = 1 to refs.getNumRefs tempNode do (
+					if refs.getReference tempNode i == tempNode[4].object do (
+						refIndex = i
+						exit
+					)
+				)
+				*/
+				-- искать не нужно
+				-- refIndex ввсегда 2
+				local refIndex = 2
+				
+				-- Если индекс найден,
+				--if refIndex > 0 do (
+					-- заменяем на derivedObj
+					refs.replaceReference tempNode refIndex derivedObj
+					select tempNode
+				--)
+			) else (
+				-- clear modifiers
+				while tempNode.modifiers.count > 0 do deletemodifier tempNode 1
+				-- replace base object
+				tempNode.baseobject = obj.baseobject
+				select tempNode
 			)
-			select target_obj
-			completeredraw()
 		)
 	)
 )
