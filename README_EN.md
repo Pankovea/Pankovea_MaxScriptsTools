@@ -188,18 +188,34 @@ Script to replace objects with instances and reference parts.
 For single-script installation, copy icons [1](usericons/pankov_instancseAll_24i.bmp) and [2](usericons/pankov_instancseAll_16i.bmp) to your 3ds Max `usericons` folder (see Installation step 2).
 
 Features:
-* Replace any object with an instance of a selected source object by creating an instance and applying original transforms, layer, and material depending on settings.
-  If only some instances are selected, unselected instances will not be replaced.
-* Shows a progress bar when processing a large number of objects (>100).
 
-1. "Make Instances" group:
-    * Can clone by instance both individual objects and grouped objects.
-    * Can fit the new instance to the size of the objects being replaced.
+* Replace any object with an instance of the selected object by creating an instance
+  and applying original transforms, layer, and material according to the settings.
+  Note: if only some instances were selected, unselected instance objects will not be replaced.
 
-2. "Get instance part from reference object" group:
-Extracts the base object (the bottom of the modifier stack) and replaces selected objects with it.
-No new objects are created and all scene dependencies are preserved.
-    * Can also replace the entire modifier stack.
+* Replace a reference part of an object with the ability to choose the source reference level.
+
+* When replacing a large number of objects (>100), a progress bar is shown.
+
+Details:
+
+1. Make Instances group
+* Can create instances of both individual objects and grouped objects.
+* Can fit the new instance size to match the size of the objects being replaced.
+
+2. Replace Reference Target group
+Extracts a reference object from the chosen main object and replaces the specified reference level
+in the selected objects. This section works only in object mode (when the source object is geometry,
+not a group).
+
+Behavior depending on selection:
+* If a single destination object is selected, the script will prompt to choose the insertion level.
+* If multiple destination objects are selected, you can choose:
+  - Top layer (Top) — replace the whole object. In this case, unselected instance objects will not be affected.
+  - Instance part (Instance part) — the lower reference level including modifiers up to the first "break".
+    This may match the base level. In this case all objects referencing this part will be changed.
+  - Base object (Base object) — replace only the base object (the first entry on which the modifier stack is built).
+    In this case unselected instance objects will not be affected.
 
 [back (contents)](#contents)
 
