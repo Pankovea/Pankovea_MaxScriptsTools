@@ -18,6 +18,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Reset ModContextTM](#reset-modcontexttm)
 - [Align Pivot PCA](#align-pivot-pca)
 - [Renumber Material #X and Map #X](#renumber-material-x-and-map-x)
+- [Paste Image Reference To Plane](#paste-image-reference-to-plane)
 
 
 [scripts/](scripts/)
@@ -277,5 +278,19 @@ Installation:
 3. Drag the command onto a toolbar — done!
 
 The icons for the buttons are located here: [1](usericons/renum#X_24i.bmp) and [2](usericons/usericons/renum#X_16i.bmp). Copy them to the `usericons` folder in your 3dsmax settings ([see Installation step 2](#installation)).
+
+[back (contents)](#contents)
+## Paste Image Reference To Plane
+[Version 2025.11.06](usermacros/%23PankovScripts-PasteImageRefToPlane.mcr)
+
+Paste Clipboard Image as Reference Plane
+Copy any image → run the script → it appears in your scene as a textured plane.
+
+Without Shift: plane in XZ (horizontal, like a floor plan)
+With Shift pressed: plane in XY (vertical, like a wall), bottom edge at Z = 0
+* 1 pixel = 1 millimeter — scale automatically adapts to your scene units
+* Full image resolution is displayed. Pixels are not lost
+* Re-running updates the existing plane — no duplicates
+Perfect for floor plans, elevations, screenshots, and technical references — no manual file saving needed!
 
 [back (contents)](#contents)
