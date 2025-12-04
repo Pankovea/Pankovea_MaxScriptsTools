@@ -239,7 +239,7 @@ category:"#PankovScripts"
 buttontext:"CopyModTM"
 tooltip:"Copy modifier context tranform"
 (
-	global Pankov_Copy_ModContextTM_buffer = Dictionary #(#object_TM, undefined) #(#ModContextTM, undefined)
+	global Pankov_Copy_ModContextTM_buffer = Dictionary #(#object, undefined) #(#ModContextTM, undefined)
 	
 	rollout Copy_ModContextTM "Copy ModContextTM" width:162 (
 		label lbl1 "Transform"
@@ -258,35 +258,35 @@ tooltip:"Copy modifier context tranform"
 		checkbox contextTM_buffer "" enabled:false
 		button pst_contextTM "Paste"
 
-		on pick_TM picked obj do (
-			Pankov_Copy_ModContextTM_buffer[#object_TM] = obj.transform
+		on pick_TM picked srcObj do (
+			Pankov_Copy_ModContextTM_buffer[#object] = srcObj
 			tm_buffer.checked = true
 		)
 
 		on cp_TM pressed do (
 			if selection.count > 0 then (
 				local srcObj = selection[1]
-				Pankov_Copy_ModContextTM_buffer[#object_TM] = srcObj.transform
+				Pankov_Copy_ModContextTM_buffer[#object] = srcObj
 				tm_buffer.checked = true
 			)
 		)
 
 		on pst_TM pressed do (
-			if Pankov_Copy_ModContextTM_buffer[#object_TM] != undefined do undo "Paste Transform" on (
+			if Pankov_Copy_ModContextTM_buffer[#object] != undefined do undo "Paste Transform" on (
 				for obj in selection do (
 					if (TM_type_pos.checked and TM_type_rot.checked and TM_type_scale.checked) then (
-						obj.transform = Pankov_Copy_ModContextTM_buffer[#object_TM]
+						obj.transform = Pankov_Copy_ModContextTM_buffer[#object]
 					) else (
 						if TM_type_scale.checked do (
-							obj.scale = Pankov_Copy_ModContextTM_buffer[#object_TM].scale
+							obj.scale = Pankov_Copy_ModContextTM_buffer[#object].scale
 						)
 						if TM_type_rot.checked do (
 							local stored_pos = obj.pos
-							obj.rotation = Pankov_Copy_ModContextTM_buffer[#object_TM].rotation
+							obj.rotation = Pankov_Copy_ModContextTM_buffer[#object].rotation
 							obj.pos = stored_pos
 						)
 						if TM_type_pos.checked do (
-							obj.pos = Pankov_Copy_ModContextTM_buffer[#object_TM].pos
+							obj.pos = Pankov_Copy_ModContextTM_buffer[#object].pos
 						)
 					)
 				)
@@ -335,7 +335,7 @@ tooltip:"Copy modifier context tranform"
 		)
 		
 		on Copy_ModContextTM open do (
-			if Pankov_Copy_ModContextTM_buffer[#object_TM] != undefined do tm_buffer.checked = true
+			if Pankov_Copy_ModContextTM_buffer[#object] != undefined do tm_buffer.checked = true
 			if Pankov_Copy_ModContextTM_buffer[#ModContextTM] != undefined do contextTM_buffer.checked = true
 		)
 	)
@@ -575,7 +575,7 @@ tooltip:"Transform Modifier's Context TM"
         on btResetRotation pressed do (
 			local newTM = gizmoHelper.transform
 			local stored_pos = newTM.pos
-			newTM.rotation = quat 0 0 0 1e
+			newTM.rotation = quat 0 0 0 1
 			newTM.pos = stored_pos
 			gizmoHelper.transform = newTM
 			redrawViews()
