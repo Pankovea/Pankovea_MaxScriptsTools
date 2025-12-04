@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2025.09.04
+﻿/* @Pankovea Scripts - 2025.12.05
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
@@ -9,7 +9,7 @@ Distribute: Скрипт для рапределения в пространст
 * объекты распределяет равномерно учитывая размер объекта таким боразом, чтобы расстояние между ними было одинаковым
 (нужно доработать смещение пивота от центра и точность определения размера. Сейчас размер определяется по Bounding box)
 * Автоматически определяет первый и последний объекты по наибольшему расстоянию между ними.
-* работает если модификатор наложен инстансом на месколько объектов (#FIXME пока отрабатывает не корректно в max2025)
+* работает если модификатор наложен инстансом на месколько объектов
 * Распределяет группированные объекты
 
 * для запуска необходимо находиться в нужном режиме выделения.
@@ -24,8 +24,8 @@ The EditSpline modifier does not work)
 * distributes objects evenly, taking into account the size of the object in such a way that the distance between them is the same
 (you need to refine the pivot offset from the center and the accuracy of sizing. Now the size is determined by the Bounding box)
 * Automatically detects the first and last objects by the largest distance between them.
-* works if the modifier is imposed by the instance on several objects (#FIXME is not working correctly in max2025 yet)
-* * Distributes grouped objects
+* works if the modifier is imposed by the instance on several objects
+* Distributes grouped objects
 
 * To start, you must be in the desired selection mode.
 */
@@ -37,7 +37,19 @@ icon:#("AutoGrid",2)
 buttontext:"Distr" 	
 (
 
-struct Vertex (obj, numSp, numVert, pos, size=0, subs_pos, pivot_offset=[0,0,0], dist=0)
+struct Vertex (
+	obj,		-- Current object. For all cases
+	numSp,		-- if working on splines, number of spline, else undefined
+	numVert,	-- if working on splines, number of vertex or array of numbers, else undefined 
+	pos,		-- Current object position. For all cases
+	pos_offset=[0,0,0], -- point3 value difference to move current object
+	size=0,		-- Current object size. For all cases
+	subs_pos,	-- if working on subobjects, positions of grouped verts
+	subs_sel,	-- if working on subobjects, bitarray selection of (verts, edges, faces) when workin on poly object.
+	pivot_offset=[0,0,0], -- in objects pivot offset of the center object
+	dist=0		-- Calculated distantion current object from the previus object according object size
+)
+
 
 -- Функция для нахождения индексов двух наиболее удалённых точек. Между ними будем распределять точки / A function for finding the indices of the two most distant points. We will distribute the points between them
 fn findFurthestPoints arrOfVerts = ( -- in: array of Vertex struct; out: it's array indexes
@@ -77,8 +89,8 @@ fn sortPoints arrOfVerts = ( -- In: array of Vertex struct; out = sorted array o
 	local tmp
 	local FurthestVertsInd = findFurthestPoints arrOfVerts
 	-- Распределяем все точки вдоль вектора / We distribute all points along the vector
-	distributedVerts = projectVertexToVector arrOfVerts FurthestVertsInd[1] FurthestVertsInd[2]
-	startVert = distributedVerts[FurthestVertsInd[1]]
+	local distributedVerts = projectVertexToVector arrOfVerts FurthestVertsInd[1] FurthestVertsInd[2]
+	local startVert = distributedVerts[FurthestVertsInd[1]]
 	
 	-- Calc distances
 	for vert in distributedVerts do vert.dist = length (startVert.pos - vert.pos)
@@ -136,7 +148,10 @@ fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
 
 fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 	if arrOfVerts.count > 2 then (
-		local newArr = sortPoints arrOfVerts
+		-- store old positions
+		for vert in arrOfVerts do vert.pos_offset = vert.pos
+		
+		local newArr = sortPoints arrOfVerts -- that copies of Vertex struct array and project positions to the line
 		StartVert = newArr[1]
 		EndVert = newArr[newArr.count]
 		
@@ -152,10 +167,17 @@ fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 		---
 		step = (path_length - sum_radiuses) / (newArr.count - 1)
 					
-		for i=2 to newArr.count-1 do newArr[i].pos = newArr[i-1].pos + path_vec_nrm*newArr[i-1].size/2 + path_vec_nrm*step + path_vec_nrm*newArr[i].size/2
-
+		for i=2 to newArr.count-1 do (
+			-- calc new position
+			newArr[i].pos = newArr[i-1].pos + path_vec_nrm*newArr[i-1].size/2 + path_vec_nrm*step + path_vec_nrm*newArr[i].size/2
+			-- calc difference
+			newArr[i].pos_offset = newArr[i].pos - newArr[i].pos_offset -- new minus old pos
+		)
+		-- the extreme ones remain motionless
+		newArr[1].pos_offset = [0,0,0]
+		newArr[newArr.count].pos_offset = [0,0,0]
 		return newArr
-	) else ( 
+	) else (
 		return arr
 	)
 )
@@ -196,6 +218,7 @@ fn groupAdjacent obj selected type = ( -- in: obj,  selected: bitarray; out: arr
     for index in selected do (
         if not visited[index] then (
             local _group = #{}
+			_group.count = selected.count -- leave the initial count for successful further selections.
             local queue = #(index)
             
             while queue.count > 0 do (
@@ -244,7 +267,6 @@ fn getSplineVertexGroups spline s_num vertSelection = ( -- in: spline: spline ob
 	
 )
 
-
 -------------------------------------
 -- Macroscript
 -------------------------------------
@@ -285,7 +307,7 @@ on execute do (
 						for vert in getKnotSelection obj sp do
 							append vertexArray (Vertex numSp:sp numVert:vert pos: (getKnotPoint obj sp vert))
 					if vertexArray.count > 2 then (
-						undo on (
+						with redraw off ( undo on (
 							for vert in calcNewPositions vertexArray do (
 								KnotPoint = getKnotPoint obj vert.numSp vert.numVert
 								diff = vert.pos - KnotPoint
@@ -295,8 +317,8 @@ on execute do (
 								setOutVec obj vert.numSp vert.numVert (outVec + diff)
 								setInVec obj vert.numSp vert.numVert (inVec + diff)
 							)
-						)
-						updateShape obj
+							updateShape obj
+						))
 					) else (
 						print "No Vertex selection to distribute"
 					)
@@ -332,7 +354,7 @@ on execute do (
 					)
 					-- move vertices
 					if vertexArray.count > 2 then (
-						undo on (
+						with redraw off ( undo on (
 							for vert in calcNewPositions vertexArray do (
 								for i in 1 to vert.numVert.count do (
 									vertIndex = vert.numVert[i]
@@ -352,8 +374,8 @@ on execute do (
 									setInVec obj vert.numSp vertIndex (inVec + diff)
 								)
 							)
-						)
-						updateShape obj
+							updateShape obj
+						))
 					) else (
 						print "No Segment selection to distribute"
 					)
@@ -377,7 +399,7 @@ on execute do (
 					)
 					-- move vertices
 					if vertexArray.count > 2 then (
-						undo on (
+						with redraw off ( undo on (
 							for vert in calcNewPositions vertexArray do (
 								for i in 1 to vert.numVert.count do (
 									vertIndex = vert.numVert[i]
@@ -397,8 +419,8 @@ on execute do (
 									setInVec obj vert.numSp vertIndex (inVec + diff)
 								)
 							)
-						)
-						updateShape obj
+							updateShape obj
+						))
 					) else (
 						print "No Spline selection to distribute"
 					)
@@ -409,9 +431,11 @@ on execute do (
 		-------------------- Editable Poly -----------------------
 		(subobjectLevel != 0 \
 		and (classof (modPanel.getCurrentObject())) == Editable_Poly): (
-			if subobjectLevel == 1 then sub_sel = polyop.getVertSelection selection[1].baseobject
-			if subobjectLevel == 2 or subobjectLevel == 3 then sub_sel = polyop.getEdgeSelection selection[1].baseobject
-			if subobjectLevel == 4 or subobjectLevel == 5 then sub_sel = polyop.getFaceSelection selection[1].baseobject
+			local sub_sel = case of (
+				(subobjectLevel == 1): polyop.getVertSelection selection[1].baseobject
+				(subobjectLevel == 2 or subobjectLevel == 3): polyop.getEdgeSelection selection[1].baseobject
+				(subobjectLevel == 4 or subobjectLevel == 5): polyop.getFaceSelection selection[1].baseobject
+			)
 			if not sub_sel.isEmpty then (
 				base_obj = modPanel.getCurrentObject()
 				obj = (refs.dependentNodes base_obj)[1]
@@ -420,60 +444,51 @@ on execute do (
 					(subobjectLevel == 1): (
 						vertList = polyop.getVertSelection obj.baseobject
 						vertexArray = for numVert in vertList collect Vertex numVert:numVert pos:(polyop.getVert obj.baseobject numVert)
-						if vertexArray.count > 2 then undo on (
+						if vertexArray.count > 2 then with redraw off ( undo on (
 							for vert in calcNewPositions vertexArray do (
-								polyop.setVert obj vert.numVert vert.pos
+								polyop.setVert obj.baseobject vert.numVert vert.pos
 							)
-						)
+						))
 					)
 					-- Edge
 					(subobjectLevel == 2 or subobjectLevel == 3): (
-						local groupCenters = array()
 						edgeList = polyop.getEdgeSelection obj.baseobject
-						local groupedFaces = groupAdjacent obj.baseobject edgeList #Edge
-						for gr_number in 1 to groupedFaces.count do (
+						local groupedEdges = groupAdjacent obj.baseobject edgeList #Edge
+						for gr_number in 1 to groupedEdges.count do (
 							curVertSel = #{}
-							for edge in groupedFaces[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj.baseobject edge) as bitArray)
-							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj.baseobject curVertSel)
-							bbox = box3()
+							for edge in groupedEdges[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj.baseobject edge) as bitArray)
+							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj.baseobject curVertSel) subs_sel:curVertSel
+							local bbox = box3()
 							expandToInclude bbox vert.subs_pos
 							vert.pos = bbox.center
-							append groupCenters vert.pos
 							append vertexArray vert
 						)
 						-- move vertices
-						if vertexArray.count > 2 then undo on (
+						if vertexArray.count > 2 then with redraw off ( undo on (
 							for vert in calcNewPositions vertexArray do (
-								curVertSel = #{}
-								for edge in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getEdgeVerts obj.baseobject edge) as bitArray)
-								polyop.moveVert obj.baseobject curVertSel (vert.pos - groupCenters[vert.numVert])
+								polyop.moveVert obj.baseobject vert.subs_sel vert.pos_offset
 							)
-						)
+						))
 					)
 					-- Faces
 					(subobjectLevel == 4 or subobjectLevel == 5): (
-						local groupCenters = array()
 						faceList = polyop.getFaceSelection obj.baseobject
 						local groupedFaces = groupAdjacent obj.baseobject faceList #Face
-						1
 						for gr_number in 1 to groupedFaces.count do (
 							curVertSel = #{}
 							for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj.baseobject face) as bitArray)
-							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj.baseobject curVertSel)
+							vert = Vertex obj:obj numVert:gr_number subs_pos:(polyop.getVerts obj.baseobject curVertSel) subs_sel:curVertSel
 							bbox = box3()
 							expandToInclude bbox vert.subs_pos
 							vert.pos = bbox.center
-							append groupCenters vert.pos
 							append vertexArray vert
 						)
 						-- move vertices
-						if vertexArray.count > 2 then undo on (
+						if vertexArray.count > 2 then with redraw off ( undo on (
 							for vert in calcNewPositions vertexArray do (
-								curVertSel = #{}
-								for face in groupedFaces[vert.numVert] do curVertSel += ((polyOp.getFaceVerts obj.baseobject face) as bitArray)
-								polyop.moveVert obj.baseobject curVertSel (vert.pos - groupCenters[vert.numVert])
+								polyop.moveVert obj.baseobject vert.subs_sel vert.pos_offset
 							)
-						)
+						))
 					)
 				)
 			) else (
@@ -518,7 +533,7 @@ on execute do (
 					-- if objects in group then open it and remeber to close
 					groups = for obj in selection where isgrouphead obj collect obj
 					for obj in groups do setGroupOpen obj true
-						
+
 					case of (
 						-- Vertex
 						(subobjectLevel == 1): (
@@ -526,31 +541,41 @@ on execute do (
 							local curVertSel
 							-- get vertex positions
 							for obj in nodes do (
-								select obj
-								modpanel.setCurrentObject modif
+								if selection[1] != obj then (
+									modpanel.setCurrentObject modif node:obj
+								)
 								curVertSel = modif.EditPolyMod.GetSelection #Vertex
 								append oldVertSel #(obj, curVertSel)
 								for vert in curVertSel do (
 									append vertexArray (Vertex obj:obj numVert:vert pos:(modif.GetVertex vert))
 								)
 							)
-							if vertexArray.count > 2 then undo on (
-								-- set new vertex pos
-								for vert in calcNewPositions vertexArray do (
-									if selection[1] != vert.obj then select vert.obj
-									modif.SetSelection #Vertex #{vert.numVert}
-									modif.Select #Vertex #{vert.numVert}
-									modif.MoveSelection (vert.pos - (modif.GetVertex vert.numVert))
-									modif.Commit()
-								)
-								-- select old vertex selection
-								for sel in oldVertSel do (
-									select sel[1]
-									modif.SetSelection #Vertex sel[2]
-								)
-								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
-								--deselect $*
-								--completeredraw()
+							if vertexArray.count > 2 then (
+								with redraw off ( undo on (
+									-- set new vertex pos
+									local vertSel
+									for vert in calcNewPositions vertexArray do (
+										if selection[1] != vert.obj then (
+											modpanel.setCurrentObject modif node:sel[1]
+										)
+										vertSel = #{vert.numVert}
+										vertSel.count = modif.getNumVertices()
+										modif.SetSelection #Vertex vertSel
+										modif.MoveSelection vert.pos_offset
+										modif.Commit()
+									)
+									-- select old vertex selection
+									for s in oldVertSel do (
+										select s[1]
+										modif.SetSelection #Vertex s[2]
+									)
+									-- select old objects selection
+									if sel.count == 1 then (
+										modpanel.setCurrentObject modif node:sel[1]
+									) else (
+										select sel
+									)
+								))
 							) else (
 								print "No Vertex selection to distribute"
 							)
@@ -559,44 +584,48 @@ on execute do (
 						(subobjectLevel == 2 or subobjectLevel == 3): (
 							local oldEdgeSel = array() -- #(obj, curEdgeSel: bitarray) remember old vertex selection
 							local curEdgeSel
-							local curVertSel
 							local groupedEdges
-							local groupCenters = array()
 							-- get Edge positions
 							for obj in nodes do (
-								select obj
-								modpanel.setCurrentObject modif
+								if selection[1] != obj then (
+									modpanel.setCurrentObject modif node:obj
+								)
 								curEdgeSel = modif.GetSelection #Edge
 								append oldEdgeSel #(obj, curEdgeSel)
 								groupedEdges = groupAdjacent obj curEdgeSel #Edge
 								for gr_number in 1 to groupedEdges.count do (
 									curVertSel = #{}
 									for edge in groupedEdges[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
-									vert = Vertex obj:obj numVert:gr_number subs_pos:(for v in curVertSel collect polyOp.getVert obj v)
+									vert = Vertex obj:obj numVert:gr_number subs_pos:(for v in curVertSel collect polyOp.getVert obj v) subs_sel:groupedEdges[gr_number]
 									bbox = box3()
 									expandToInclude bbox vert.subs_pos
 									vert.pos = bbox.center
-									append groupCenters vert.pos
 									append vertexArray vert
 								)
 							)
-							if vertexArray.count > 2 then undo on (
-								-- set new vertex pos
-								for vert in calcNewPositions vertexArray do (
-									if selection[1] != vert.obj then select vert.obj
-									modif.SetSelection #Edge groupedEdges[vert.numVert]
-									modif.Select #Edge groupedEdges[vert.numVert]
-									modif.MoveSelection (vert.pos - groupCenters[vert.numVert])
-									modif.Commit()
-								)
-								-- select old edge selection
-								for sel in oldEdgeSel do (
-									select sel[1]
-									modif.SetSelection #Edge sel[2]
-								)
-								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
-								-- deselect $*
-								-- completeredraw()
+							if vertexArray.count > 2 then (
+								with redraw off ( undo on (
+									-- set new vertex pos
+									for vert in calcNewPositions vertexArray do (
+										if selection[1] != vert.obj then (
+											modpanel.setCurrentObject modif node:vert.obj
+										)
+										modif.SetSelection #Edge vert.subs_sel
+										modif.MoveSelection vert.pos_offset
+										modif.Commit()
+									)
+									-- select old edge selection
+									for s in oldEdgeSel do (
+										select s[1]
+										modif.SetSelection #Edge s[2]
+									)
+									-- select old objects selection
+									if sel.count == 1 then (
+										modpanel.setCurrentObject modif node:sel[1]
+									) else (
+										select sel
+									)
+								))
 							) else (
 								print "No edge selection to distribute"
 							)
@@ -607,43 +636,45 @@ on execute do (
 							local curFaceSel
 							local curVertSel
 							local groupedFaces
-							local groupCenters = array()
 							-- get Face positions
 							for obj in nodes do (
-								select obj
-								modpanel.setCurrentObject modif
+								modpanel.setCurrentObject modif node:obj
 								curFaceSel = modif.GetSelection #Face
 								append oldFaceSel #(obj, curFaceSel)
 								groupedFaces = groupAdjacent obj curFaceSel #Face
 								for gr_number in 1 to groupedFaces.count do (
 									curVertSel = #{}
 									for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
-									vert = Vertex obj:obj numVert:gr_number subs_pos:(for v in curVertSel collect polyOp.getVert obj v)
+									vert = Vertex obj:obj numVert:gr_number subs_pos:(for v in curVertSel collect polyOp.getVert obj v) subs_sel:groupedFaces[gr_number]
 									bbox = box3()
 									expandToInclude bbox vert.subs_pos
 									vert.pos = bbox.center
-									append groupCenters vert.pos
 									append vertexArray vert
 								)
 							)
-							if vertexArray.count > 2 then undo on (
-								-- set new vertex pos
-								for vert in calcNewPositions vertexArray do (
-									if selection[1] != vert.obj then select vert.obj
-									modif.SetSelection #Face groupedFaces[vert.numVert]
-									modif.Select #Face groupedFaces[vert.numVert]
-									diff = vert.pos - groupCenters[vert.numVert]
-									modif.MoveSelection diff
-									modif.Commit()
-								)
-								-- select old Face selection
-								for sel in oldFaceSel do (
-									select sel[1]
-									modif.SetSelection #Face sel[2]
-								)
-								-- #FIXME Testing in MAX 2023 - uncomment these two lines. if select again, objects are diapearing. It must be deselect and select manualy for work well
-								-- deselect $*
-								redrawViews()
+							if vertexArray.count > 2 then (
+								with redraw off ( undo on (
+									-- set new vertex pos
+									for vert in calcNewPositions vertexArray do (
+										if selection[1] != vert.obj then (
+											modpanel.setCurrentObject modif node:vert.obj
+										)
+										modif.SetSelection #Face vert.subs_sel
+										modif.MoveSelection vert.pos_offset
+										modif.Commit()
+									)
+									-- select old Face selection
+									for s in oldFaceSel do (
+										select s[1]
+										modif.SetSelection #Face s[2]
+									)
+									-- select old objects selection
+									if sel.count == 1 then (
+										modpanel.setCurrentObject modif node:sel[1]
+									) else (
+										select sel
+									)
+								))
 							) else (
 								print "No Face selection to distribute"
 							)
@@ -651,8 +682,6 @@ on execute do (
 					)
 					-- close groups
 					for obj in groups do setGroupOpen obj false
-					-- #FIXME if select then objects are diapearing from the viewport. Testing in MAX 2023
-					--select groups
 				))
 			)
 		)
@@ -663,11 +692,11 @@ on execute do (
 			-- Create Vertex struct for nodes
 			local sel = for obj in selection where (finditem (selection as array) obj.parent) == 0 collect Vertex obj:obj pos:obj.pos
 			-- set new positions
-			if sel.count > 2 then undo on (
+			if sel.count > 2 then with redraw off ( undo on (
 				for vert in calcNewPositions sel do (
 					vert.obj.pos = vert.pos
 				)
-			)
+			))
 		)
 		
 		else: print "Can not do it."

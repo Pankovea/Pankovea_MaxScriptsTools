@@ -141,7 +141,7 @@ Use TexturePacker to create a texture atlas and reduce asset count for many smal
 [back (contents)](#contents)
 
 ## Distribute
-[Version 2025.09.04](usermacros/%23PankovScripts-Distribute.mcr)
+[Version 2025.12.05](usermacros/%23PankovScripts-Distribute.mcr)
 
 A script for spatial distribution.
 
@@ -152,7 +152,7 @@ Features:
 * Distributes objects evenly taking object size into account so spacing between objects is uniform
   (pivot offset and bounding accuracy need improvement; currently size is determined by bounding box).
 * Automatically determines first and last objects by largest distance between them.
-* Works inside EditPoly even when the modifier is instanced on multiple objects (#FIXME: currently unstable in Max2025).
+* Works inside EditPoly even when the modifier is instanced on multiple objects.
 * Distributes grouped objects.
 * Requires being in the appropriate selection mode to run.
 
