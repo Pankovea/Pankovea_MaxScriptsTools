@@ -289,7 +289,7 @@ The icons for the buttons are located here: [1](usericons/renum#X_24i.bmp) and [
 
 [back (contents)](#contents)
 ## Paste Image Reference To Plane
-[Version 2025.11.06](usermacros/%23PankovScripts-PasteImageRefToPlane.mcr)
+[Version 2025.12.04](usermacros/%23PankovScripts-PasteImageRefToPlane.mcr)
 
 Paste Clipboard Image as Reference Plane
 Copy any image → run the script → it appears in your scene as a textured plane.

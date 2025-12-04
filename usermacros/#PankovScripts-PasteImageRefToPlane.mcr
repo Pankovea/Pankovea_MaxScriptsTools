@@ -1,4 +1,4 @@
-/* @Pankovea Scripts - 2025.11.06
+/* @Pankovea Scripts - 2025.12.04
 Paste Image Reference To Plane
 Позволяет быстро Вставить изображение из буфера обмена как референс-плоскость
 Копируете изображение (скриншот, план, текстуру) → запускаете скрипт → в сцене появляется плоскость с этим изображением в качестве материала.
@@ -26,7 +26,7 @@ Perfect for floor plans, elevations, screenshots, and technical references — n
 macroScript Pankov_PasteImageRefToPlane
 category:"#PankovScripts"
 buttontext:"PasteRef"
-tooltip:"Paste Image Reference from buffer to plane"
+tooltip:"Paste Image Reference from buffer to plane (Shift+ Vertical)"
 (
 -- Загружаем сборки
 dotNet.loadAssembly "PresentationCore"
@@ -47,6 +47,7 @@ local mmPerUnit = case units.SystemType of (
 local scaleFactor = 1.0 / mmPerUnit
 local origWidth
 local origHeight
+local refPlane = undefined
 
 fn getNitrousRes current_res = (
 	-- Возвращает 
@@ -157,6 +158,82 @@ fn deleteOldClipboardRefFiles = (
     return deletedCount > 0  -- true если что-то удалено
 )
 
+fn getXformModif obj = (
+	-- Ищет моификатор Xform в объекте с именем "Xform to wall"
+	-- если не находит, то возвращает undefined
+	local xf
+	for m in refPlane.modifiers where m.name == "Xform to wall" do (
+		xf = m
+		exit
+	)
+	return xf
+)
+
+rollout sizeDialog "Размеры"
+(
+    local myPlane = undefined
+    local myRatio = 1.0
+    local updating = false
+    
+    spinner spnX "X:" range:[0.001,1e6,1.0] type:#float scale:1.0 width:80 height:16 align:#left across:2 offset:[0,0]
+	checkbutton chkLock "🔗" checked:true offset:[-8,8]
+    spinner spnY "Y:" range:[0.001,1e6,1.0] type:#float scale:1.0 width:80 height:16 align:#left across:2 offset:[0,-8] 
+    button btnOK "✅" offset:[26,-26]
+    
+    on sizeDialog open do (
+        if refPlane != undefined then (
+            myPlane = refPlane
+            myRatio = if myPlane.width > 0 then myPlane.length / myPlane.width else 1.0
+            spnX.value = myPlane.width
+            spnY.value = myPlane.length
+        ) else DestroyDialog sizeDialog
+    )
+    
+    on spnX changed val do (
+        if not updating and myPlane != undefined do (
+            updating = true
+            myPlane.width = val
+            if chkLock.checked then (
+                local newY = val * myRatio
+                spnY.value = newY
+                myPlane.length = newY
+            )
+			-- Обновляем трансформацию если вертикальная
+			local xf = getXformModif myPlane
+			if xf != undefined do (
+				xf.gizmo.pos.z = myPlane.length / 2.0
+			)
+            --redrawViews()
+            updating = false
+        )
+    )
+    
+    on spnY changed val do (
+        if not updating and myPlane != undefined do (
+            updating = true
+            myPlane.length = val
+            if chkLock.checked then (
+                local newX = val / myRatio
+                spnX.value = newX
+                myPlane.width = newX
+            )
+			-- Обновляем трансформацию если вертикальная
+			local xf = getXformModif myPlane
+			if xf != undefined do (
+				xf.gizmo.pos.z = myPlane.length / 2.0
+			)
+            --redrawViews()
+            updating = false
+        )
+    )
+    
+    on chkLock changed state do (
+        chkLock.caption = if state then "🔗" else "⛓️‍💥"
+    )
+    
+    on btnOK pressed do destroyDialog sizeDialog
+)
+
 fn updateReferencePlane = (
 	-- определимся с методом отрисовки
 	-- для лучшего отображения лучше использовать VrayBitmap
@@ -192,7 +269,7 @@ fn updateReferencePlane = (
 			NitrousGraphicsManager.SetTextureSizeLimit nitrousRes true
 		)
 		
-        local refPlane = getNodeByName "ClipboardRefPlane"
+        refPlane = getNodeByName "ClipboardRefPlane"
         if refPlane == undefined then (
             -- Создаём плоскость
             refPlane = plane name:"ClipboardRefPlane" width:w length:l widthsegs:1 lengthsegs:1
@@ -204,40 +281,57 @@ fn updateReferencePlane = (
             refPlane.length = l
         )
 
+		local xf = getXformModif myPlane
         if keyboard.ShiftPressed then (
-			refPlane.transform = matrix3 [1,0,0] [0,0,1] [0,-1,0] [0,0,0]
-			refPlane.objectOffsetPos = [0, refPlane.length / 2, 0]  -- низ на Z=0
+			if (classof xf) != xform then (
+				xf = xform name:"Xform to wall"
+				addmodifier refPlane xf
+			)
+			xf.gizmo.transform = matrix3 [1,0,0] [0,0,1] [0,-1,0] [0, 0, refPlane.length / 2.0]
 		) else (
-			refPlane.transform = matrix3 1
-			refPlane.objectOffsetPos = [0, 0, 0]  -- низ на Z=0
+			if (classof xf) == xform then
+				deletemodifier refPlane xf
         )
 
         -- Назначаем текстуру
         local map
+		local uv = refPlane.modifiers[refPlane.modifiers.count]
 		case bitmapMethod of ( -- для лучшего отображения лучше использовать Corona или Vray bitmap
 			#VRay: (
 				map = VRayBitmap name:"ClipboardTex" filename:tempImagePath viewport_useFullResolution:true
-				if (classof refPlane.modifiers[1]) == UVWMap then
-					deletemodifier refPlane 1
+				if (classof uv) == UVWMap then
+					deletemodifier refPlane refPlane.modifiers.count
 			)
 			default: (
 				map = bitmapTexture name:"ClipboardTex" fileName:tempImagePath
-				if (classof refPlane.modifiers[1]) != UVWMap then
-					addmodifier refPlane (UVWMap())
-				refPlane.modifiers[1].width = nitrousRes
-				refPlane.modifiers[1].length = nitrousRes
+				if (classof uv) != UVWMap then (
+					uv = UVWMap()
+					addmodifier refPlane uv before:refPlane.modifiers.count
+				)
+				uv.width = nitrousRes
+				uv.length = nitrousRes
 				/*
+				-- почему-то вызывает ошибку Unknown property: "gizmo" in Uvwmap:UVW Map
 				-- коррекция на нечётность размера изображения и значит выравнивание по центру смещено
 				local uoffset = if (origWidth / 2) != (origWidth / 2.0) then scaleFactor else 0
 				local voffset = if (origHeight / 2) != (origHeight / 2.0) then scaleFactor else 0
 				refPlane.modifiers[1].gizmo.position = [uoffset, voffset, 0]
-				-- почему-то вызывает ошибку Unknown property: "gizmo" in Uvwmap:UVW Map
 				*/
 			)
 		)
         refPlane.material.diffuseMap = map
 		refPlane.material.showInViewport = true
-        redrawViews()
+        --redrawViews()
+		
+		local oldsel = selection as array
+		select refPlane
+		refPlane.scale = [3,3,3]
+		actionMan.executeAction 0 "310"  -- Tools: Zoom Extents Selected
+		select oldsel
+		refPlane.scale = [1,1,1]
+		
+		-- Показываем модальное окно для редактирования размеров
+        createDialog sizeDialog modal:true
     ) else (
         messagebox "❌ Нет изображения в буфере."
     )
