@@ -240,18 +240,26 @@ For example, you can use a single dependent instance of a UVWMap modifier on man
 [back (contents)](#contents)
 
 ## Align Pivot PCA
-[Version 2025.09.30](usermacros/%23PankovScripts-AlignPivotPCA.mcr)
+[Version 2025.12.03](usermacros/%23PankovScripts-AlignPivotPCA.mcr)
 
-Aligns the local axes along the long and short dimensions of the object's geometry.
+Aligns local axes along the longer and shorter dimensions of the object’s geometry.
 
-This script analyzes the selected object's geometry, computes the covariance matrix of its vertices,
-and extracts principal components (Principal Component Analysis - PCA) to determine the object's natural orientation.
+This script analyzes the geometry of the selected object, computes the covariance matrix of its vertices,
+and performs Principal Component Analysis (PCA) to determine the object's natural orientation.
 
-The first and second principal axes define the plane used for an angular search to find the orientation
-with the minimal-area bounding rectangle. The Z axis is automatically adjusted to point upward (+Z world).
-The object's pivot is moved to the centroid and rotated to the found coordinate system while the geometry remains stationary.
+When invoked with Shift+, the script searches for a rotation that minimizes the bounding box size,
+while keeping the Z-axis fixed.
+Typically, square-shaped objects require axis realignment, whereas circular objects should retain their original orientation —
+use Shift+ accordingly.
+
+If the object's Z-axis flips downward, its orientation is automatically adjusted
+to stay as close as possible to the world +Z direction.
+
+The object's pivot is then moved to its centroid and rotated to align with the computed coordinate system,
+while the geometry itself remains fixed in the scene.
 
 The script handles initially offset pivots correctly by precisely recalculating objectOffset parameters.
+All calculations are performed in global space.
 
 [back (contents)](#contents)
 

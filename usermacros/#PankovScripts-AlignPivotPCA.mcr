@@ -1,37 +1,53 @@
-/* @Pankovea Scripts - 2025.09.30
+/* @Pankovea Scripts - 2025.12.03
 Выравнивает локальные оси вдоль длинной и короткой части геометрии объекта.
 
 Этот скрипт анализирует геометрию выбранного объекта, вычисляет ковариационную матрицу его вершин
 и находит главные компоненты (Principal Component Analysis - PCA) для определения естественной ориентации формы.
-Первая и вторая главные оси задают плоскость, в которой методом поиска по углам находится ориентация
-с минимальной площадью охватывающего прямоугольника. Ось Z автоматически корректируется,
-чтобы всегда быть направленной вверх (в сторону +Z мировой системы координат).
+При нажатии Shift+ вызов макроскрипта происходит поиск поворота оси так, чтобы ограничивающий бокс был
+минимального размера.При этом ось Z остаётся неподвижной
+Обычно для квадратных объектов нужно повернуть оси, а для круглых оставить как есть.
+Соответсвенно используйте Shift+
+
+Если Ось Z ушла вниз, что координаты автоматически корректируется,
+чтобы всегда быть ближе к +Z мировой системы координат.
+
 Затем пивот объекта перемещается в центроид и поворачивается в соответствии с найденной системой координат,
 при этом геометрия остаётся неподвижной в сцене.
-Скрипт корректно работает даже при изначально смещённом пивоте благодаря точному пересчёту objectOffset-параметров. 
+
+Скрипт корректно работает даже при изначально смещённом пивоте благодаря точному пересчёту objectOffset-параметров.
+Все расчёты происходят в глобальных координатах.
+
+Скрипт работает как с геметрией, так и со сплайнами.
 
 ----------------------------------------------------
-Aligns the local axes along the long and short dimensions of the object's geometry.
+Aligns local axes along the longer and shorter dimensions of the object’s geometry.
 
 This script analyzes the geometry of the selected object, computes the covariance matrix of its vertices,
-and extracts the principal components (Principal Component Analysis - PCA) to determine the natural orientation
-of the shape. The first and second principal axes define the plane in which an angular search is performed
-to find the orientation with the minimal-area bounding rectangle. The Z axis is automatically adjusted
-so that it always points upward (toward +Z in world coordinates).
-The object's pivot is then moved to the centroid and rotated to match the found coordinate system,
-while the geometry itself remains stationary in the scene.
-The script also handles initially offset pivots correctly by precisely recalculating the objectOffset parameters.
+and performs Principal Component Analysis (PCA) to determine the object's natural orientation.
+When invoked with Shift+, the script searches for a rotation that minimizes the bounding box size,
+while keeping the Z-axis fixed.
+Typically, square-shaped objects require axis realignment, whereas circular objects should retain their original orientation—
+use Shift+ accordingly.
+
+If the object's Z-axis flips downward, its orientation is automatically adjusted
+to stay as close as possible to the world +Z direction.
+
+The object's pivot is then moved to its centroid and rotated to align with the computed coordinate system,
+while the geometry itself remains fixed in the scene.
+
+The script handles initially offset pivots correctly by precisely recalculating objectOffset parameters.
+All calculations are performed in global space.
 
 */
 
 macroScript Pankov_AlignPivotPCA
 category:"#PankovScripts"
 buttontext:"ResetPivotOffset"
-tooltip:"Align pivot to object's natural orientation PCA"
+tooltip:"Align pivot to object's natural orientation PCA. Shift+ to find minimal-area bounding rectangle"
 (
 	
 on isenabled return (
-	selection.count == 1 and ((isKindOf selection[1] GeometryClass) or (isKindOf selection[1] Shape))
+	selection.count != 0
 )
 
 -- Умножение 3x3 матрицы (в виде #[[a,b,c],[d,e,f],[g,h,i]]) на вектор
@@ -53,26 +69,31 @@ fn safeNormalize v =
 -- Получить первые две главные компоненты
 fn getFirstTwoPC cov33 =
 (
+	local epsilon = 1e-6   -- Порог изменения (для ~0.01° точности)
 	-- Первая компонента
     local x = safeNormalize [1,1,0.1]
-    for i = 1 to 10 do
+    for i = 1 to 100 do
     (
+		local x_old = x
         x = safeNormalize (mat33MulVec cov33 x)
+		if length (x - x_old) < epsilon then exit  -- Выход при сходимости
     )
 
     -- Вторая компонента
-    local y = safeNormalize [1,0,0]
+    local y = [1,0,0]
     if abs(dot y x) > 0.9 then y = [0,1,0]
     if abs(dot y x) > 0.9 then y = [0,0,1]
 
     y = y - (dot y x) * x
     y = safeNormalize y
 
-    for i = 1 to 10 do
+    for i = 1 to 100 do
     (
+		local y_old = y
         local v = mat33MulVec cov33 y
         v = v - (dot v x) * x
         y = safeNormalize v
+		if length (y - y_old) < epsilon then exit  -- Выход при сходимости
     )
 
     local z = cross x y
@@ -129,10 +150,10 @@ fn findOptimalAngle uvPoints =
     local minArea = 1e18
 
     -- Грубый поиск: от 0 до 90 градусов (остальное — симметрия)
-    local step = 5 as float -- градусы
-    for deg = 0 to 89.9 by step do
+    local step = 10 as float -- градусы
+    for deg = 0 to 80 by step do
     (
-        local ang = deg --* (pi / 180.0)
+        local ang = deg
         local res = getBoundingBoxSize uvPoints ang
         if res[3] < minArea do
         (
@@ -142,31 +163,78 @@ fn findOptimalAngle uvPoints =
     )
 
     -- Уточнение вокруг bestAngle
-    local refineStep = 1.0
-    for i = 1 to 3 do
+    for i = 1 to 4 do -- делаем 4 итерации для уточнения до тысячных
     (
-        local newMin = 1e18
         local newBest = bestAngle
-        for offset = -refineStep to refineStep by (refineStep / 10.0) do
+        for offset = 0 to step by (step/10) do
         (
-            local ang = bestAngle + offset --* (pi / 180.0)
+            local ang = bestAngle + offset
             local res = getBoundingBoxSize uvPoints ang
-            if res[3] < newMin do
+            if res[3] < minArea do
             (
-                newMin = res[3]
+                minArea = res[3]
                 newBest = ang
             )
         )
         bestAngle = newBest
-        refineStep /= 10.0
+        step /= 10.0 -- уменьшаеи шаг
     )
 
     bestAngle
 )
 
+fn objOffsetTM obj = (
+	(ScaleMatrix obj.objectOffsetScale) * \
+	(obj.objectOffsetRot as Matrix3) * \
+	(TransMatrix obj.objectOffsetPos)
+)
+
+fn placePivot obj targetTM = (
+	/*Присваеивает новую матрицу трансформаций пивота на объект
+	targetTM - в глобальных координатах
+	геометрия не двигается
+	*/
+	local newOffsetTM = (objOffsetTM obj) * obj.transform * inverse(targetTM)
+	
+	-- перемещаем пивот
+	obj.objectOffsetScale = newOffsetTM.scale
+	obj.objectOffsetRot = newOffsetTM.rotation
+	obj.objectOffsetPos = newOffsetTM.position
+	
+	-- после перемещения, нужно компенсировать положение 
+	obj.transform = targetTM
+)
+
+fn sort_axis v = ( -- v: piont3
+	/*возвращает отсортированный массив индексов осей по убыванию длины
+	*/
+	v = [abs v.x, abs v.y, abs v.z]
+	case of (
+		(v[1] > v[2] and v[2] > v[3]): #(1,2,3)
+		(v[1] > v[3] and v[3] > v[2]): #(1,3,2)
+		(v[2] > v[1] and v[1] > v[3]): #(2,1,3)
+		(v[2] > v[3] and v[3] > v[1]): #(2,3,1)
+		(v[3] > v[1] and v[1] > v[2]): #(3,1,2)
+		(v[3] > v[2] and v[2] > v[1]): #(3,2,1)
+		default: #(1,2,3)
+	)
+)
+
+fn check_z_up tm = ( -- tm: TransformMatrix
+	-- Проверяет: смотрит ли Z вниз
+	if tm.row3.z < 0 do (
+		-- Переворачиваем Z и одновременно меняем порядок X и Y,
+		-- чтобы сохранить правую систему и не нарушить смысл "X — первая компонента"
+		-- Но проще: инвертируем Z и Y
+        -- cross(x, -y) = -cross(x, y) = -z_old = z_new
+		tm.row2 = -tm.row2
+		tm.row3 = -tm.row3
+	)
+	tm
+)
 
 -- Основная функция
-fn alignPivotToPCA obj =
+fn alignPivotToPCA obj search_min_area:true =
 (
     if not ((isKindOf obj GeometryClass) or (isKindOf obj Shape)) do
     (
@@ -184,15 +252,41 @@ fn alignPivotToPCA obj =
 		obj.mesh
 	)
 
-	local verts = for v in m.verts collect (v.pos + obj.pos + obj.objectOffsetPos)
+	local verts = for v in m.verts collect (v.pos * (objOffsetTM obj) * obj.transform ) -- в глобальных координатах
 	if isvalidnode tempObj do delete tempObj
 	
-    if verts.count < 3 do ( messagebox "Недостаточно вершин!"; return false )
-
     -- Центроид
     local centroid = [0,0,0]
     for p in verts do centroid += p
     centroid /= verts.count as float
+	
+    if verts.count < 3 do (
+		if verts.count == 2 then (
+			local first_vec = verts[2] - verts[1]
+			if length first_vec == 0 do (
+				messagebox "Вершины совпадают"
+				return false
+			)
+			local sorted_axis = sort_axis first_vec
+			local prim_idx = sorted_axis[1]
+			local sec_idx = sorted_axis[2]
+			local global_dirs = #([1,0,0], [0,1,0], [0,0,1])
+			
+			local prim_vec = normalize first_vec
+
+			-- Проекция up на плоскость перпендикулярную prim_vec (ортогональная компонента)
+			local sec_dir = global_dirs[sec_idx]
+			local sec_proj = normalize (sec_dir - (dot sec_dir prim_vec) * prim_vec)
+			
+			local third_vec = cross prim_vec sec_proj
+			
+			local targetTM = matrix3 prim_vec sec_proj third_vec centroid
+			targetTM = check_z_up targetTM
+			
+			placePivot obj targetTM
+			return true
+		) else (messagebox "Недостаточно вершин!"; return false)
+	)
 
     -- Ковариационная матрица как 3x3 массив
     local cov33 = #(
@@ -231,67 +325,39 @@ fn alignPivotToPCA obj =
     local y = basis[2]
     local z = basis[3]
 
-	-- Проверяем: смотрит ли Z вниз (в мировых координатах "вниз" = отрицательное Z)
-	if z.z < 0 do
-	(
-		-- Переворачиваем Z и одновременно меняем порядок X и Y,
-		-- чтобы сохранить правую систему и не нарушить смысл "X — первая компонента"
-		-- Но проще: инвертируем Z и Y
-        -- cross(x, -y) = -cross(x, y) = -z_old = z_new
-		y = -y
-		z = -z
-	)
-
     -- Целевая ориентация (в мировых координатах)
 	local targetTM = matrix3 x y z centroid
-		
+	-- Проверяем: смотрит ли Z вниз (в мировых координатах "вниз" = отрицательное Z)
+	targetTM = check_z_up targetTM
+	
 	-- Теперь вычислим поворот по Z таким образом, чтобы 
 	-- по XY был минимальный bounding box 
 	-- 1. Проекция на плоскость XY (вашей PCA-системы)
 	local uvPoints = projectToPlane verts centroid x y
 
-	-- 2. Найти оптимальный угол поворота вокруг Z
-	local optimalAngle = findOptimalAngle uvPoints
+	if search_min_area do (
+		-- 2. Найти оптимальный угол поворота вокруг Z
+		local optimalAngle = findOptimalAngle uvPoints
 
-	-- 3. Повернуть X и Y вокруг Z на этот угол
-	--local targetTM_minBBox = rotate targetTM (AngleAxis optimalAngle targetTM.row3)
-	
-	local cosA = cos optimalAngle
-	local sinA = sin optimalAngle
-
-	local newX = x * cosA + y * sinA
-	local newY = -x * sinA + y * cosA
-	local newZ = z -- не меняется
-	
-	format "X: %\nY: %\nZ: %\n" x y z
-	
-	targetTM_minBBox = matrix3 newX newY newZ centroid
-
-	local localTargetTMOfset = obj.transform * inverse(targetTM_minBBox)
-	
-	local oldObjOffsetTM = (
-		(ScaleMatrix obj.objectOffsetScale) * \
-		(obj.objectOffsetRot as Matrix3) * \
-		(TransMatrix obj.objectOffsetPos)
+		-- 3. Повернуть X и Y вокруг Z на этот угол
+		targetTM.pos = [0,0,0]
+		local targetTM = rotate targetTM (AngleAxis optimalAngle targetTM.row3)
+		targetTM.pos = centroid
 	)
-	
-	local newOffsetTM = oldObjOffsetTM * localTargetTMOfset
 	
 	-- перемещаем пивот
-    undo "Place Pivot" on (
-		
-		obj.objectOffsetScale = newOffsetTM.Scale
-		obj.objectOffsetRot = newOffsetTM.rotation
-		obj.objectOffsetPos = newOffsetTM.position
-		
-		-- после перемещения, нужно компенсировать положение 
-		obj.transform = targetTM_minBBox
-	)
+	placePivot obj targetTM
+
     true
 )
 
 on execute do (
-	alignPivotToPCA selection[1]
+	local undoText = if selection.count == 1 then "Align Pivot" else "Align Pivots"
+	local workObjs = for obj in selection where (isKindOf obj GeometryClass) or (isKindOf obj Shape) collect obj
+	if workObjs.count == 0 then messagebox "Нет подходящих объектов для применения" 
+	else undo undoText on (
+		for obj in workObjs do alignPivotToPCA obj search_min_area:keyboard.shiftPressed
+	)
 )
 
 )
