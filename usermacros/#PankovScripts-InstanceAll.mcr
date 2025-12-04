@@ -273,7 +273,8 @@ icon:#("pankov_instancseAll",1)
 		fn getAxisIndices source = (
 			-- Получаем размер объекта в локальных осях
 			local store_source_tm = source.transform
-			source.rotation = quat 0 0 0 1
+			if source.target == undefined do
+				source.rotation = quat 0 0 0 1
 			local source_size = source.max - source.min
 			source.transform = store_source_tm
 			-- Сортируем размеры
@@ -359,7 +360,7 @@ icon:#("pankov_instancseAll",1)
 			checkbox chk_replace "and replace old objects" checked:true	
 			label lbl2 "and keep old objects params:"
 			
-			radioButtons rad_pos_type "Position" labels:#("Pivot pos", "Center pos") default:1 columns:2 align:#left
+			radioButtons rad_pos_type "Position target" labels:#("Pivot", "Center", "Pivot Floor", "Centr Floor") default:1 columns:2 align:#left
 			
 			radioButtons rad_rot_type "Rotation" labels:#("main", "target", "fit") default:2 columns:3 align:#left
 			radioButtons rad_scale_type "Scale" labels:#("main", "target", "fit") default:1 columns:3 align:#left
@@ -473,6 +474,8 @@ icon:#("pankov_instancseAll",1)
 								-- сохраняем параметры для дальнейшего восстановления
 								local old_size = (old_obj.max - old_obj.min)
 								local old_center_pos = old_obj.max - old_size / 2
+								local old_center_floor_pos = old_center_pos
+								old_center_floor_pos.z = old_obj.min.z
 								local old_tinfo = getAxisIndices old_obj
 								
 								-- главная операция замены
@@ -499,13 +502,19 @@ icon:#("pankov_instancseAll",1)
 									1: new_obj.scale = main_obj.scale
 									3: scale new_obj (old_size / (new_obj.max - new_obj.min))
 								)
-								if rad_pos_type.state == 2 do (
-									local new_center_pos = new_obj.max - (new_obj.max - new_obj.min) / 2
-									new_obj.position += old_center_pos - new_center_pos
+								case rad_pos_type.state of (
+									2: (local new_center_pos = new_obj.max - (new_obj.max - new_obj.min) / 2
+										new_obj.position += old_center_pos - new_center_pos)
+									3: (local new_center_pos = new_obj.position
+										new_center_pos.z = new_obj.min.z
+										new_obj.position += old_center_pos - new_center_pos)
+									4: (local new_center_pos = new_obj.max - (new_obj.max - new_obj.min) / 2
+										new_center_pos.z = new_obj.min.z
+										new_obj.position += old_center_floor_pos - new_center_pos)
 								)
 								if not chk_material.checked do new_obj.material = main_obj.material
 								if not chk_wire_col.checked do new_obj.wirecolor = main_obj.wirecolor
-								if not chk_layer.checked do new_obj.layer = main_obj.layer
+								if not chk_layer.checked do main_obj.layer.addNode new_obj
 								
 								if main_obj.target != undefined do (
 									if new_obj.target == undefined then (
@@ -513,7 +522,7 @@ icon:#("pankov_instancseAll",1)
 									) else (
 										new_target = dummy()
 										new_target.wirecolor = new_obj.wirecolor
-										new_target.layer = new_obj.layer
+										new_obj.layer.addNode new_target
 										new_target.name = new_obj.name + ".Target"
 										new_target.transform = main_obj.target.transform
 									)
@@ -588,6 +597,18 @@ icon:#("pankov_instancseAll",1)
 									1: n.position = old_obj.position
 									2: (old_center_pos = old_obj.max - (old_obj.max - old_obj.min)/2
 										new_center_pos = n.max - (n.max - n.min)/2
+										n.position += old_center_pos - new_center_pos
+									)
+									3: (old_center_pos = old_obj.position
+										old_center_pos.z = old_obj.min.z
+										new_center_pos = n.position
+										new_center_pos.z = n.min.z
+										n.position += old_center_pos - new_center_pos
+									)
+									4: (old_center_pos = old_obj.max - (old_obj.max - old_obj.min)/2
+										old_center_pos.z = old_obj.min.z
+										new_center_pos = n.max - (n.max - n.min)/2
+										new_center_pos.z = n.min.z
 										n.position += old_center_pos - new_center_pos
 									)
 								)
