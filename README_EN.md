@@ -141,14 +141,14 @@ Use TexturePacker to create a texture atlas and reduce asset count for many smal
 [back (contents)](#contents)
 
 ## Distribute
-[Version 2025.12.05](usermacros/%23PankovScripts-Distribute.mcr)
+[Version 2025.12.07](usermacros/%23PankovScripts-Distribute.mcr)
 
 A script for spatial distribution.
 
 Features:
 * Works in Object mode and sub-object modes.
-  Implemented alignment for sub-objects in EditableSpline, EditablePoly, and the EditPoly modifier.
-  (EditSpline modifier is not technically accessible and will not work.)
+  Implemented alignment for sub-objects in EditableSpline, EditablePoly, EditableMesh and the EditPoly modifier.
+  (The EditSpline and EditMesh modifiers are not available in Maxscript and does not work)
 * Distributes objects evenly taking object size into account so spacing between objects is uniform
   (pivot offset and bounding accuracy need improvement; currently size is determined by bounding box).
 * Automatically determines first and last objects by largest distance between them.

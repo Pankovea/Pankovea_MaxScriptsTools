@@ -1,10 +1,10 @@
-﻿/* @Pankovea Scripts - 2025.12.05
+﻿/* @Pankovea Scripts - 2025.12.07
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
 * Работает в режиме Объектов и в режиме подобъектов. 
-Реализовано выравнивание подобъектов в EditableSpline, EditablePoly, и модификатора EditPoly.
-модификатор EditSpline технически не доступен и работать не будет)
+Реализовано выравнивание подобъектов в EditableSpline, EditablePoly, EditableMesh и модификатора EditPoly.
+(модификаторы EditSpline и EditMesh технически не доступны в Maxscript и работать не будут)
 
 * объекты распределяет равномерно учитывая размер объекта таким боразом, чтобы расстояние между ними было одинаковым
 (нужно доработать смещение пивота от центра и точность определения размера. Сейчас размер определяется по Bounding box)
@@ -18,8 +18,8 @@ Distribute: A script for distribution in space
 
 Features:
 * Works in Object mode and in subobject mode. 
-Has been implemented in all subobjects EditableSpline, EditablePoly, and the EditPoly modifier.
-The EditSpline modifier does not work)
+Has been implemented in all subobjects EditableSpline, EditablePoly, EditableMesh and the EditPoly modifier.
+(The EditSpline and EditMesh modifiers are not available in Maxscript and does not work)
 
 * distributes objects evenly, taking into account the size of the object in such a way that the distance between them is the same
 (you need to refine the pivot offset from the center and the accuracy of sizing. Now the size is determined by the Bounding box)
@@ -190,23 +190,43 @@ fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 fn getAdjacent obj index type =
 (
     local adj = #()
-    local verts
-	case type of (
-		#Face: verts = polyOp.getFaceVerts obj index
-		#Edge: verts = polyOp.getEdgeVerts obj index
-    )
-    for v in verts do (
-        local connected
-		case type of (
-			#Face: connected = polyOp.getFacesUsingVert obj v
-			#Edge: connected = polyOp.getEdgesUsingVert obj v
+    local verts, connected
+	if classOf obj == Editable_Poly then (
+		verts = case type of (
+			#Face: polyOp.getFaceVerts obj index
+			#Edge: polyOp.getEdgeVerts obj index
 		)
-        for el in connected do (
-            if el != index and findItem adj el == 0 then (
-                append adj el
+		for v in verts do (
+			connected = case type of (
+				#Face: polyOp.getFacesUsingVert obj v
+				#Edge: polyOp.getEdgesUsingVert obj v
+			)
+			for el in connected do (
+				if el != index and findItem adj el == 0 then (
+					append adj el
+				)
+			)
+		)
+	)
+	
+	if classOf obj == Editable_Mesh then (
+        verts = case type of (
+            #Face: meshop.getVertsUsingFace obj index
+            #Edge: meshop.getVertsUsingEdge obj index
+        )
+        for v in verts do (
+            connected = case type of (
+                #Face: meshop.getFacesUsingVert obj v
+                #Edge: meshop.getEdgesUsingVert obj v
+            )
+            for el in connected do (
+                if el != index and findItem adj el == 0 then (
+                    append adj el
+                )
             )
         )
     )
+	
     return adj
 )
 
@@ -273,18 +293,22 @@ fn getSplineVertexGroups spline s_num vertSelection = ( -- in: spline: spline ob
 
 on isEnabled return (
 	try ( 
+		modPanelCurObj = modPanel.getCurrentObject()
 		-- list of conditions. Copy from the case statement on execute event handler
 				-------------------- Editable Spline -----------------------
 			(subobjectLevel != 0 \
-			and (finditem #(line, SplineShape) (classof (modPanel.getCurrentObject())) ) != 0 ) \
+			and (finditem #(line, SplineShape) (classof modPanelCurObj) ) != 0 ) \
+		or	\	-------------------- Editable Mesh -----------------------
+			(subobjectLevel != 0 \
+			and (classof modPanelCurObj== Editable_Mesh)) \
 		or	\	-------------------- Editable Poly -----------------------
 			(subobjectLevel != 0 \
-			and (classof (modPanel.getCurrentObject())) == Editable_Poly) \
+			and (classof modPanelCurObj) == Editable_Poly) \
 		or 	\	----- Instanced modifier in multiple nodes -----
 			(selection.count > 0 \
 			and subObjectLevel != undefined \
 			and subObjectLevel > 0 \
-			and modpanel.getCurrentObject() != selection[1].baseobject) \
+			and modPanelCurObj != selection[1].baseobject) \
 		or 	\	--------------------- Objects -----------------------
 			(selection.count > 1 \
 			and (subobjectLevel == 0 or subobjectLevel == undefined))
@@ -428,6 +452,75 @@ on execute do (
 			)
 		)
 		
+		
+		-------------------- Editable Mesh -----------------------
+		(subobjectLevel != 0 \
+		and (classof (modPanel.getCurrentObject())) == Editable_Mesh): (
+			local sub_sel = case of (
+				(subobjectLevel == 1): selection[1].selectedVerts as bitarray
+				(subobjectLevel == 2 or subobjectLevel == 3): selection[1].selectedEdges as bitarray
+				(subobjectLevel == 4 or subobjectLevel == 5): selection[1].selectedFaces as bitarray
+			)
+			if not sub_sel.isEmpty then (
+				base_obj = modPanel.getCurrentObject()
+				obj = selection[1]
+				case of (
+					-- Vertex
+					(subobjectLevel == 1): (
+						vertexArray = for numVert in sub_sel collect Vertex numVert:numVert pos:(meshop.getVert obj numVert)
+						if vertexArray.count > 2 then with redraw off ( undo on (
+							for vert in calcNewPositions vertexArray do (
+								meshop.setVert obj vert.numVert vert.pos
+							)
+						))
+					)
+					-- Edge
+					(subobjectLevel == 2 or subobjectLevel == 3): (
+						local subs_pos, vert, bbox
+						local groupedEdges = groupAdjacent obj sub_sel #Edge
+						for gr_number in 1 to groupedEdges.count do (
+							curVertSel = meshop.getVertsUsingEdge obj groupedEdges[gr_number]
+							subs_pos = meshop.getVerts obj curVertSel
+							vert = Vertex obj:obj numVert:gr_number subs_pos:subs_pos subs_sel:curVertSel
+							bbox = box3()
+							expandToInclude bbox vert.subs_pos
+							vert.pos = bbox.center
+							append vertexArray vert
+						)
+						-- move vertices
+						if vertexArray.count > 2 then with redraw off ( undo on (
+							for vert in calcNewPositions vertexArray do
+								for i in vert.subs_sel do
+									obj.verts[i].pos += vert.pos_offset
+							update obj
+						))
+					)
+					-- Faces
+					(subobjectLevel == 4 or subobjectLevel == 5): (
+						local groupedFaces = groupAdjacent obj sub_sel #Face
+						for gr_number in 1 to groupedFaces.count do (
+							curVertSel = meshop.getVertsUsingFace obj groupedFaces[gr_number]
+							subs_pos = meshop.getVerts obj curVertSel
+							vert = Vertex obj:obj numVert:gr_number subs_pos:subs_pos subs_sel:curVertSel
+							bbox = box3()
+							expandToInclude bbox vert.subs_pos
+							vert.pos = bbox.center
+							append vertexArray vert
+						)
+						-- move vertices
+						if vertexArray.count > 2 then with redraw off ( undo on (
+							for vert in calcNewPositions vertexArray do
+								for i in vert.subs_sel do
+									obj.verts[i].pos += vert.pos_offset
+							update obj
+						))
+					)
+				)
+			) else (
+				print "No selection to distribute"
+			)
+		)
+		
 		-------------------- Editable Poly -----------------------
 		(subobjectLevel != 0 \
 		and (classof (modPanel.getCurrentObject())) == Editable_Poly): (
@@ -506,30 +599,20 @@ on execute do (
 			local nodes = for o in selection where (finditem o.modifiers modif)!=0 collect o
 			vertexArray = array()
 			case classof modif of (
+				
 				Edit_Spline: (
 					print "Have not access to Edit Spline modifier selection. Please, do select on the base object"
-					/* -- Code to test this issue
-					case subobjectLevel of (
-						-- Vertex
-						1: (for obj in nodes do (
-								for spl = 1 to (numsplines obj) do (
-									for vert in (getKnotSelection obj spl) do (
-										append vertexArray (Vertex obj:obj numSp:spl numVert:vert pos:(getKnotPoint obj spl vert))
-									)
-								)				
-							)
-							print vertexArray
-							undo on (
-								for vert in calcNewPositions vertexArray do
-									setKnotPoint vert.obj vert.numSp vert.numVert vert.pos
-							)
-							updateShape selection[1]
-						)
-					)
-					*/
 				)
-
-				Edit_Poly: (undo on (
+				
+				--------------------------------------------------------------------
+				
+				Edit_Mesh: (
+					print "Have not access to Edit Mesh modifier selection. Please, do select on the base object"
+				)
+				
+				--------------------------------------------------------------------
+				
+				Edit_Poly: (
 					-- if objects in group then open it and remeber to close
 					groups = for obj in selection where isgrouphead obj collect obj
 					for obj in groups do setGroupOpen obj true
@@ -682,7 +765,8 @@ on execute do (
 					)
 					-- close groups
 					for obj in groups do setGroupOpen obj false
-				))
+				)
+				
 			)
 		)
 			
