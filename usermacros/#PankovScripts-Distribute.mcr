@@ -32,11 +32,12 @@ Has been implemented in all subobjects EditableSpline, EditablePoly, EditableMes
 
 macroScript Distibute_objects
 category:"#PankovScripts"
-toolTip:"Distibute objects"
+toolTip:"Distibute objects. Shift+ Distribute projected"
 icon:#("AutoGrid",2)
 buttontext:"Distr" 	
 (
-
+local distribute_projected -- parametr
+	
 struct Vertex (
 	obj,		-- Current object. For all cases
 	numSp,		-- if working on splines, number of spline, else undefined
@@ -111,19 +112,19 @@ fn sortPoints arrOfVerts = ( -- In: array of Vertex struct; out = sorted array o
 -- Calc sizes function
 fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
 	local vec = normalize (arrOfVerts[arrOfVerts.count].pos - arrOfVerts[1].pos)
-	local old_rotation
+	local obj_TM
 	if arrOfVerts[1].numVert == undefined then (
 		for vert in arrOfVerts do (
-			obj = vert.obj
-			-- Поворачиваем объект, совмещая вектор распределения объектов с осью х / Rotate the object by combining the object distribution vector with the x-axis
-			old_rotation = obj.rotation
-			targetAxis = [1, 0, 0]
-			ang = acos(dot vec targetAxis)
-			rotationAxis = normalize (cross vec targetAxis)
-			rotate obj (angleAxis ang rotationAxis)
-			-- определяем размер по оси x и возвращаем поворот / we determine the size on the x axis and return the rotation
-			vert.size = (obj.max - obj.min).x
-			obj.rotation = old_rotation
+			-- определяем размер по оси vec
+			-- cтроим ортонормированную матрицу: vec как X-ось, y и z перпендикулярны
+			up = [0, 0, 1]
+			if abs (dot vec up) > 0.99 then up = [0, 1, 0]  -- избегаем коллинеарности
+			y = normalize (cross vec up)
+			z = cross vec y
+			tm = matrix3 vec y z [0, 0, 0]  -- трансформация в пространство, ориентированное по vec
+			
+			bbox = nodeGetBoundingBox vert.obj tm asBox3:true
+			vert.size = bbox.max.x - bbox.min.x
 		)
 	)
 	if arrOfVerts[1].subs_pos != undefined then (
@@ -148,10 +149,17 @@ fn calcSizes arrOfVerts = ( -- In and Out: array of Vertex struct
 
 fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 	if arrOfVerts.count > 2 then (
-		-- store old positions
-		for vert in arrOfVerts do vert.pos_offset = vert.pos
-		
+
+		-- store old positions if not distribute_projected
+		if not distribute_projected do
+			for vert in arrOfVerts do vert.pos_offset = vert.pos
+				
 		local newArr = sortPoints arrOfVerts -- that copies of Vertex struct array and project positions to the line
+		
+		-- or store old positions if distribute_projected
+		if distribute_projected do
+			for vert in arrOfVerts do vert.pos_offset = vert.pos
+			
 		StartVert = newArr[1]
 		EndVert = newArr[newArr.count]
 		
@@ -174,8 +182,8 @@ fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 			newArr[i].pos_offset = newArr[i].pos - newArr[i].pos_offset -- new minus old pos
 		)
 		-- the extreme ones remain motionless
-		newArr[1].pos_offset = [0,0,0]
-		newArr[newArr.count].pos_offset = [0,0,0]
+		StartVert.pos_offset = [0,0,0]
+		EndVert.pos_offset = [0,0,0]
 		return newArr
 	) else (
 		return arr
@@ -317,6 +325,7 @@ on isEnabled return (
 
 on execute do (
 	local vertexArray = #()
+	distribute_projected = keyboard.shiftPressed
 	
 	case of (
 		-------------------- Editable Spline -----------------------
@@ -774,11 +783,15 @@ on execute do (
 		(selection.count > 1 \
 		and (subobjectLevel == 0 or subobjectLevel == undefined)): (
 			-- Create Vertex struct for nodes
-			local sel = for obj in selection where (finditem (selection as array) obj.parent) == 0 collect Vertex obj:obj pos:obj.pos
+			local sel = for obj in selection where (finditem (selection as array) obj.parent) == 0 collect (
+				--bbox_center = obj.center
+				Vertex obj:obj pos:obj.center pivot_offset: (obj.pos - obj.center)
+			)
 			-- set new positions
 			if sel.count > 2 then with redraw off ( undo on (
 				for vert in calcNewPositions sel do (
-					vert.obj.pos = vert.pos
+					--vert.obj.pos = vert.pos + vert.pivot_offset
+					vert.obj.pos += vert.pos_offset
 				)
 			))
 		)
