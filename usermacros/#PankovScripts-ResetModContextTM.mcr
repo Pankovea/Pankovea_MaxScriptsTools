@@ -249,7 +249,8 @@ tooltip:"Copy modifier context tranform"
 		button cp_TM "Copy" across:4
 		pickbutton pick_TM "Pick"
 		checkbox tm_buffer "" enabled:false
-		button pst_TM "Paste"
+		button pst_TM "Paste TM"
+		button pst_Piv "Paste Pivot" offset:[55,0]
 		
 		label lbl2 "Modif Context"
 		checkbox context_TM "TM" checked:true across:2
@@ -271,11 +272,33 @@ tooltip:"Copy modifier context tranform"
 			)
 		)
 
+		fn getEffectiveRoot obj = (
+			local current = obj
+			while current.parent != undefined do (
+				local nextParent = current.parent
+				if isGroupHead nextParent then (
+					if not isOpenGroupHead nextParent then (
+						-- Закрытая группа: поднимаемся к ней и останавливаемся
+						return nextParent
+					) else (
+						-- Открытая группа: останавливаемся на текущем (не поднимаемся)
+						return current
+					)
+				)
+				-- Обычный parent: продолжаем подъём
+				current = nextParent
+			)
+			-- Дошли до корня (undefined parent)
+			current
+		)
+		
 		on pst_TM pressed do (
 			if Pankov_Copy_ModContextTM_buffer[#object] != undefined do undo "Paste Transform" on (
-				for obj in selection do (
+				local work_objects = for obj in selection collect getEffectiveRoot obj
+				work_objects = makeUniqueArray work_objects
+				for obj in work_objects do (
 					if (TM_type_pos.checked and TM_type_rot.checked and TM_type_scale.checked) then (
-						obj.transform = Pankov_Copy_ModContextTM_buffer[#object]
+						obj.transform = Pankov_Copy_ModContextTM_buffer[#object].transform
 					) else (
 						if TM_type_scale.checked do (
 							obj.scale = Pankov_Copy_ModContextTM_buffer[#object].scale
@@ -289,6 +312,51 @@ tooltip:"Copy modifier context tranform"
 							obj.pos = Pankov_Copy_ModContextTM_buffer[#object].pos
 						)
 					)
+				)
+			)
+		)
+		
+		fn composeMatrix pos:[0,0,0] rot:(quat 0 0 0 1) scl:[1,1,1] = (scaleMatrix scl) * (rot as Matrix3) * (transMatrix pos)
+		
+		on pst_Piv pressed do (
+			if Pankov_Copy_ModContextTM_buffer[#object] != undefined do undo "Paste Pivot" on (
+				srcTM = Pankov_Copy_ModContextTM_buffer[#object].transform
+				for obj in selection do (
+					-- Сохраняем детей
+					local store_children = for c in obj.children collect c
+					for c in obj.children do
+						c.parent = undefined
+					
+					local dstTM = obj.transform
+
+					-- Мировые координаты геометрии "как есть"
+					local currentGeoWorldPos = obj.objectOffsetPos * dstTM
+					local currentGeoWorldRot = dstTM.rotation * obj.objectOffsetRot
+					local currentGeoWorldScale = dstTM.scale * obj.objectOffsetScale
+					
+					-- Новые компоненты
+					local newPos = if TM_type_pos.checked then srcTM.position else dstTM.position
+					local newRot = if TM_type_rot.checked then srcTM.rotation else dstTM.rotation
+					local newScl = if TM_type_scale.checked then srcTM.scale else dstTM.scale
+
+					-- Новая матрица
+					local newTM = composeMatrix pos:newPos rot:newRot scl:newScl
+					
+					if isgrouphead obj then (
+						-- если группа, то просто применяем трансформацию
+						obj.transform = newTM
+					) else (
+						-- обновляем offset'ы, чтобы геометрия не сдвинулась
+						obj.objectOffsetPos = currentGeoWorldPos * (inverse newTM)
+						obj.objectOffsetRot = inverse newRot * currentGeoWorldRot
+						obj.objectOffsetScale = currentGeoWorldScale / newScl
+						
+						-- Применяем новый transform
+						obj.transform = newTM
+					)
+					-- восстанавливаем детей
+					for c in store_children do
+						c.parent = obj
 				)
 			)
 		)
