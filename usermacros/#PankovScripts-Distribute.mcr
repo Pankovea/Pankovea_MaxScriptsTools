@@ -1,4 +1,4 @@
-﻿/* @Pankovea Scripts - 2025.12.07
+﻿/* @Pankovea Scripts - 2026.01.29
 Distribute: Скрипт для рапределения в пространстве
 
 Особенности:
@@ -195,10 +195,33 @@ fn calcNewPositions arrOfVerts = ( -- In and Out: array of Vertex struct
 -------------------------------------
 
 -- возвращает прилегающие полигоны к заданному
-fn getAdjacent obj index type =
+fn getAdjacent obj index type modif:undefined =
 (
     local adj = #()
     local verts, connected
+
+	if classOf modif == Edit_Poly then (
+		verts = case type of (
+			#Face: (degree = modif.GetFaceDegree index; for i=1 to degree collect modif.GetFaceVertex index i)
+			#Edge: #(modif.GetEdgeVertex index 1, modif.GetEdgeVertex index 2)
+		)
+		numVerts = modif.GetNumVertices()
+		for v in verts do (
+			vertSet = #{v}
+			vertSet.count = numVerts -- leave the initial count for successful further selections.
+			connected = #{}
+			case type of (
+				#Face: modif.getFacesUsingVert &connected vertSet
+				#Edge: modif.getEdgesUsingVert &connected vertSet
+			)
+			for el in connected do (
+				if el != index and findItem adj el == 0 do
+					append adj el
+			)
+		)
+		return adj
+	)
+	
 	if classOf obj == Editable_Poly then (
 		verts = case type of (
 			#Face: polyOp.getFaceVerts obj index
@@ -215,6 +238,7 @@ fn getAdjacent obj index type =
 				)
 			)
 		)
+		return adj
 	)
 	
 	if classOf obj == Editable_Mesh then (
@@ -233,20 +257,40 @@ fn getAdjacent obj index type =
                 )
             )
         )
+		return adj
     )
-	
-    return adj
+	return adj
 )
 
 -- группирует прилегающие полигоны. Рабтает как с Editable Poly, так и с Edit Poly
-fn groupAdjacent obj selected type = ( -- in: obj,  selected: bitarray; out: array of bitarrays (groups of Face numbers)
+fn groupAdjacent obj selected type modif:undefined = ( -- in: obj,  selected: bitarray; out: array of bitarrays (groups of Face numbers)
     local grouped = #()
     local visited = #{}
     
     for index in selected do (
         if not visited[index] then (
             local _group = #{}
-			_group.count = selected.count -- leave the initial count for successful further selections.
+			_group.count = case of (  -- leave the initial count for successful further selections.
+				(classof modif == Edit_Poly): (	
+					if selection.count != 1 or selection[1] != obj do (
+						modPanel.setCurrentObject modif node:obj
+					)
+					case type of (
+						#Face: modif.getNumFaces() 
+						#Edge: modif.getNumEdges() 
+					)
+				)
+				(classof obj == Editable_Poly): 
+					case type of (
+						#Face: polyop.getNumFaces obj
+						#Edge: polyop.getNumEdges obj
+					)
+				(classof obj == Editable_Mesh): 
+					case type of (
+						#Face: meshop.getNumFaces obj
+						#Edge: (meshop.getNumFaces obj) * 3
+					)
+			)
             local queue = #(index)
             
             while queue.count > 0 do (
@@ -257,7 +301,7 @@ fn groupAdjacent obj selected type = ( -- in: obj,  selected: bitarray; out: arr
                     _group[current] = true
                     visited[current] = true
                     
-                    local adj = getAdjacent obj current type
+                    local adj = getAdjacent obj current type modif:modif
                     for el in adj do (
                         if selected[el] and not visited[el] then (
                             append queue el
@@ -684,7 +728,7 @@ on execute do (
 								)
 								curEdgeSel = modif.GetSelection #Edge
 								append oldEdgeSel #(obj, curEdgeSel)
-								groupedEdges = groupAdjacent obj curEdgeSel #Edge
+								groupedEdges = groupAdjacent obj curEdgeSel #Edge modif:modif
 								for gr_number in 1 to groupedEdges.count do (
 									curVertSel = #{}
 									for edge in groupedEdges[gr_number] do curVertSel += ((polyOp.getEdgeVerts obj edge) as bitArray)
@@ -699,12 +743,14 @@ on execute do (
 								with redraw off ( undo on (
 									-- set new vertex pos
 									for vert in calcNewPositions vertexArray do (
-										if selection[1] != vert.obj then (
-											modpanel.setCurrentObject modif node:vert.obj
+										if vert.pos_offset != [0,0,0] then (
+											if selection[1] != vert.obj then (
+												modpanel.setCurrentObject modif node:vert.obj
+											)
+											modif.SetSelection #Edge vert.subs_sel
+											modif.MoveSelection vert.pos_offset
+											modif.Commit()
 										)
-										modif.SetSelection #Edge vert.subs_sel
-										modif.MoveSelection vert.pos_offset
-										modif.Commit()
 									)
 									-- select old edge selection
 									for s in oldEdgeSel do (
@@ -712,11 +758,7 @@ on execute do (
 										modif.SetSelection #Edge s[2]
 									)
 									-- select old objects selection
-									if sel.count == 1 then (
-										modpanel.setCurrentObject modif node:sel[1]
-									) else (
-										select sel
-									)
+									if sel.count > 1 do select sel
 								))
 							) else (
 								print "No edge selection to distribute"
@@ -733,7 +775,7 @@ on execute do (
 								modpanel.setCurrentObject modif node:obj
 								curFaceSel = modif.GetSelection #Face
 								append oldFaceSel #(obj, curFaceSel)
-								groupedFaces = groupAdjacent obj curFaceSel #Face
+								groupedFaces = groupAdjacent obj curFaceSel #Face modif:modif
 								for gr_number in 1 to groupedFaces.count do (
 									curVertSel = #{}
 									for face in groupedFaces[gr_number] do curVertSel += ((polyOp.getFaceVerts obj face) as bitArray)
@@ -748,12 +790,14 @@ on execute do (
 								with redraw off ( undo on (
 									-- set new vertex pos
 									for vert in calcNewPositions vertexArray do (
-										if selection[1] != vert.obj then (
-											modpanel.setCurrentObject modif node:vert.obj
+										if vert.pos_offset != [0,0,0] then (
+											if selection[1] != vert.obj then (
+												modpanel.setCurrentObject modif node:vert.obj
+											)
+											modif.SetSelection #Face vert.subs_sel
+											modif.MoveSelection vert.pos_offset
+											modif.Commit()
 										)
-										modif.SetSelection #Face vert.subs_sel
-										modif.MoveSelection vert.pos_offset
-										modif.Commit()
 									)
 									-- select old Face selection
 									for s in oldFaceSel do (
@@ -761,11 +805,7 @@ on execute do (
 										modif.SetSelection #Face s[2]
 									)
 									-- select old objects selection
-									if sel.count == 1 then (
-										modpanel.setCurrentObject modif node:sel[1]
-									) else (
-										select sel
-									)
+									if sel.count > 1 do select sel
 								))
 							) else (
 								print "No Face selection to distribute"
