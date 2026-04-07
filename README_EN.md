@@ -25,15 +25,26 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Simplify Spline by Remove Selected Vertices](#simplify-spline-by-remove-selected-vertices)
 
 ## Installation
-1. Option: clone the repository:
-    - Open your folder `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX-version_\ENU` — replace `_USER_` with your OS username and `_MAX-version_` with your 3ds Max version.
-    - In the address bar run: `git clone https://github.com/Pankovea/Pankovea_MaxScriptsTools.git`
-    - Start/restart 3ds Max.
-    - Go to: Customize -> Customize User Interface -> Toolbars -> group Main UI -> Category `#PankovScripts` -> drag the desired script to a toolbar.
-2. Option: download a single script
-    - Download the desired script from the usermacros folder and place it into:
-      `C:\Users\_USER_\AppData\Local\Autodesk\3dsMax\_MAX_version_\ENU\usermacros` (replace `_USER_` and `_MAX_version_` appropriately).
-    - If needed, download `usericons` and put them into the `..\ENU\usericons` folder.
+### Copying files
+1. Option via downloading the archive option
+    - Download [the entire repository](https://github.com/Pankovea/Pankovea_MaxScriptsTools/archive/refs/heads/main.zip)
+    - Unzip to `%LOCALAPPDATA%/Autodesk/3dsMax/20XX - 64bit/ENU/`
+2. Option via downloading a separate script
+    - Download the required script from the usermacros folder and place it in the folder `%LOCALAPPDATA%/Autodesk/3dsMax/20XX - 64bit/ENU/usermacros` (Replace `20XX - 64bit` with your version of 3dsmax) <a name="#individual-icons-install"></a>
+    - If necessary, download the `usericons` and place them in the `./usericons` folder
+3. Option via cloning the repository (You must have [Git](https://git-scm.com/install/windows) installed):
+    - Go to your folder `%LOCALAPPDATA%/Autodesk/3dsMax/20XX - 64bit/ENU/` (Replace `20XX - 64bit` with your version of 3dsmax)
+    - In the address bar, run
+    ```
+    git init
+    git remote add origin https://github.com/Pankovea/Pankovea_MaxScriptsTools.git
+    git checkout -b main origin/main
+    ```
+### Setting up the user interface
+- Start/restart 3dsmax
+- Menu `Cutomize` -> `Cutomize user interface` -> `Toolbar tab`
+- If necessary, create a new toolbar `New...` -> `Pankov_scripts`
+- On the left, select `group Main UI` -> `Category #PankovScripts` -> Drag the desired script to the panel
 
 ## Simplify Spline by Remove Selected Vertices
 
