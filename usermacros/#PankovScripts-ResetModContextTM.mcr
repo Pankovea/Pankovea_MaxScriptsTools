@@ -27,6 +27,7 @@ macroScript Pankov_ResetModContextTM
 category:"#PankovScripts"
 buttontext:"ResetModTM"
 tooltip:"Reset modifier context tranform for multiple seleted objects. Shift+ reset to zero. Esc+ make unique modifier"
+icon:#("pankov_ResetModContextTM", 1)
 (
 local gizmo_modifiers = #(xform, bend, squeeze, taper, wave, twist, skew, stretch, melt, noise, Vol__Select, Uvwmap)
 local ffd_modifiers = #(FFD_2x2x2, FFD_3x3x3, FFD_4x4x4, FFDBox, FFDCyl)
@@ -183,6 +184,7 @@ macroScript Pankov_ResetModContextBBox
 category:"#PankovScripts"
 buttontext:"ResetModBBox"
 tooltip:"Reset modifier context bounding box for multiple seleted objects."
+icon:#("pankov_ResetModContextBBox", 1)
 (
 	function resetBBoxSize nodes modif = ( -- Подгоняет bbox под объект после трансформаций gizmo модификатора
 		local modif_enabled = modif.enabled -- store modif enabled
@@ -238,6 +240,7 @@ macroScript Pankov_Copy_ModContextTM
 category:"#PankovScripts"
 buttontext:"CopyModTM"
 tooltip:"Copy modifier context tranform"
+icon:#("pankov_CopyModTM", 1)
 (
 	global Pankov_Copy_ModContextTM_buffer = Dictionary #(#object, undefined) #(#ModContextTM, undefined)
 	
@@ -432,6 +435,7 @@ TransformModContextTM: Позволяет трансформировать ма�
 macroScript TransformModContextTM
 category:"#PankovScripts"
 tooltip:"Transform Modifier's Context TM"
+icon:#("pankov_TransformModContextTM", 1)
 (
     global targetMod, targetNodes, gizmoHelper
 	targetNodes = #()

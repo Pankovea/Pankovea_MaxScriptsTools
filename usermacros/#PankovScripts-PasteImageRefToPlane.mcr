@@ -27,6 +27,7 @@ macroScript Pankov_PasteImageRefToPlane
 category:"#PankovScripts"
 buttontext:"PasteRef"
 tooltip:"Paste Image Reference from buffer to plane (Shift+ Vertical)"
+icon:#("pankov_Ref", 1)
 (
 -- Загружаем сборки
 dotNet.loadAssembly "PresentationCore"
@@ -232,6 +233,10 @@ rollout sizeDialog "Размеры"
     )
     
     on btnOK pressed do destroyDialog sizeDialog
+	
+	on sizeDialog keyUp code do (
+		if code == #esc do destroyDialog sizeDialog
+	)
 )
 
 fn updateReferencePlane = (
