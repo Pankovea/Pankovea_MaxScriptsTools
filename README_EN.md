@@ -23,6 +23,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 
 [scripts/](scripts/)
 - [Simplify Spline by Remove Selected Vertices](#simplify-spline-by-remove-selected-vertices)
+- [Save Clipboard Image To Active Folder](#save-clipboard-image-to-active-folder)
 
 ## Installation
 ### Copying files
@@ -326,3 +327,34 @@ With Shift pressed: plane in XY (vertical, like a wall), bottom edge at Z = 0
 Perfect for floor plans, elevations, screenshots, and technical references — no manual file saving needed!
 
 [back (contents)](#contents)
+
+## Save Clipboard Image To Active Folder
+[version 2026.05.27](scripts/SaveClipboardImageToActiveFolder.ahk)
+
+A script for AutoHotkey v2 that saves an image
+from the clipboard as a PNG file with a single hotkey.
+The image is saved to the folder that
+is currently open in Windows Explorer or in the standard
+"Open File" dialog box of any program.
+
+Need an installed one https://www.autohotkey.com/
+[Direct download link](https://www.autohotkey.com/download/ahk-v2.exe ) (3 MB)
+
+Download or save the script file `SaveClipboardImageToActiveFolder.ahk`
+to any convenient location on your computer.
+
+Run the script by double-clicking. After launching, the AutoHotkey icon will appear in the notification area
+(system tray), signaling the script's operation.
+
+Hotkey: `Win + V`
+
+Usage examples:
+- Screenshot of the screen (PrtSc key)
+- Copy the image from the browser
+  - Copy the selected part in the graphic editor
+Then switch to the Explorer window or open the `open file` dialog in any program.
+Press `Win + V` to save the PNG file to the active folder. You can open it right there — It's convenient!
+
+[Detailed description](scripts/SaveClipboardImageToActiveFolder_readme.md)
+
+[back (content)](#content)
