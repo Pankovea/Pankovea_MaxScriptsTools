@@ -5,12 +5,12 @@
 в данный момент открыта в проводнике Windows (Explorer) или в стандартном
 диалоговом окне «Открыть файл» любой программы.
 
-## Как использовать:
+## Установка
 
-Нужен установленный https://www.autohotkey.com/
+Нужен установленный autohotkey
 [Прямая ссылка для скачивания](https://www.autohotkey.com/download/ahk-v2.exe) (3 Мб)
 
-Скачайте или сохраните файл скрипта `SaveClipboardImageToActiveFolder.ahk`
+Скачайте и сохраните файл скрипта [SaveClipboardImageToActiveFolder.ahk](SaveClipboardImageToActiveFolder.ahk)
 в любое удобное место на компьютере.
 
 Запустите скрипт двойным щелчком мыши.
