@@ -322,7 +322,7 @@ icon:#("pankov_CopyModTM", 1)
 		fn composeMatrix pos:[0,0,0] rot:(quat 0 0 0 1) scl:[1,1,1] = (scaleMatrix scl) * (rot as Matrix3) * (transMatrix pos)
 		
 		on pst_Piv pressed do (
-			if Pankov_Copy_ModContextTM_buffer[#object] != undefined do undo "Paste Pivot" on (
+			if isvalidnode Pankov_Copy_ModContextTM_buffer[#object] do undo "Paste Pivot" on (
 				srcTM = Pankov_Copy_ModContextTM_buffer[#object].transform
 				for obj in selection do (
 					-- Сохраняем детей

@@ -524,7 +524,7 @@ fn simplifySpline spline s_num vert_selection samplesPerSegment:100 = -- useOrig
 
 -- вспомогательная функция для выделения групп выделенных вершин
 fn getGroups knots isClosedSpline nknots = (
-    if knots.count == 0 then return #(#())
+    if knots.count == 0 then return #()
 	if knots.count == 1 then return #(knots)
     groups = #(); currentGroup = #(knots[1])
     for i = 2 to knots.count do (
@@ -566,43 +566,46 @@ fn run_simplifySpline = (
 				)
 			)
 			-- Удаление выделенных вершин
-			if subObjectLevel == 1 do for s_num = 1 to numSplines spline do (
-				-- format "s_num = %\n" s_num
-				knots = getKnotSelection spline s_num
-				nKnots = numKnots spline s_num
-				isClosedSpline = isClosed spline s_num
-				isCircularSelection = isClosedSpline and knots[1] == 1 and knots[knots.count] == nKnots
-				groups = getGroups knots isClosedSpline nKnots
-				if groups.count == 0 and knots.count > 0 then (
-					format "Ошибка: Некорректная выборка в сплайне %\n" s_num
-					continue
-				)
-				if nKnots - knots.count < 2 then (
-					format "Ошибка: после удаления в сплайне % останется менее 2 вершин. выделено % из %\n" s_num knots.count nKnots
-					continue
-				)
-				if groups.count == 0 then continue
-				-- запустить основную функцию для групп
-				-- сначала удаляем серединное выделение. Порядок с конца, что бы не нарушить нумерацию
-				if isCircularSelection then (
-					start_i = 2
-					end_i = groups.count-1
-				) else (
-					start_i = 1
-					end_i = groups.count
-				)
-				for i in end_i to start_i by -1 do (
-					vert_selection = groups[i]
-					simplifySpline spline s_num vert_selection -- useOriginalDirections:true
-				)
-				-- в конце, если круговое выделение, то нужно пересчитать индесы выделения, потому что они изменились
-				if isCircularSelection then (
-					rest_of_knots = numKnots spline s_num
-					diff = nKnots - rest_of_knots
-					renum_knots = for num_knot in groups[groups.count] collect num_knot - diff
-					final_group = renum_knots + groups[1]
-					-- format "final_group = % \n" final_group
-					simplifySpline spline s_num final_group
+			if subObjectLevel == 1 do (
+				for s_num = 1 to numSplines spline do (
+					-- format "s_num = %\n" s_num
+					knots = getKnotSelection spline s_num
+					nKnots = numKnots spline s_num
+					isClosedSpline = isClosed spline s_num
+					isCircularSelection = isClosedSpline and knots[1] == 1 and knots[knots.count] == nKnots
+					groups = getGroups knots isClosedSpline nKnots
+					if groups.count == 0 and knots.count > 0 then (
+						format "Ошибка: Некорректная выборка в сплайне %\n" s_num
+						continue
+					)
+					if nKnots - knots.count < 2 then (
+						format "Ошибка: после удаления в сплайне % останется менее 2 вершин. выделено % из %\n" s_num knots.count nKnots
+						continue
+					)
+					if groups.count == 0 then
+						continue
+					-- запустить основную функцию для групп
+					-- сначала удаляем серединное выделение. Порядок с конца, что бы не нарушить нумерацию
+					if isCircularSelection then (
+						start_i = 2
+						end_i = groups.count-1
+					) else (
+						start_i = 1
+						end_i = groups.count
+					)
+					for i in end_i to start_i by -1 do (
+						vert_selection = groups[i]
+						simplifySpline spline s_num vert_selection -- useOriginalDirections:true
+					)
+					-- в конце, если круговое выделение, то нужно пересчитать индесы выделения, потому что они изменились
+					if isCircularSelection then (
+						rest_of_knots = numKnots spline s_num
+						diff = nKnots - rest_of_knots
+						renum_knots = for num_knot in groups[groups.count] collect num_knot - diff
+						final_group = renum_knots + groups[1]
+						-- format "final_group = % \n" final_group
+						simplifySpline spline s_num final_group
+					)
 				)
 			)
 		)
