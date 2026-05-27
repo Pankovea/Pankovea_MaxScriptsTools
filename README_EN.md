@@ -340,7 +340,7 @@ is currently open in Windows Explorer or in the standard
 Need an installed one https://www.autohotkey.com/
 [Direct download link](https://www.autohotkey.com/download/ahk-v2.exe ) (3 MB)
 
-Download or save the script file `SaveClipboardImageToActiveFolder.ahk`
+Download or save the script file [SaveClipboardImageToActiveFolder.ahk](scripts/SaveClipboardImageToActiveFolder.ahk)
 to any convenient location on your computer.
 
 Run the script by double-clicking. After launching, the AutoHotkey icon will appear in the notification area
