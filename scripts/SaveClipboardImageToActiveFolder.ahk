@@ -37,24 +37,24 @@ global startupLinkPath := A_Startup . "\SaveClipboardImageToActiveFolder.lnk"
 {
     TargetFolder := ""
 
-    ; 1. Пробуем найти путь через Shell.Application (работает и для Проводника, и для многих диалогов)
-    TargetFolder := GetPathFromShell()
-
-    ; 2. Если не нашли, пробуем эвристику по контролам (резервный вариант)
-    if (TargetFolder = "") {
+    ; 1. Пробуем найти путь
+    winProcess := WinGetProcessName("A")
+    if (winProcess = "explorer.exe")
+        TargetFolder := GetActiveFolderPath()
+    else
         TargetFolder := GetPathFromDialogControls()
-    }
+
 
     if (TargetFolder = "") {
         Tooltip "Не удалось определить папку."
-        SetTimer () => Tooltip(), 3000
+        SetTimer () => Tooltip(), -3000
         return
     }
 
     ; 3. Проверяем буфер обмена
     if !DllCall("IsClipboardFormatAvailable", "UInt", 2) {
         Tooltip "В буфере нет изображения!"
-        SetTimer () => Tooltip(), 2000
+        SetTimer () => Tooltip(), -2000
         return
     }
 
@@ -76,73 +76,74 @@ global startupLinkPath := A_Startup . "\SaveClipboardImageToActiveFolder.lnk"
 
     try {
         RunWait('powershell -NoProfile -WindowStyle Hidden -Command "' . PsCmd . '"',, "Hide")
-        
+
         Sleep 400
-        
+
         ; Обновляем вид
         SendInput "{F5}"
-        
+
         Tooltip "Сохранено: " . FileName
-        SetTimer () => Tooltip(), 2000
-        
+        SetTimer () => Tooltip(), -2000
+
     } catch as err {
         MsgBox "Ошибка: " . err.Message
     }
 }
 
-; --- Функция 1: Поиск пути через Shell.Application (Наиболее надежно) ---
-GetPathFromShell() {
-    try {
-        shell := ComObject("Shell.Application")
-        for window in shell.Windows {
-            ; Проверяем, активно ли это окно сейчас
-            ; WinExist возвращает HWND, сравниваем с HWND окна Shell
-            if (WinActive("ahk_id " . window.HWND)) {
-                try {
-                    ; Пытаемся получить путь
-                    path := window.Document.Folder.Self.Path
-                    if (path != "") {
-                        return path
-                    }
-                }
-            }
+; --- Функция 1: Поиск пути через Explorer ---
+GetActiveExplorerTab(hwnd := WinExist("A")) {
+    activeTab := 0
+    try activeTab := ControlGetHwnd("ShellTabWindowClass1", hwnd) ; Windows 11
+    catch
+        try activeTab := ControlGetHwnd("TabWindowClass1", hwnd)   ; Internet Explorer
+
+    for w in ComObject("Shell.Application").Windows {
+        if w.hwnd != hwnd
+            continue
+        if activeTab {
+            static IID_IShellBrowser := "{000214E2-0000-0000-C000-000000000046}"
+            shellBrowser := ComObjQuery(w, IID_IShellBrowser, IID_IShellBrowser)
+            ComCall(3, shellBrowser, "uint*", &thisTab := 0)
+            if thisTab != activeTab
+                continue
         }
+        return w
     }
-    return ""
+    return 0
 }
 
-; --- Функция 2: Резервный поиск по контролам ---
+; Функция для получения пути из активной вкладки
+GetActiveFolderPath() {
+    tab := GetActiveExplorerTab()
+    if tab
+        return tab.Document.Folder.Self.Path
+    else
+        return ""
+}
+
+; --- Функция 2: Поиск в окне открытия файла ---
 GetPathFromDialogControls() {
+    text := ControlGetText("ToolbarWindow323", "A")
+    text := Trim(text)
+    ; Проверяем, похож ли текст на абсолютный путь (начинается с буквы диска и :\ )
+    if RegExMatch(text, "([a-zA-Z]:\\.+)", &match)
+        return RTrim(RegExReplace(match[1], "[\x00-\x1F\x7F]"), "\")
+
+    ; Резервный вариант. Пытаемся найти что-то похожее на путь
     ; Получаем список всех контролов активного окна
     ; WinGetControls возвращает массив строк ClassNN
+    ; ctrlClassNN - это строка, например "ToolbarWindow323" или "Edit1"
+
     Controls := WinGetControls("A")
-    
     for ctrlClassNN in Controls {
-        ; ctrlClassNN - это строка, например "ToolbarWindow323" или "Edit1"
-        
-        ; Нас интересуют Edit (поля ввода) и иногда ComboBox
-        if (ctrlClassNN ~= "i)^Edit") {
-            try {
-                Text := ControlGetText(ctrlClassNN, "A")
-                ; Проверяем, похож ли текст на абсолютный путь (начинается с буквы диска и :\ )
-                if (Text ~= "^[a-zA-Z]:\\") {
-                    return Text
-                }
-            }
-        }
-        
-        ; ToolbarWindow обычно содержит адресную строку, но getText от нее часто пустой.
-        ; Однако в некоторых старых приложениях там может быть текст.
-        if (ctrlClassNN ~= "i)^ToolbarWindow") {
-             ; Попробуем, но шанс мал
-             try {
-                 Text := ControlGetText(ctrlClassNN, "A")
-                 if (Text ~= "^[a-zA-Z]:\\") {
-                     return Text
-                 }
-             }
+        try {
+            text := ControlGetText(ctrlClassNN, "A")
+            text := Trim(text)
+            if RegExMatch(text, "([a-zA-Z]:\\.+)", &match)
+                return RTrim(RegExReplace(match[1], "[\x00-\x1F\x7F]"), "\")
         }
     }
+
     return ""
 }
 
@@ -188,7 +189,7 @@ UninstallAndStop() {
         try {
             FileDelete startupLinkPath
             Tooltip "Ярлык автозагрузки удалён."
-            SetTimer () => Tooltip(), 2000
+            SetTimer () => Tooltip(), -2000
 
             ; Завершаем работу скрипта
             Sleep 500
@@ -199,7 +200,7 @@ UninstallAndStop() {
         }
     }
     Tooltip "Ярлык автозагрузки не найден."
-    SetTimer () => Tooltip(), 2000
+    SetTimer () => Tooltip(), -2000
 }
 
 
