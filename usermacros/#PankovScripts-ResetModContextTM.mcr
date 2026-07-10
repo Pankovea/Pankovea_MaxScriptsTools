@@ -449,8 +449,9 @@ icon:#("pankov_TransformModContextTM", 1)
 	local gizmo_modifiers = gizmo_with_bbox + gizmo_project_modifiers
 	local ffd_modifiers = #(FFD_2x2x2, FFD_3x3x3, FFD_4x4x4, FFDBox, FFDCyl)
 	local bbox_modifiers = gizmo_with_bbox + ffd_modifiers 
+	local custom_modifiers = #(XForm_size)
 	
-    local enabledOnMods = gizmo_modifiers + ffd_modifiers + gizmo_slice_modifiers
+    local enabledOnMods = gizmo_modifiers + ffd_modifiers + gizmo_slice_modifiers + custom_modifiers
 	local nullTM = matrix3 1
 	
 	fn getGizmoTM modif = (
@@ -710,6 +711,7 @@ icon:#("pankov_TransformModContextTM", 1)
 						#inches: [39.37,39.37,0]
 					)
 				)
+			(finditem custom_modifiers (classOf targetMod) > 0): (selection.max - selection.min)
 		)
 
 		-- контекстная матрица трансформация модификатора
