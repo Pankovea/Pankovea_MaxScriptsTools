@@ -114,6 +114,11 @@ Cameras:
 * Camera rename that updates view names when a view contains the camera name
 * Supports Corona, V-Ray, Physical cameras
 
+Scene States:
+* A replacement for the standard Scene States dialog. Everything in one window — create, rename, update and delete scene states.
+* Fast and convenient: fewer mouse clicks than the standard interface.
+* Choose which parts to capture (camera, lights, materials, layers, environment, etc.), apply a state with a double click, list sorted by name.
+
 [back (contents)](#contents)
 
 ## Concentric Cycles

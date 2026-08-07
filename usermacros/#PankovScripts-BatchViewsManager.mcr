@@ -73,15 +73,17 @@
 *   roll_Cams   "Cameras"                     — камеры + параметры + rename + create view
 *   roll_batch  "Batch Views"                 — виды + база разрешения + sync + render output
 *   roll_global "Global Batch Views Settings" — global scale + пути
+*   roll_states "Manage Scene States"         — scene states: список/apply/save/new/rename/delete
 *
 * ЦЕПОЧКА ИНИЦИАЛИЗАЦИИ
 * =====================
 *   showUI()
-*     → local roll_Cams / roll_batch / roll_global — свитки определены на уровне макроса
-*     → g_roll_cams/batch/global = <свиток>        — ссылки для кросс-доступа
+*     → local roll_Cams / roll_batch / roll_global / roll_states — свитки на уровне макроса
+*     → g_roll_cams/batch/global/states = <свиток> — ссылки для кросс-доступа
 *     → addRollout roll_Cams   → on open: initCamListBox, relist_cams, change_active
 *     → addRollout roll_batch  → on open: initListBox, list_views, set scale checkbox state
 *     → addRollout roll_global → on open: восстановить scale
+*     → addRollout roll_states → on open: refreshStates
 */
 macroScript Pankovea_BatchViewsManager
 	category:     "#PankovScripts"
@@ -98,6 +100,7 @@ macroScript Pankovea_BatchViewsManager
 	local g_roll_cams
 	local g_roll_batch
 	local g_roll_global
+	local g_roll_states
 	local g_last_opened_tab = "Cams"
 	local g_accordion_lock = false
 
@@ -117,7 +120,7 @@ macroScript Pankovea_BatchViewsManager
 
 	-- глобальный масштаб разрешения
 	local g_globalScale = 1.0
-	local g_scaleValues = #(0.25, 1.0/3.0, 0.5, 2.0/3.0, 1.0, 1.25, 1.5, 2.0)
+	local g_scaleValues = #(0.25, 1.0/3.0, 0.5, 2.0/3.0, 1.0, 1.25, 1.5, 2.0, 3.0)
 
 	-- снэп разрешений (галка "Snap")
 	local g_snap = true
@@ -1001,34 +1004,31 @@ macroScript Pankovea_BatchViewsManager
 			) catch ( true )
 		)
 
-	-- Аккордеон с особыми правилами свертывания:
-	--  открытие Camera        -> сворачиваются Batch и Global
-	--  открытие Batch Views   -> сворачивается Camera
-	--  сворачивание Camera    -> разворачивается Batch
-	--  сворачивание Batch     -> сворачивается Global, разворачивается Camera
-	--  сворачивание Global    -> ничего не меняется
+	-- Аккордеон:
+	--  сворачивание любого свитка    -> ничего не меняется
+	--  открытие Camera / States      -> сворачиваются все остальные (и Global тоже)
+	--  открытие Batch Views          -> сворачиваются Camera и States, Global остаётся
+	--  открытие Global               -> сворачиваются Camera и States, Batch остаётся
+	--  (Global может быть открыт вместе с Batch, в остальных случаях закрыт)
 	fn accordion thisRollout state = (
 		if g_floater == undefined do return false
 		if g_accordion_lock do return false
-		if thisRollout == g_roll_cams then (
-			if state then (
-				if g_roll_batch != undefined do g_roll_batch.open = false
-				if g_roll_global != undefined do g_roll_global.open = false
-			) else (
-				if g_roll_batch != undefined do g_roll_batch.open = true
-			)
-		)
-		else if thisRollout == g_roll_batch then (
-			if state then (
-				if g_roll_cams != undefined do g_roll_cams.open = false
-			) else (
-				if g_roll_global != undefined do g_roll_global.open = false
-				if g_roll_cams != undefined do g_roll_cams.open = true
+		if state do (
+			local keepGlobal = (thisRollout == g_roll_batch)
+			local keepBatch  = (thisRollout == g_roll_global)
+			for other in #(g_roll_cams, g_roll_batch, g_roll_global, g_roll_states) do (
+				if other == undefined or other == thisRollout do continue
+				if other == g_roll_global and keepGlobal do continue
+				if other == g_roll_batch and keepBatch do continue
+				g_accordion_lock = true
+				other.open = false
+				g_accordion_lock = false
 			)
 		)
 		if g_roll_cams != undefined and g_roll_cams.open then g_last_opened_tab = "Cams"
 		else if g_roll_batch != undefined and g_roll_batch.open then g_last_opened_tab = "Batch"
 		else if g_roll_global != undefined and g_roll_global.open then g_last_opened_tab = "Global"
+		else if g_roll_states != undefined and g_roll_states.open then g_last_opened_tab = "States"
 		updateFloaterHeight()
 	)
 	--) Конец СЕРВИСНЫЕ ФУНКЦИИ FLOATER
@@ -1815,6 +1815,7 @@ macroScript Pankovea_BatchViewsManager
 			list_cameras_for_batch()
 
 			local states_names = for i in 1 to sceneStateMgr.getCount() collect (sceneStateMgr.GetSceneState i)
+			qsort states_names (fn cmp a b = ( stricmp a b ))
 			drdwn_state.items = #("---------------------") + states_names
 
 			drdwn_render_preset.items = #("---------------------") + getRenderPresetNames()
@@ -1838,6 +1839,18 @@ macroScript Pankovea_BatchViewsManager
 			if prevTop >= 0 and lst_views.Items.Count > 0 then (
 				if prevTop >= lst_views.Items.Count do prevTop = lst_views.Items.Count - 1
 				lst_views.TopIndex = prevTop
+			)
+		)
+
+		-- Обновить drdwn_state (список scene states) после изменения состояний
+		fn refreshStatesList = (
+			local prevName = if drdwn_state.selection > 1 then drdwn_state.items[drdwn_state.selection] else ""
+			local states_names = for i in 1 to sceneStateMgr.getCount() collect (sceneStateMgr.GetSceneState i)
+			qsort states_names (fn cmp a b = ( stricmp a b ))
+			drdwn_state.items = #("---------------------") + states_names
+			if prevName != "" then (
+				local idx = findItem drdwn_state.items prevName
+				drdwn_state.selection = if idx == 0 then 1 else idx
 			)
 		)
 
@@ -2722,6 +2735,287 @@ macroScript Pankovea_BatchViewsManager
 
 
 	--------------------------------------------------------------
+	--( ROLLOUT: MANAGE SCENE STATES
+
+	local roll_states = rollout roll_states "Manage Scene States" (
+		local roll_w = 250
+		--------------------------------
+		button btn_states_info "?" width:20 height:18 align:#right offset:[10,0] \
+			tooltip:"Scene states. Single click — select.\nDouble click — apply."
+		dotNetControl lst_states "System.Windows.Forms.ListBox" height:265 offset:[-10, -22] \
+		button btn_states_del "❌" width:24 height:25 align:#right offset:[14,-30] \
+			tooltip:"Delete the selected state"
+		edittext txt_states_new "State name" fieldWidth:(roll_w - 40) labelOnTop:true offset:[-10, 0]\
+			tooltip:"Enter — rename the selected state.\nNew — used when no state is selected."
+		button btn_states_new "➕ New" width:(roll_w / 2 - 20) height:22 across:2 offset:[-10, 0]\
+			tooltip:"Create a state from the selected one,\nappending a sequence number.\nSelects the new state for editing."
+		button btn_states_update "Update" width:(roll_w / 2 - 20) height:22 offset:[-10, 0]\
+			tooltip:"Overwrite the selected state\nwith the current scene"
+
+		group "Parts to capture" (
+			button btn_parts_info "?" width:20 height:18 align:#right offset:[10,0] \
+				tooltip:"Parts to save. Ctrl+click — toggle.\nSingle click on a state above loads its parts."
+			dotNetControl lst_states_parts "System.Windows.Forms.ListBox" height:140 offset:[-10, -22] \
+			button btn_parts_all "Select all" width:70 height:20 align:#left across:2 offset:[-10,0]
+			button btn_parts_none "Clear" width:60 height:20 align:#right offset:[-10,0]
+		)
+		--------------------------------
+
+		fn stateNames = (
+			local names = for i in 1 to sceneStateMgr.GetCount() collect (sceneStateMgr.GetSceneState i)
+			qsort names (fn cmp a b = ( stricmp a b ))
+			names
+		)
+
+		fn getStatesSel = ( lst_states.SelectedIndex + 1 )
+
+		fn setStatesSel idx = ( lst_states.SelectedIndex = if idx > 0 then idx - 1 else -1 )
+
+		fn initStatesListBox = (
+			lst_states.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").One
+			lst_states.IntegralHeight = false
+			lst_states.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
+			lst_states.ForeColor = (dotNetClass "System.Drawing.Color").White
+		)
+
+		fn updateStateButtons = (
+			local hasSel = getStatesSel() > 0
+			btn_states_update.enabled = hasSel
+			btn_states_del.enabled = hasSel
+		)
+
+		fn refreshStates = (
+			local prevName = if getStatesSel() > 0 then lst_states.SelectedItem as string else ""
+			local names = stateNames()
+			lst_states.BeginUpdate()
+			lst_states.Items.Clear()
+			for n in names do lst_states.Items.Add n
+			lst_states.EndUpdate()
+			if prevName != "" then (
+				local idx = findItem names prevName
+				if idx > 0 do setStatesSel idx
+			)
+			updateStateButtons()
+		)
+
+		-- Список частей состояния (имена)
+		fn partNames = (
+			for i in 1 to sceneStateMgr.PartsCount() collect (sceneStateMgr.MapIndexToPart i)
+		)
+
+		-- Заполнить список частей
+		fn refreshPartsList = (
+			local parts = partNames()
+			lst_states_parts.BeginUpdate()
+			lst_states_parts.Items.Clear()
+			for p in parts do lst_states_parts.Items.Add p
+			lst_states_parts.EndUpdate()
+		)
+
+		fn initPartsListBox = (
+			lst_states_parts.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").MultiExtended
+			lst_states_parts.IntegralHeight = false
+			lst_states_parts.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
+			lst_states_parts.ForeColor = (dotNetClass "System.Drawing.Color").White
+		)
+
+		-- Выделить части согласно bitArray (1-based индексы частей)
+		fn setPartsSelection ba = (
+			if ba == undefined do ba = #{}
+			lst_states_parts.BeginUpdate()
+			for i = 0 to lst_states_parts.Items.Count - 1 do lst_states_parts.SetSelected i (ba[(i + 1)] == true)
+			lst_states_parts.EndUpdate()
+		)
+
+		-- bitArray выделенных частей (для sceneStateMgr.Capture)
+		fn selectedParts = (
+			local ba = #{}
+			for i = 0 to lst_states_parts.Items.Count - 1 do (
+				if lst_states_parts.GetSelected i do ba[i + 1] = true
+			)
+			ba
+		)
+
+		fn selectAllParts = (
+			lst_states_parts.BeginUpdate()
+			for i = 0 to lst_states_parts.Items.Count - 1 do lst_states_parts.SetSelected i true
+			lst_states_parts.EndUpdate()
+		)
+
+		fn clearParts = (
+			lst_states_parts.BeginUpdate()
+			for i = 0 to lst_states_parts.Items.Count - 1 do lst_states_parts.SetSelected i false
+			lst_states_parts.EndUpdate()
+		)
+
+		-- Загрузить состояние в UI: имя в поле + части в список
+		fn loadStateIntoUI name = (
+			txt_states_new.text = name
+			setPartsSelection (sceneStateMgr.GetParts name)
+		)
+
+		-- Разобрать имя: префикс, разделитель и хвостовой номер.
+		-- "Cam 3" -> #("Cam", " ", 3); "Cam1" -> #("Cam", "", 1);
+		-- "Cam_1" -> #("Cam", "_", 1);  "3" -> #("", "", 3); без номера -> undefined
+		fn parseStateName name = (
+			local end = name.count
+			while end > 0 and (findstring "0123456789" name[end]) != undefined do end -= 1
+			local numStr = subString name (end + 1) (name.count - end)
+			if numStr.count == 0 do return undefined
+			local num = (numStr as integer)
+			local prefix = subString name 1 end
+			local sep = ""
+			if prefix.count > 0 then (
+				local lastCh = prefix[prefix.count]
+				if lastCh == " " or lastCh == "_" or lastCh == "-" then (
+					sep = lastCh
+					prefix = subString prefix 1 (prefix.count - 1)
+				)
+			)
+			#(prefix, sep, num)
+		)
+
+		-- Следующее имя: максимальный номер среди состояний с тем же префиксом + 1,
+		-- с разделителем выбранного состояния ("Cam 3" -> "Cam 4", "Cam1" -> "Cam2", "3" -> "4")
+		fn nextStateName baseName = (
+			local parsed = parseStateName baseName
+			local prefix = baseName, sep = " "
+			if parsed != undefined do ( prefix = parsed[1]; sep = parsed[2] )
+			local maxNum = 0
+			for n in stateNames() do (
+				local p = parseStateName n
+				if p != undefined and p[1] == prefix do maxNum = amax maxNum p[3]
+			)
+			prefix + sep + ((maxNum + 1) as string)
+		)
+
+		-- Восстановить состояние сцены
+		fn state_retore = (
+			if getStatesSel() <= 0 do ( messageBox "Select a scene state to apply." title:"Apply Scene State"; return false )
+			local name = lst_states.SelectedItem as string
+			try (
+				local ssp = sceneStateMgr.GetParts name
+				sceneStateMgr.Restore name ssp
+			) catch (
+				messageBox ("Can't restore scene state:\n" + (getCurrentException() as string)) title:"Apply Scene State"
+				return false
+			)
+		)
+		
+		on roll_states open do (
+			initStatesListBox()
+			initPartsListBox()
+			refreshStates()
+			refreshPartsList()
+			selectAllParts()
+		)
+		on roll_states close do ( saveFloaterState() )
+		on roll_states rolledUp state do ( accordion roll_states state )
+
+		on lst_states SelectedIndexChanged sender args do (
+			updateStateButtons()
+			if getStatesSel() > 0 do loadStateIntoUI (lst_states.SelectedItem as string)
+		)
+
+		-- DOUBLE CLICK: применить состояние
+		on lst_states MouseDoubleClick sender args do (
+			local idx = lst_states.IndexFromPoint args.X args.Y
+			if idx < 0 do return false
+			lst_states.SelectedIndex = idx
+			state_retore()
+		)
+
+		on btn_states_info pressed do (
+			messageBox "Scene States manager.\n\nApply — restore the selected scene state.\nUpdate — overwrite the selected state with the current scene.\nNew — create a state from the selected one,\nappending a sequence number.\nDelete — remove the selected state.\n\nState name field: single click on a state\nloads its name — edit it and press Enter\nto rename.\n\n'Parts to capture' — select parts (light/camera/\nobject/layer/material/environment...)\nwith Ctrl+click when creating or overwriting\na state. Single click on a state loads its parts." title:"Manage Scene States"
+		)
+
+		on btn_parts_all pressed do ( selectAllParts() )
+		on btn_parts_none pressed do ( clearParts() )
+
+		on btn_states_new pressed do (
+			local name
+			if getStatesSel() > 0 then (
+				name = nextStateName (lst_states.SelectedItem as string)
+			) else (
+				name = trimLeft (trimRight txt_states_new.text)
+				if name == "" do ( messageBox "Enter a name for the new state." title:"New Scene State"; return false )
+				if findItem (stateNames()) name != 0 do ( messageBox "A state with this name already exists." title:"New Scene State"; return false )
+			)
+			local parts = selectedParts()
+			if parts.isEmpty do ( messageBox "Select at least one part to capture." title:"New Scene State"; return false )
+			try (
+				if not (sceneStateMgr.Capture name parts) then (
+					messageBox "Can't create scene state (Capture failed)." title:"New Scene State"
+					return false
+				)
+			) catch (
+				messageBox ("Can't create scene state:\n" + (getCurrentException() as string)) title:"New Scene State"
+				return false
+			)
+			refreshStates()
+			local idx = findItem (stateNames()) name
+			if idx > 0 do setStatesSel idx
+			if g_roll_batch != undefined do g_roll_batch.refreshStatesList()
+		)
+
+		on btn_states_update pressed do (
+			if getStatesSel() <= 0 do ( messageBox "Select a scene state to overwrite." title:"Update Scene State"; return false )
+			local name = lst_states.SelectedItem as string
+			if not (queryBox ("Overwrite \"" + name + "\" with the current scene?") title:"Update Scene State") do return false
+			local parts = selectedParts()
+			if parts.isEmpty do ( messageBox "Select at least one part to capture." title:"Update Scene State"; return false )
+			try (
+				sceneStateMgr.Delete name
+				if not (sceneStateMgr.Capture name parts) then (
+					messageBox "Can't update scene state (Capture failed)." title:"Update Scene State"
+					return false
+				)
+			) catch (
+				messageBox ("Can't update scene state:\n" + (getCurrentException() as string)) title:"Update Scene State"
+				return false
+			)
+			if g_roll_batch != undefined do g_roll_batch.refreshStatesList()
+		)
+
+		-- RENAME по событию Enter в поле имени (без кнопки)
+		on txt_states_new entered val do (
+			if getStatesSel() <= 0 do return false
+			local oldName = lst_states.SelectedItem as string
+			local newName = trimLeft (trimRight val)
+			if newName == "" do ( messageBox "Enter a new name." title:"Rename Scene State"; return false )
+			if newName == oldName do return false
+			if findItem (stateNames()) newName != 0 do ( messageBox "A state with this name already exists." title:"Rename Scene State"; return false )
+			try (
+				sceneStateMgr.Rename oldName newName
+			) catch (
+				messageBox ("Can't rename scene state:\n" + (getCurrentException() as string)) title:"Rename Scene State"
+				return false
+			)
+			refreshStates()
+			local idx = findItem (stateNames()) newName
+			if idx > 0 do setStatesSel idx
+			if g_roll_batch != undefined do g_roll_batch.refreshStatesList()
+		)
+
+		on btn_states_del pressed do (
+			if getStatesSel() <= 0 do ( messageBox "Select a scene state to delete." title:"Delete Scene State"; return false )
+			local name = lst_states.SelectedItem as string
+			if not (queryBox ("Delete scene state \"" + name + "\"?") title:"Delete Scene State") do return false
+			try (
+				sceneStateMgr.Delete name
+			) catch (
+				messageBox ("Can't delete scene state:\n" + (getCurrentException() as string)) title:"Delete Scene State"
+				return false
+			)
+			refreshStates()
+			if g_roll_batch != undefined do g_roll_batch.refreshStatesList()
+		)
+	)
+	--) Конец ROLLOUT: MANAGE SCENE STATES
+	--------------------------------------------------------------
+
+
+	--------------------------------------------------------------
 	-- TOOL MAIN UI
 	fn showUI =
 	(
@@ -2733,6 +3027,7 @@ macroScript Pankovea_BatchViewsManager
 			g_roll_cams   = roll_Cams
 			g_roll_batch  = roll_batch
 			g_roll_global = roll_global
+			g_roll_states = roll_states
 
 			local iniPath = getmaxinifile()
 			local posStr = getINISetting iniPath "CamManager" "Position"
@@ -2746,16 +3041,18 @@ macroScript Pankovea_BatchViewsManager
 			)
 			local rolloutOpened = getINISetting iniPath "CamManager" "RolloutOpened"
 			if not (hasBatchViews()) then rolloutOpened = "Cams"
-			if rolloutOpened != "Batch" and rolloutOpened != "Global" then rolloutOpened = "Cams"
+			if rolloutOpened != "Batch" and rolloutOpened != "Global" and rolloutOpened != "States" then rolloutOpened = "Cams"
 			local snapStr = getINISetting iniPath "CamManager" "Snap"
 			try ( if snapStr != "" then g_snap = (snapStr as BooleanClass) ) catch ()
 			g_accordion_lock = true
 			addRollout g_roll_cams g_floater rolledup:(rolloutOpened != "Cams")
 			addRollout g_roll_batch g_floater rolledUp:(rolloutOpened != "Batch")
 			addRollout g_roll_global g_floater rolledUp:(rolloutOpened != "Global")
+			addRollout g_roll_states g_floater rolledUp:(rolloutOpened != "States")
 			g_roll_cams.open   = (rolloutOpened == "Cams")
 			g_roll_batch.open  = (rolloutOpened == "Batch")
 			g_roll_global.open = (rolloutOpened == "Global")
+			g_roll_states.open = (rolloutOpened == "States")
 			g_accordion_lock = false
 			g_last_opened_tab = rolloutOpened
 			updateFloaterHeight()
