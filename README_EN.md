@@ -7,6 +7,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Albedo Tuner](#albedo-tuner) 
 - [Camera Animator](#camera-animator)
 - [Camera From View](#camera-from-view)
+- [Batch Views Manager](#batch-views-manager)
 - [Concentric Cycles](#concentric-cycles)
 - [Copy-Paste](#copy-paste)
 - [Corona Toggles](#corona-toggles)
@@ -88,6 +89,30 @@ Creates an animated camera from selected cameras in the scene.
 [Version 2024.07.06](usermacros/%23PankovScripts-CameraFromView.mcr)
 
 Creates a camera from the current perspective view depending on the active renderer (V-Ray or Corona).
+
+[back (contents)](#contents)
+
+## Batch Views Manager
+[Version 2026.08.07](usermacros/%23PankovScripts-BatchViewsManager.mcr)
+
+A utility to manage 3ds Max batch rendering (Batch Render).
+
+Batch Views:
+* Reorder views in the list, group views, move groups
+* Quick view load into the scene by a single click in the list (camera, resolution, scene state)
+* Double click toggles views on/off and collapses/expands a group
+* Aspect ratio presets (3:2, 4:3, 16:9, ...) aware of frame orientation
+* **Preserve MegaPix** mode — change the aspect ratio while keeping the pixel count
+* Scale: global resolution multiplier for preview/final of all views.
+  - Base resolution is stored in the view name (`CamA (1920x1080)`); the global scale applies as a single multiplier to all views
+  - **Apply** bakes the current scaled size as the new base and resets the scale to 100%
+* Batch change of output sizes and paths (including Render Elements paths)
+
+Cameras:
+* Camera list. Double click shows the camera in the viewport; single click edits it in the script UI
+* Lens and shooting parameters configuration
+* Camera rename that updates view names when a view contains the camera name
+* Supports Corona, V-Ray, Physical cameras
 
 [back (contents)](#contents)
 
