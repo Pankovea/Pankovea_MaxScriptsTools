@@ -160,7 +160,7 @@ macroScript Pankovea_BatchViewsManager
 
 	-- пресеты пропорций для dropdown (1 = Free, не фиксирует пропорции)
 	local g_presetRatios = #(0.0, 1.0, 3.0/2.0, 4.0/3.0, 16.0/10.0, 16.0/9.0, 2.0, 21.0/9.0, sqrt(2.0))
-	local g_presetNames = #("Free", "1:1", "3:2", "4:3", "16:10", "16:9", "2:1", "21:9", "A серия")
+	local g_presetNames = #("Free", "1:1", "3:2", "4:3", "16:10", "16:9", "2:1", "21:9", "A series")
 
 	-- результат диалога удаления группы
 	local g_deleteGroupResult = 0
@@ -577,6 +577,33 @@ macroScript Pankovea_BatchViewsManager
 		groups
 	)
 
+	-- Построить блоки для перемещения: каждый вид — отдельный блок,
+	-- а выделенный заголовок группы — вся группа целиком.
+	-- Возвращает #(blocks, blockSel), где blocks[i] = #(origIdx, regionIdx, данные), blockSel = индексы выбранных блоков.
+	fn buildMoveBlocks allData selReal = (
+		local blocks = #()
+		local blockSel = #()
+		local flatIdx = 0
+		local regionIdx = 0
+		for grp in splitIntoGroups allData do (
+			regionIdx += 1
+			local hasHeader = isGroupName grp[1].name
+			local headerFlat = flatIdx + 1
+			if hasHeader and findItem selReal headerFlat > 0 then (
+				append blocks #(blocks.count + 1, regionIdx, grp)
+				append blockSel blocks.count
+			) else (
+				for k = 1 to grp.count do (
+					append blocks #(blocks.count + 1, regionIdx, #(grp[k]))
+					local f = flatIdx + k
+					if not (hasHeader and k == 1) and findItem selReal f > 0 do append blockSel blocks.count
+				)
+			)
+			flatIdx += grp.count
+		)
+		#(blocks, blockSel)
+	)
+
 	-- Найти индекс группы, содержащую вид с плоским индексом realIdx
 	fn findGroupForView groups realIdx = (
 		local flatIdx = 0
@@ -629,37 +656,6 @@ macroScript Pankovea_BatchViewsManager
 		true
 	)
 
-	-- Проверить, можно ли двигать группу, содержащую realIdx
-	fn canMoveGroup realIdx direction = (
-		local allData = collectAllViewData()
-		local groups = splitIntoGroups allData
-		local srcIdx = findGroupForView groups realIdx
-		if srcIdx == 0 do return false
-		local hasSeparator = isGroupName groups[srcIdx][1].name
-		if not hasSeparator do return false
-		if direction == #up do (
-			if srcIdx <= 1 do return false
-			return isGroupName groups[srcIdx - 1][1].name
-		)
-		if direction == #down do return srcIdx < groups.count
-		false
-	)
-
-	-- Переместить группу, содержащую realIdx, в направлении direction
-	fn moveGroup realIdx direction = (
-		close_batch_window()
-		local allData = collectAllViewData()
-		local groups = splitIntoGroups allData
-		local srcIdx = findGroupForView groups realIdx
-		if srcIdx == 0 do return false
-		local dstIdx = srcIdx + (if direction == #up then -1 else 1)
-		if dstIdx < 1 or dstIdx > groups.count do return false
-		local temp = groups[srcIdx]
-		groups[srcIdx] = groups[dstIdx]
-		groups[dstIdx] = temp
-		rebuildFromGroups groups
-		true
-	)
 	--) Конец ПЕРЕМЕЩЕНИЕ ВИДОВ / ГРУПП
 	--------------------------------------------------------------
 
@@ -706,15 +702,25 @@ macroScript Pankovea_BatchViewsManager
 		)
 	)
 
-	-- Загрузить фактическое разрешение вида в renderWidth/Height.
+	-- Загрузить вид в СЦЕНУ: активировать камеру во вьюпорте,
+	-- применить разрешение вида и восстановить scene state.
+	-- Сцену трогает только эта функция; для UI используется get_view_params.
 	fn applyViewToScene the_view = (
 		if the_view == undefined then return false
+		local cam = the_view.camera
+		if isValidNode cam and (isKindOf cam camera) then (
+			if viewport.CanSetToViewport cam then viewport.SetCamera cam
+		)
 		if the_view.overridePreset and the_view.width > 0 then (
 			if renderSceneDialog.isOpen() then renderSceneDialog.close()
 			renderWidth = the_view.width
 			renderHeight = the_view.height
-			redrawViews()
 		)
+		if the_view.sceneStateName != "" do (
+			local ssp = sceneStateMgr.GetParts the_view.sceneStateName
+			sceneStateMgr.Restore the_view.sceneStateName ssp
+		)
+		redrawViews()
 	)
 
 	-- Синхронизировать все виды камеры с источником.
@@ -1341,7 +1347,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_cams_info pressed do (
-			messageBox "Один клик — просмотр параметров и разрешения камеры в UI (сцена не меняется).\nДвойной клик — активировать камеру и загрузить её разрешение в сцену." title:"Cameras"
+			messageBox "Single click — preview camera parameters and resolution in the UI (scene unchanged).\nDouble click — activate the camera and load its resolution into the scene." title:"Cameras"
 		)
 
 		-- CAMERA PARAMETERS
@@ -1415,7 +1421,7 @@ macroScript Pankovea_BatchViewsManager
 		--------------------------------
 		button btn_open_batch "Batch Views" width:80 height:25 align:#left offset:[-10,0]
 		button btn_refresh "🔄️ Refresh" width:(roll_w - 120) height:25 align:#left offset:[65,-30] tooltip:"Update the views list"
-		button btn_views_info "?" width:20 height:25 align:#right offset:[15,-30] tooltip:"Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Double click — toggle enabled / collapse or expand a group.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down, enable/disable."
+		button btn_views_info "?" width:20 height:25 align:#right offset:[15,-30] tooltip:"Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene (camera + resolution + scene state).\n— Ctrl/Shift — multi-select.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down, enable/disable."
 		dotNetControl lst_views "System.Windows.Forms.ListBox" height:265 offset:[-10,0]
 
 		button btn_togleEnabled "☑️" align:#right width:24 height:25 tooltip:"Toggle enabled" offset:[14,-272]
@@ -1447,7 +1453,7 @@ macroScript Pankovea_BatchViewsManager
 		group "Resolution" (
 			checkbox chk_override_preset "Override Preset" align:#left across:2 \
 				tooltip:"On — the view uses its OWN resolution and frames.\nOff — the view uses the selected Render Preset."
-			checkbox chk_edit_base "Base size" align:#ыleft \
+			checkbox chk_edit_base "Base size" align:#left \
 				tooltip:"Off — edits the CURRENT (scaled) size.\nOn — edits the BASE (100%) size.\nActive only when global scale ≠ 100%."
 			edittext txt_out_w "Width" type:#integer fieldwidth:50 align:#right across:2
 			edittext txt_out_ratio "Ratio" type:#float fieldwidth:40 align:#right
@@ -1475,7 +1481,30 @@ macroScript Pankovea_BatchViewsManager
 		local loading_view = false
 		local suppress_res_events = false
 		local suppress_preset_events = false
+		-- Клики: первый клик — выделение, повторный клик по уже выделенному → toggle.
+		-- prev_sel — выделение на момент прошлого клика
+		local prev_sel = 0
+		-- Флаг: следующий MouseUp — хвост двойного клика (Windows шлёт MouseUp на каждый клик,
+		-- а MouseDoubleClick срабатывает между ними). По нему второй клик не делает второй toggle.
+		local g_dblPending = false
+		-- Последний re-click toggle: #(realIdx, enabled_до_переключения).
+		-- MouseDoubleClick откатывает его, чтобы двойной клик не менял галку.
+		local g_lastToggle = undefined
 		--------------------------------
+
+		-- ПОРЯДОК СОБЫТИЙ WINFORMS (проверено тестовым скриптом, флоатер с ListBox, 3ds Max 2026):
+		--   Одинарный клик:  MouseDown → Click → SelectedIndexChanged → MouseUp
+		--   Двойной клик:     1-й клик: MouseDown → Click → SelectedIndexChanged → MouseUp
+		--                     2-й клик: MouseDown → DoubleClick → MouseDoubleClick → MouseUp
+		-- Итого РОВНО два MouseUp, Click на втором клике НЕ приходит — его заменяет DoubleClick.
+		-- Следствие: «чистого» разделения одинарного/двойного клика в MouseUp не существует —
+		-- первый клик двойного нажатия НЕ отличить от одиночного. Поэтому:
+		--   * toggle (галка / сворачивание) срабатывает в MouseUp первого клика двойного тоже;
+		--   * чтобы двойной клик не менял галку, MouseDoubleClick откатывает этот toggle
+		--     через g_lastToggle;
+		--   * второй (хвостовой) MouseUp гасится флагом g_dblPending, иначе был бы лишний toggle.
+		-- Группа при двойном клике не сворачивается: MouseDoubleClick делает early-return,
+		-- но g_dblPending всё равно ставится, чтобы хвостовой MouseUp не сделал toggle.
 
 		-- Маппинг UI-индекс → реальный индекс batch view строится в list_views
 
@@ -1483,11 +1512,13 @@ macroScript Pankovea_BatchViewsManager
 		fn initListBox = (
 			lst_views.BeginUpdate()
 			lst_views.Items.Clear()
-			lst_views.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").One
+			lst_views.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").MultiExtended
 			lst_views.IntegralHeight = false
+			lst_views.DrawMode = (dotNetClass "System.Windows.Forms.DrawMode").OwnerDrawFixed
 			lst_views.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
 			lst_views.ForeColor = (dotNetClass "System.Drawing.Color").White
 			lst_views.EndUpdate()
+			lst_views.Invalidate()
 		)
 
 		fn getSel = (
@@ -1504,28 +1535,226 @@ macroScript Pankovea_BatchViewsManager
 			if uiIdx > 0 and uiIdx <= g_visibleIndices.count then g_visibleIndices[uiIdx] else 0
 		)
 
+		-- Включить/выключить вид по UI-индексу (группы не трогаем)
+		fn setViewCheckedAtUi uiIdx state = (
+			local realIdx = getRealIndex uiIdx
+			if realIdx <= 0 do return false
+			local the_view = batchRenderMgr.GetView realIdx
+			if the_view == undefined or isGroupView the_view do return false
+			the_view.enabled = state
+			lst_views.Invalidate()
+			true
+		)
+
+		-- Все выделенные UI-индексы (1-based)
+		fn getSelectedUiIndices = (
+			local res = #()
+			local n = lst_views.Items.Count
+			for i = 1 to n do (
+				if lst_views.GetSelected (i - 1) do append res i
+			)
+			res
+		)
+
+		-- Все выделенные реальные индексы batch views
+		fn getSelectedRealIdxs = (
+			local res = #()
+			for ui in getSelectedUiIndices() do (
+				local r = getRealIndex ui
+				if r > 0 and findItem res r == 0 do append res r
+			)
+			res
+		)
+
+		-- Выделить ровно эти UI-индексы
+		fn setSelectedUiIndices uiIdxes = (
+			local n = lst_views.Items.Count
+			for i = 0 to n - 1 do lst_views.SetSelected i false
+			for ui in uiIdxes do (
+				if ui >= 1 and ui <= n do lst_views.SetSelected (ui - 1) true
+			)
+			lst_views.Invalidate()
+		)
+
+		-- Перестроить список и восстановить выделение по реальным индексам
+		fn restoreSelectionByReal realIdxs = (
+			g_roll_batch.list_views()
+			local selUis = #()
+			for r in realIdxs do (
+				local ui = findItem g_visibleIndices r
+				if ui > 0 and findItem selUis ui == 0 do append selUis ui
+			)
+			if selUis.count > 0 do setSelectedUiIndices selUis
+		)
+
+		-- Цели переключения enabled: выделенные виды + все виды внутри выделенных групп
+		fn collectToggleTargets = (
+			local targets = #()
+			for ui in getSelectedUiIndices() do (
+				local realIdx = getRealIndex ui
+				if realIdx > 0 then (
+					local v = batchRenderMgr.GetView realIdx
+					if v != undefined then (
+						if isGroupView v then (
+							local bounds = getGroupBounds realIdx
+							for j = (bounds[1] + 1) to bounds[2] do (
+								local m = batchRenderMgr.GetView j
+								if not (isGroupView m) and findItem targets j == 0 do append targets j
+							)
+						) else (
+							if findItem targets realIdx == 0 do append targets realIdx
+						)
+					)
+				)
+			)
+			targets
+		)
+
+		-- Свернуть/развернуть группу (второй клик по выделенной группе)
+		fn toggleGroupCollapse realIdx = (
+			local the_view = batchRenderMgr.GetView realIdx
+			if the_view == undefined or not (isGroupView the_view) do return false
+			local prefix = substring the_view.name 1 1
+			if prefix == PROP_COLLAPSED then
+				the_view.name = PROP_EXPANDED + substring the_view.name 2 -1
+			else if prefix == PROP_EXPANDED then
+				the_view.name = PROP_COLLAPSED + substring the_view.name 2 -1
+			else
+				the_view.name = PROP_COLLAPSED + the_view.name
+			g_roll_batch.list_views()
+			local savedIdx = findItem g_visibleIndices realIdx
+			if savedIdx > 0 do setSel savedIdx
+			true
+		)
+
+		-- Позиция блока с тегом origIdx в массиве blocks
+		fn blockPos blocks origIdx = (
+			for i = 1 to blocks.count do ( if blocks[i][1] == origIdx do return i )
+			0
+		)
+
+		-- Является ли блок одиночным видом (не группой и не целым регионом)
+		fn isSingleViewBlock b = (
+			(b[3].count == 1) and not (isGroupName b[3][1].name)
+		)
+
+		-- Можно ли сдвинуть выделенное в направлении direction (#up/#down).
+		-- Вид двигается свободно (может перейти в соседнюю группу, перешагнув заголовок);
+		-- выделенный заголовок двигает всю группу.
+		fn canMoveSelectedAny direction = (
+			local allData = collectAllViewData()
+			local selReal = getSelectedRealIdxs()
+			if selReal.count == 0 do return false
+			local mb = buildMoveBlocks allData selReal
+			local blocks = mb[1]
+			local blockSel = mb[2]
+			local n = blocks.count
+			for bi in blockSel do (
+				local pos = blockPos blocks bi
+				if direction == #up then (
+					if isSingleViewBlock blocks[pos] then (
+						if pos > 1 and findItem blockSel blocks[pos - 1][1] == 0 do return true
+					) else (
+						if pos > 1 do return true
+					)
+				) else (
+					if isSingleViewBlock blocks[pos] then (
+						if pos < n and findItem blockSel blocks[pos + 1][1] == 0 do return true
+					) else (
+						if pos < n do return true
+					)
+				)
+			)
+			false
+		)
+
+		-- Переместить все выделенные блоки (виды/группы) на один шаг в направлении direction.
+		-- Вид меняется местами с соседним элементом (в т.ч. с заголовком другой группы — так он переходит в неё);
+		-- выделенный заголовок двигает всю группу, меняясь с соседней группой целиком.
+		-- Возвращает новые реальные индексы первых элементов выбранных блоков.
+		fn moveSelectedViews direction = (
+			local allData = collectAllViewData()
+			local selReal = getSelectedRealIdxs()
+			if selReal.count == 0 do return #()
+			local mb = buildMoveBlocks allData selReal
+			local blocks = mb[1]
+			local blockSel = mb[2]
+			if blockSel.count == 0 do return #()
+			local n = blocks.count
+
+			if direction == #up then (
+				blockSel = sort blockSel
+				for bi in blockSel do (
+					local p = blockPos blocks bi
+					if p > 1 then (
+						if isSingleViewBlock blocks[p] then (
+							if findItem blockSel blocks[p - 1][1] == 0 then (
+								local t = blocks[p]
+								blocks[p] = blocks[p - 1]
+								blocks[p - 1] = t
+							)
+						) else (
+							local rid = blocks[p - 1][2]
+							local s = p - 1
+							while s > 1 and blocks[s - 1][2] == rid do s -= 1
+							local b = blocks[p]
+							deleteItem blocks p
+							-- insertItem <value> <array> <index> (именно так: значение первым!)
+							insertItem b blocks s
+						)
+					)
+				)
+			) else (
+				local rev = for i = blockSel.count to 1 by -1 collect blockSel[i]
+				for bi in rev do (
+					local p = blockPos blocks bi
+					if p < n then (
+						if isSingleViewBlock blocks[p] then (
+							if findItem blockSel blocks[p + 1][1] == 0 then (
+								local t = blocks[p]
+								blocks[p] = blocks[p + 1]
+								blocks[p + 1] = t
+							)
+						) else (
+							local rid = blocks[p + 1][2]
+							local e = p + 1
+							while e < n and blocks[e + 1][2] == rid do e += 1
+							local b = blocks[p]
+							deleteItem blocks p
+							if e > blocks.count then append blocks b else insertItem b blocks e
+						)
+					)
+				)
+			)
+
+			local newReal = #()
+			local flatIdx = 0
+			for bi = 1 to blocks.count do (
+				if findItem blockSel blocks[bi][1] > 0 do append newReal (flatIdx + 1)
+				flatIdx += blocks[bi][3].count
+			)
+
+			close_batch_window()
+			local newGroups = for w in blocks collect w[3]
+			rebuildFromGroups newGroups
+			newReal
+		)
+
 		-- Обновить состояние кнопок в зависимости от выделения в lst_views
 		fn lst_views_update_buttons = (
-			local uiIdx = getSel()
-			local realIdx = getRealIndex uiIdx
-			local isGroup = false
-			if realIdx > 0 then (
-				local the_view = batchRenderMgr.GetView realIdx
-				isGroup = isGroupView the_view
-			)
-			if realIdx == 0 then (
+			local selUis = getSelectedUiIndices()
+			if selUis.count == 0 then (
 				btn_up.enabled = false
 				btn_down.enabled = false
-			) else if isGroup then (
-				btn_up.enabled = canMoveGroup realIdx #up
-				btn_down.enabled = canMoveGroup realIdx #down
+				btn_togleEnabled.enabled = false
+				btn_rem.enabled = false
 			) else (
-				btn_up.enabled = realIdx > 1
-				btn_down.enabled = realIdx < batchRenderMgr.numViews
+				btn_togleEnabled.enabled = true
+				btn_togleEnabled.tooltip = "Toggle enabled (selected views + group contents)"
+				btn_up.enabled = canMoveSelectedAny #up
+				btn_down.enabled = canMoveSelectedAny #down
+				btn_rem.enabled = true
 			)
-			btn_togleEnabled.enabled = realIdx > 0
-			btn_togleEnabled.tooltip = if isGroup then "Toggle all views in group" else "Toggle enabled"
-			btn_rem.enabled = realIdx > 0
 		)
 
 		-- Заполнить drdwn_cam выпадающий список камер
@@ -1638,7 +1867,6 @@ macroScript Pankovea_BatchViewsManager
 
 			local cam = the_view.camera
 			if isValidNode cam then (
-				if g_roll_cams != undefined do g_roll_cams.setActiveCam cam
 				local drdwnIdx = findCameraInDropdown cam.name
 				suppress_cam_dropdown = true
 				drdwn_cam.selection = if drdwnIdx == 0 then 1 else drdwnIdx
@@ -1659,10 +1887,6 @@ macroScript Pankovea_BatchViewsManager
 
 			local idx = finditem drdwn_state.items the_view.sceneStateName
 			drdwn_state.selection = if idx == 0 then 1 else idx
-			if the_view.sceneStateName != "" do (
-				local ssp = sceneStateMgr.GetParts the_view.sceneStateName
-				sceneStateMgr.Restore the_view.sceneStateName ssp
-			)
 
 			-- Отразить масштаб из имени вида в глобальном слайдере
 			local nameData = parseViewName the_view.name
@@ -1799,8 +2023,7 @@ macroScript Pankovea_BatchViewsManager
 					)
 				) else (
 					if not collapsed then (
-						local st = if the_view.enabled then "☑ " else "☐ "
-						append col (st + the_view.name)
+						append col the_view.name
 						append g_visibleIndices i
 					)
 				)
@@ -1810,6 +2033,7 @@ macroScript Pankovea_BatchViewsManager
 			lst_views.Items.Clear()
 			for item in col do lst_views.Items.Add item
 			lst_views.EndUpdate()
+			lst_views.Invalidate()
 			lst_views_update_buttons()
 
 			list_cameras_for_batch()
@@ -2204,7 +2428,119 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
-		-- DOUBLE CLICK: группы — toggle collapse, виды — toggle enabled
+		-- Одиночный клик без Ctrl/Shift:
+		--   первый клик — только выделение (галочка не меняется);
+		--   повторный клик по выделенному элементу → toggle (вид: enabled, группа: свернуть/развернуть).
+		-- Ctrl/Shift+клик — только управление выделением, галку не трогаем.
+		-- Двойной клик по виду — загрузка в сцену БЕЗ изменения галки (см. MouseDoubleClick).
+		-- Windows шлёт MouseUp на каждый клик; при двойном клике хвостовые MouseUp гасятся
+		-- флагом g_dblPending, а toggle от первого клика откатывается в MouseDoubleClick.
+		-- Invalidate() после клика убирает залипшие подсветки старых строк.
+		on lst_views MouseUp sender args do (
+			if (args.Button.ToString()) != "Left" do return false
+			local uiIdx = (lst_views.IndexFromPoint args.X args.Y) + 1
+			if uiIdx <= 0 or uiIdx > g_visibleIndices.count do return false
+
+			-- Второй клик двойного нажатия: toggle уже сделал первый клик (или MouseDoubleClick),
+			-- этот MouseUp — просто хвост двойного клика.
+			if g_dblPending do (
+				g_dblPending = false
+				return false
+			)
+
+			local modStr = (dotNetClass "System.Windows.Forms.Control").ModifierKeys.ToString()
+			if matchPattern modStr pattern:"*Control*" or matchPattern modStr pattern:"*Shift*" do (
+				prev_sel = 0
+				g_lastToggle = undefined
+				lst_views.Invalidate()
+				return false
+			)
+
+			local realIdx = getRealIndex uiIdx
+			local the_view = if realIdx > 0 then batchRenderMgr.GetView realIdx else undefined
+			local isGroup = (the_view != undefined and isGroupView the_view)
+
+			if uiIdx == prev_sel and getSel() == uiIdx and (getSelectedUiIndices()).count == 1 then (
+				-- повторный клик по единственному выделенному элементу
+				if isGroup then (
+					toggleGroupCollapse realIdx
+				) else if the_view != undefined then (
+					-- запомнить состояние до toggle — MouseDoubleClick его откатит
+					g_lastToggle = #(realIdx, the_view.enabled)
+					setViewCheckedAtUi uiIdx (not the_view.enabled)
+				)
+			) else (
+				-- новый выбор: только выделяем, галочку не трогаем
+				prev_sel = uiIdx
+				g_lastToggle = undefined
+			)
+			lst_views.Invalidate()
+		)
+
+		-- Нативного чекбокса больше нет (plain ListBox) — все toggle-ы делает MouseUp
+
+		-- OWNER DRAW: у групп галочки нет, у видов рисуем квадрат-галочку сами
+		on lst_views DrawItem sender args do (
+			local idx = args.Index
+			if idx < 0 do return false
+			local rect = args.Bounds
+			local g = args.Graphics
+			local realIdx = getRealIndex (idx + 1)
+			local the_view = undefined
+			local isGroup = false
+			if realIdx > 0 do (
+				the_view = batchRenderMgr.GetView realIdx
+				if the_view != undefined do isGroup = isGroupView the_view
+			)
+			local isSelected = lst_views.GetSelected idx
+
+			local backBrush = dotNetObject "System.Drawing.SolidBrush" (
+				if isSelected then (dotNetClass "System.Drawing.SystemColors").Highlight else lst_views.BackColor
+			)
+			g.FillRectangle backBrush rect
+			backBrush.Dispose()
+
+			if the_view == undefined do return false
+
+			local textColor
+			if isSelected then
+				textColor = (dotNetClass "System.Drawing.SystemColors").HighlightText
+			else if isGroup then
+				textColor = (dotNetClass "System.Drawing.Color").FromARGB 190 190 190
+			else
+				textColor = lst_views.ForeColor
+
+			local x = rect.X + 2
+			if not isGroup then (
+				local boxSize = 12
+				local boxRect = dotNetObject "System.Drawing.Rectangle" x (rect.Y + ((rect.Height - boxSize) / 2)) boxSize boxSize
+				local borderPen = (dotNetClass "System.Drawing.Pens").Gray
+				g.DrawRectangle borderPen boxRect
+				if the_view.enabled then (
+					local blueColor = (dotNetClass "System.Drawing.Color").FromARGB 0 122 204
+					local fillBrush = dotNetObject "System.Drawing.SolidBrush" blueColor
+					g.FillRectangle fillBrush boxRect
+					fillBrush.Dispose()
+					local pen2 = (dotNetClass "System.Drawing.Pens").White
+					local cx = boxRect.X
+					local cy = boxRect.Y
+					g.DrawLine pen2 (cx + 3) (cy + 7) (cx + 6) (cy + 9)
+					g.DrawLine pen2 (cx + 6) (cy + 9) (cx + 10) (cy + 3)
+				)
+				x += boxSize + 7
+			)
+
+			local textBrush = dotNetObject "System.Drawing.SolidBrush" textColor
+			local textRect = dotNetObject "System.Drawing.RectangleF" (x as float) (rect.Y as float) ((rect.Width - (x - rect.X)) as float) (rect.Height as float)
+			local sf = dotNetObject "System.Drawing.StringFormat"
+			sf.LineAlignment = (dotNetClass "System.Drawing.StringAlignment").Center
+			sf.FormatFlags = (dotNetClass "System.Drawing.StringFormatFlags").NoWrap
+			sf.Trimming = (dotNetClass "System.Drawing.StringTrimming").EllipsisCharacter
+			g.DrawString (lst_views.Items.Item[idx] as string) args.Font textBrush textRect sf
+			sf.Dispose()
+			textBrush.Dispose()
+		)
+
 		on lst_views MouseDoubleClick sender args do (
 			local idx = lst_views.IndexFromPoint args.X args.Y
 			if idx < 0 do return false
@@ -2212,28 +2548,28 @@ macroScript Pankovea_BatchViewsManager
 			if realIdx <= 0 do return false
 			local the_view = batchRenderMgr.GetView realIdx
 			close_batch_window()
-			if isGroupView the_view then (
-				local prefix = substring the_view.name 1 1
-				if prefix == PROP_COLLAPSED then
-					the_view.name = PROP_EXPANDED + substring the_view.name 2 -1
-				else if prefix == PROP_EXPANDED then
-					the_view.name = PROP_COLLAPSED + substring the_view.name 2 -1
-				else
-					the_view.name = PROP_COLLAPSED + the_view.name
-				local savedIdx = idx + 1
-				list_views()
-				if savedIdx <= lst_views.Items.Count then setSel savedIdx
-			) else (
-				the_view.enabled = not the_view.enabled
-				local savedIdx = idx + 1
-				list_views()
-				if savedIdx <= lst_views.Items.Count then setSel savedIdx
-				get_view_params realIdx
+			-- Windows шлёт MouseUp на каждый клик + ещё раз после MouseDoubleClick.
+			-- Гасим следующие MouseUp: toggle уже отработал (или отработает) через первый клик.
+			g_dblPending = true
+			-- Группа: сворачивание делает повторный клик в MouseUp, здесь ничего не делаем.
+			if isGroupView the_view do return false
+			-- Двойной клик по виду — загрузить в сцену, галку НЕ меняем:
+			-- первый клик двойного мог уже сделать toggle (вид был выделен) — откатываем его.
+			if g_lastToggle != undefined and g_lastToggle[1] == realIdx then (
+				local v2 = batchRenderMgr.GetView realIdx
+				if v2 != undefined do v2.enabled = g_lastToggle[2]
+				g_lastToggle = undefined
+				lst_views.Invalidate()
 			)
+			local savedIdx = idx + 1
+			applyViewToScene the_view
+			list_views()
+			if savedIdx <= lst_views.Items.Count then setSel savedIdx
+			get_view_params realIdx
 		)
 
 		on btn_views_info pressed do (
-			messageBox "Список Batch Views.\n\n— Один клик — просмотр параметров вида в UI (сцена не меняется).\n— Двойной клик — переключить enabled / свернуть-развернуть группу.\n— Кнопки слева: обновить список, добавить, дублировать, удалить, вверх/вниз, вкл/выкл." title:"Batch Views"
+			messageBox "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state (checkbox unchanged).\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all." title:"Batch Views"
 		)
 
 		-- DELETE VIEW / GROUP
@@ -2287,12 +2623,27 @@ macroScript Pankovea_BatchViewsManager
 		on btn_dup pressed do (
 			if getSel() != 0 then (
 				local realIdx = getRealIndex (getSel())
-				local viewName = (batchRenderMgr.GetView realIdx).name
+				local srcView = batchRenderMgr.GetView realIdx
+				local viewName = srcView.name
+				local srcFile = srcView.outputFilename
 				batchRenderMgr.DuplicateView realIdx
+				-- Дубликат создаётся в конце списка
+				local dupView = batchRenderMgr.GetView batchRenderMgr.numViews
+				local dupName = dupView.name
+				-- К имени файла добавить тот же числовой суффикс,
+				-- который Max добавил к имени вида ("CamA" -> "CamA 02", "CamA_2", ...)
+				if srcFile != undefined and srcFile != "" then (
+					local suffix = ""
+					if dupName.count > viewName.count and (subString dupName 1 viewName.count) == viewName then
+						suffix = subString dupName (viewName.count + 1) -1
+					if suffix != "" then (
+						dupView.outputFilename = (getFilenamePath srcFile) + (getFilenameFile srcFile) + suffix + (getFilenameType srcFile)
+					)
+				)
 				move_view_index batchRenderMgr.numViews (realIdx + 1)
 				list_views()
 				for i = 1 to g_visibleIndices.count do (
-					if (batchRenderMgr.GetView g_visibleIndices[i]).name == viewName do (
+					if (batchRenderMgr.GetView g_visibleIndices[i]).name == dupName do (
 						setSel (i + 1); exit
 					)
 				)
@@ -2301,27 +2652,19 @@ macroScript Pankovea_BatchViewsManager
 
 		-- TOGGLE ENABLED (группа = все виды в ней, одиночный вид = один)
 		on btn_togleEnabled pressed do (
-			local realIdx = getRealIndex (getSel())
-			if realIdx <= 0 then return false
-			local the_view = batchRenderMgr.GetView realIdx
+			local selReal = getSelectedRealIdxs()
+			if selReal.count == 0 do return false
+			local targets = collectToggleTargets()
+			if targets.count == 0 do return false
 			close_batch_window()
-
-			if isGroupView the_view then (
-				local bounds = getGroupBounds realIdx
-				local gv = batchRenderMgr.GetView
-				local newState = true
-				for j = (bounds[1] + 1) to bounds[2] do (
-					local v = gv j
-					if not isGroupView v do (newState = not v.enabled; exit)
-				)
-				for j = (bounds[1] + 1) to bounds[2] do (
-					local v = gv j
-					if not isGroupView v do v.enabled = newState
-				)
-			) else (
-				the_view.enabled = not the_view.enabled
+			local anyOff = false
+			for r in targets do (
+				if not (batchRenderMgr.GetView r).enabled do (anyOff = true; exit)
 			)
-			list_views()
+			-- любая выключенная цель → включаем все; все включены → выключаем все
+			for r in targets do (batchRenderMgr.GetView r).enabled = anyOff
+			restoreSelectionByReal selReal
+			lst_views_update_buttons()
 		)
 
 		-- TOGGLE ENABLED ALL
@@ -2344,20 +2687,17 @@ macroScript Pankovea_BatchViewsManager
 			list_views()
 		)
 
-		-- MOVE VIEW UP (группа = вся группа, одиночный вид = один)
+		-- MOVE SELECTED UP (вид — свободно, в т.ч. в другую группу; заголовок — вся группа)
 		on btn_up pressed do (
-			local realIdx = getRealIndex (getSel())
-			if realIdx <= 0 do return false
-			local the_view = batchRenderMgr.GetView realIdx
-			local viewName = the_view.name
-			if isGroupView the_view then (
-				if not canMoveGroup realIdx #up do return false
-				moveGroup realIdx #up
-			) else (
-				if realIdx <= 1 do return false
-				move_view_index realIdx (realIdx - 1)
+			local newReal = moveSelectedViews #up
+			if newReal.count == 0 do return false
+			list_views()
+			local selUis = #()
+			for r in newReal do (
+				local ui = findItem g_visibleIndices r
+				if ui > 0 and findItem selUis ui == 0 do append selUis ui
 			)
-			list_views restoreName:viewName
+			if selUis.count > 0 do setSelectedUiIndices selUis
 			lst_views_update_buttons()
 		)
 
@@ -2367,7 +2707,7 @@ macroScript Pankovea_BatchViewsManager
 			local n = 0
 			do (
 				n += 1
-				sep_name = " ----- Группа " + n as string + " -----"
+				sep_name = " ----- Group " + n as string + " -----"
 			) while not (isGroupNameAvailable sep_name)
 
 			local sep_view = batchRenderMgr.CreateView undefined
@@ -2390,20 +2730,17 @@ macroScript Pankovea_BatchViewsManager
 			lst_views_update_buttons()
 		)
 
-		-- MOVE VIEW DOWN (группа = вся группа, одиночный вид = один)
+		-- MOVE SELECTED DOWN (вид — свободно, в т.ч. в другую группу; заголовок — вся группа)
 		on btn_down pressed do (
-			local realIdx = getRealIndex (getSel())
-			if realIdx <= 0 do return false
-			local the_view = batchRenderMgr.GetView realIdx
-			local viewName = the_view.name
-			if isGroupView the_view then (
-				if not canMoveGroup realIdx #down do return false
-				moveGroup realIdx #down
-			) else (
-				if realIdx >= batchRenderMgr.numViews do return false
-				move_view_index realIdx (realIdx + 1)
+			local newReal = moveSelectedViews #down
+			if newReal.count == 0 do return false
+			list_views()
+			local selUis = #()
+			for r in newReal do (
+				local ui = findItem g_visibleIndices r
+				if ui > 0 and findItem selUis ui == 0 do append selUis ui
 			)
-			list_views restoreName:viewName
+			if selUis.count > 0 do setSelectedUiIndices selUis
 			lst_views_update_buttons()
 		)
 
