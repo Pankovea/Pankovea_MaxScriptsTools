@@ -21,8 +21,8 @@ Dictionary #(
     "roll_Cams.btn_cams_info.tooltip", "Один клик — просмотр параметров камеры и разрешения в UI (сцена не меняется).\nДвойной клик — активировать камеру и загрузить её разрешение в сцену.") #(
     "roll_Cams.btn_pick_pathrev_cam", "<<") #(
     "roll_Cams.btn_pick_pathrev_cam.tooltip", "Предыдущая камера") #(
-    "roll_Cams.btn_s", "Выбрать") #(
-    "roll_Cams.btn_s.tooltip", "Выбрать активную камеру") #(
+    "roll_Cams.btn_s", "Выделить") #(
+    "roll_Cams.btn_s.tooltip", "Выделить активную камеру") #(
     "roll_Cams.btn_next_cam", ">>") #(
     "roll_Cams.btn_next_cam.tooltip", "Следующая камера") #(
     "roll_Cams.group:Parameters", "Параметры") #(
@@ -39,7 +39,7 @@ Dictionary #(
     "roll_Cams.spn_sh", "Выдержка") #(
     "roll_Cams.spn_iso", "ISO") #(
     "roll_Cams.group:Rename", "Переименовать") #(
-    "roll_Cams.txt_rename_cam.tooltip", "Переименовать узел камеры и обновить имена batch views") #(
+    "roll_Cams.txt_rename_cam.tooltip", "Переименовать камеру и обновить имена batch views") #(
     "roll_Cams.lbl_rename_warn", "⚠ Имя уже используется") #(
     "roll_Cams.btn_create_view", "➕ Создать Batch View") #(
     "roll_Cams.btn_create_view.tooltip", "Создать batch view для активной камеры\nи перейти на вкладку Batch Views") #(
@@ -51,19 +51,16 @@ Dictionary #(
     "roll_batch.btn_refresh.tooltip", "Обновить список видов") #(
     "roll_batch.btn_views_info", "?") #(
     "roll_batch.btn_views_info.tooltip", "Список Batch Views.\n\n— Один клик — просмотр параметров вида в UI (сцена не меняется).\n— Повторный клик по выбранному пункту — вкл/выкл (вид) / свернуть-развернуть группу.\n— Двойной клик по виду — применить вид к сцене (камера + разрешение + состояние сцены).\n— Ctrl/Shift — мультивыбор.\n— Кнопки слева: обновить список, добавить, дублировать, удалить, вверх/вниз, вкл/выкл.") #(
-    "roll_batch.btn_togleEnabled", "☑️") #(
     "roll_batch.btn_togleEnabled.tooltip", "Вкл/выкл") #(
-    "roll_batch.btn_togleEnabledAll", "✓✓") #(
     "roll_batch.btn_togleEnabledAll.tooltip", "Вкл/выкл все") #(
-    "roll_batch.btn_up", "↑") #(
     "roll_batch.btn_up.tooltip", "Вверх (вид/группа)") #(
-    "roll_batch.btn_add_sep", "—") #(
     "roll_batch.btn_add_sep.tooltip", "Добавить группу\nГруппы можно переименовать в поле «Имя вида»") #(
-    "roll_batch.btn_down", "↓") #(
     "roll_batch.btn_down.tooltip", "Вниз (вид/группа)") #(
-    "roll_batch.btn_dup", "📋") #(
     "roll_batch.btn_dup.tooltip", "Дублировать вид") #(
-    "roll_batch.btn_rem", "❌") #(
+	"roll_batch.btn_prev_view.tooltip", "Активировать предыдущий вид") #(
+	"roll_batch.btn_select_cam", "Выделить") #(
+	"roll_batch.btn_select_cam.tooltip", "Выделить камеру текущего вида") #(
+	"roll_batch.btn_next_view.tooltip", "Активировать следующий вид") #(
     "roll_batch.btn_net_render", "🕸️ Net") #(
     "roll_batch.btn_render", "🫖 Рендер") #(
     "roll_batch.txt_view_name", "Имя вида") #(

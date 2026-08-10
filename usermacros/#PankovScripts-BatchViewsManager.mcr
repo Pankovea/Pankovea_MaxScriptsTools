@@ -95,7 +95,7 @@ macroScript Pankovea_BatchViewsManager
 	icon:         #("extratools", 1)
 (
 	--------------------------------------------------------------
-	-- i18n: общий модуль локализации (#PankovScripts-L10N.ms)
+	-- i18n: общий модуль локализации ё(#PankovScripts-L10N.ms)
 	-- L10N -- глобальный и живёт всю сессию Max, поэтому может быть
 	-- устаревшим (движок без engineVer или старше текущего). Сравнение
 	-- версий заставляет перезагрузить движок при первом запуске.
@@ -831,6 +831,12 @@ macroScript Pankovea_BatchViewsManager
 		local cam = the_view.camera
 		if isValidNode cam and (isKindOf cam camera) then (
 			if viewport.CanSetToViewport cam then viewport.SetCamera cam
+			-- Синхронизировать камеры: выбрать активированную камеру в списке (если она там есть)
+			if g_roll_cams != undefined do (
+				g_roll_cams.active_cam = cam
+				g_roll_cams.change_active()
+				g_roll_cams.syncCameraUI()
+			)
 		)
 		if the_view.overridePreset and the_view.width > 0 then (
 			if renderSceneDialog.isOpen() then renderSceneDialog.close()
@@ -1001,13 +1007,14 @@ macroScript Pankovea_BatchViewsManager
 
 	-- Установить output folder для всех Render Elements
 	fn setRePathsForAll folder = (
+		local rem = maxOps.GetCurRenderElementMgr()
 		if folder == undefined then return 0
-		local elems = renderElementMgr.getElements()
 		local count = 0
-		for e in elems do (
-			local fname = filenameFromPath e.filename
+		local numElems = rem.NumRenderElements()
+		for i = 0 to (numElems - 1) do (
+			local fname = filenameFromPath (rem.GetRenderElementFilename i)
 			if fname != "" do (
-				e.filename = pathConfig.appendPath folder fname
+				rem.SetRenderElementFilename i (pathConfig.appendPath folder fname)
 				count += 1
 			)
 		)
@@ -1170,15 +1177,16 @@ macroScript Pankovea_BatchViewsManager
 	local roll_Cams = rollout roll_Cams "Cameras" (
 		local roll_w = 250
 		--------------------------------
-		button btn_refresh "🔄️ Refresh" width:120 align:#left across:2 \
+		button btn_refresh "🔄️ Refresh" width:100 align:#left offset:[-10, 0] across:2 \
 			tooltip:"Update scene cameras list"
 		checkbox chk_only_visible "Only Visible" align:#right \
 			tooltip:"Show only visible cameras.\nOff — show all cameras in the scene."
 		dotNetControl lst_cams "System.Windows.Forms.ListBox" height:265 offset:[-10, 0]
 		button btn_cams_info "?" width:20 height:18 align:#right offset:[10,-23] tooltip:"Single click — preview camera parameters and resolution in the UI (scene unchanged).\nDouble click — activate the camera and load its resolution into the scene."
-		button btn_pick_pathrev_cam "<<" width:60 align:#left across:3 tooltip:"Previous camera"
-		button btn_s "Select" width:80 align:#center tooltip:"Select active camera"
-		button btn_next_cam ">>" width:60 align:#right tooltip:"Next camera"
+		
+		button btn_pick_pathrev_cam "<<" width:60 align:#left across:3 tooltip:"Previous camera" offset:[-10, 0]
+		button btn_s "Select" width:80 align:#center tooltip:"Select active camera" offset:[-10, 0]
+		button btn_next_cam ">>" width:60 align:#right tooltip:"Next camera" offset:[-10, 0]
 
 		group "Parameters" (
 			label lbl_fl "Focal length" align:#left across:2
@@ -1554,7 +1562,7 @@ macroScript Pankovea_BatchViewsManager
 		local roll_w = 250
 		--------------------------------
 		button btn_open_batch "Batch Views" width:80 height:25 align:#left offset:[-10,0]
-		button btn_refresh "🔄️ Refresh" width:(roll_w - 120) height:25 align:#left offset:[65,-30] tooltip:"Update the views list"
+		button btn_refresh "🔄️ Refresh" width:125 height:25 align:#left offset:[75,-30] tooltip:"Update the views list"
 		button btn_views_info "?" width:20 height:25 align:#right offset:[15,-30] tooltip:"Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene (camera + resolution + scene state).\n— Ctrl/Shift — multi-select.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down, enable/disable."
 		dotNetControl lst_views "System.Windows.Forms.ListBox" height:265 offset:[-10,0]
 
@@ -1566,9 +1574,13 @@ macroScript Pankovea_BatchViewsManager
 		button btn_dup "📋" width:24 height:25 align:#right offset:[14,2] tooltip:"Duplicate view"
 		button btn_rem "❌" width:24 height:25 align:#right offset:[14,0]
 
-		checkbutton btn_net_render "🕸️ Net" width:80 height:25 align:#left offset:[-10,0]
-		button btn_render "🫖 Render" height:25 width:(roll_w - 120) align:#left offset:[65,-30]
+		button btn_prev_view "<<" width:60 align:#left across:3 tooltip:"Previous view" offset:[-10, 0]
+		button btn_select_cam "Select" width:80 align:#center tooltip:"Select active camera" offset:[-10, 0]
+		button btn_next_view ">>" width:60 align:#right tooltip:"Next view" offset:[-10, 0]
 
+		checkbutton btn_net_render "🕸️ Net" width:60 height:25 align:#left offset:[-10,0]
+		button btn_render "🫖 Render" height:25 width:145 align:#left offset:[55,-30]
+		
 		--group "Edit batch view" (
 			edittext txt_view_name "View name" fieldWidth:(roll_w - 35) bold:true labelOnTop:true
 			
@@ -2295,6 +2307,7 @@ macroScript Pankovea_BatchViewsManager
 			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 			if bv == undefined do return undefined
 			local any_changed = false
+			local name_changed = false
 
 			-- База из имени или текущего вида
 			local nameData = parseViewName txt_view_name.text
@@ -2317,10 +2330,20 @@ macroScript Pankovea_BatchViewsManager
 					)
 					bv.name = newName
 					any_changed = true
+					name_changed = true
 				)
 			) else (
 				local clean = getCleanViewName txt_view_name.text
-				local finalName = if baseW > 0 and baseH > 0 then viewNameFor clean baseW baseH else clean
+				-- База введена прямо в имени — сохранить её масштаб (не глобальный)
+				local finalName
+				if nameData[2] > 0 and nameData[3] > 0 then (
+					if abs (nameData[4] - 1.0) < 0.001 then
+						finalName = clean + " (" + (nameData[2] as string) + "x" + (nameData[3] as string) + ")"
+					else
+						finalName = clean + " (" + ((nameData[4] * 100) as integer) as string + "% of " + (nameData[2] as string) + "x" + (nameData[3] as string) + ")"
+				) else (
+					finalName = if baseW > 0 and baseH > 0 then viewNameFor clean baseW baseH else clean
+				)
 				if bv.name != finalName then (
 					if batchRenderMgr.FindView finalName and bv.name != finalName then (
 						messageBox (L10N.trMsg "viewExists")
@@ -2328,6 +2351,7 @@ macroScript Pankovea_BatchViewsManager
 					)
 					bv.name = finalName
 					any_changed = true
+					name_changed = true
 				)
 			)
 
@@ -2357,8 +2381,11 @@ macroScript Pankovea_BatchViewsManager
 			)
 
 			if any_changed do (
-				close_batch_window()
-				list_views()
+				-- Список и нативное окно перерисовываем только при смене имени вида
+				if name_changed do (
+					close_batch_window()
+					list_views()
+				)
 				if getSel() > 0 do get_view_params (getRealIndex (getSel()))
 			)
 		)
@@ -2426,9 +2453,7 @@ macroScript Pankovea_BatchViewsManager
 			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined do (
-					close_batch_window()
 					bv.startFrame = val as integer
-					list_views()
 				)
 			)
 		)
@@ -2437,9 +2462,7 @@ macroScript Pankovea_BatchViewsManager
 			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined do (
-					close_batch_window()
 					bv.endFrame = val as integer
-					list_views()
 				)
 			)
 		)
@@ -2470,7 +2493,6 @@ macroScript Pankovea_BatchViewsManager
 					local cam_name = stripCamResSuffix drdwn_cam.items[index]
 					local cam = getNodeByName cam_name
 					if isValidNode cam and (isKindOf cam camera) then (
-						close_batch_window()
 						bv.camera = cam
 						if g_roll_cams != undefined do (
 							g_roll_cams.setActiveCam cam
@@ -2485,7 +2507,6 @@ macroScript Pankovea_BatchViewsManager
 								if getSel() > 0 do get_view_params (getRealIndex (getSel()))
 							)
 						)
-						list_views()
 					)
 				)
 			)
@@ -2547,6 +2568,52 @@ macroScript Pankovea_BatchViewsManager
 		on btn_net_render changed state do (
 			close_batch_window()
 			batchRenderMgr.netRender = state
+		)
+
+		-- Перелистывание видов: выбрать вид по UI-индексу (клампится к границам)
+		fn selectViewByUiIndex uiIdx = (
+			if g_visibleIndices.count == 0 do return false
+			if uiIdx < 1 then uiIdx = 1
+			if uiIdx > g_visibleIndices.count then uiIdx = g_visibleIndices.count
+			-- MultiExtended: SelectedIndex не снимает остальные выделения — чистим явно
+			lst_views.ClearSelected()
+			setSel uiIdx
+			lst_views.Invalidate()
+			local realIdx = getRealIndex uiIdx
+			if realIdx > 0 then (
+				local the_view = batchRenderMgr.GetView realIdx
+				if isGroupView the_view then (
+					txt_view_name.text = stripCollapsePrefix the_view.name
+				) else (
+					applyViewToScene the_view
+					g_active_view = get_view_params realIdx
+				)
+				lst_views_update_buttons()
+			)
+			true
+		)
+
+		on btn_prev_view pressed do (
+			local uiIdx = getSel()
+			if uiIdx > 1 then uiIdx -= 1
+			selectViewByUiIndex uiIdx
+		)
+
+		on btn_next_view pressed do (
+			local uiIdx = getSel()
+			if uiIdx == 0 then uiIdx = 1
+			else if uiIdx < g_visibleIndices.count then uiIdx += 1
+			selectViewByUiIndex uiIdx
+		)
+
+		on btn_select_cam pressed do (
+			max modify mode
+			local cam = if g_roll_cams != undefined then g_roll_cams.active_cam else undefined
+			if not (isValidNode cam) and getSel() > 0 then (
+				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
+				if bv != undefined do cam = bv.camera
+			)
+			if isValidNode cam and (isKindOf cam camera) then select cam
 		)
 
 		-- SINGLE CLICK: группа — только выделение, вид — загрузка параметров
