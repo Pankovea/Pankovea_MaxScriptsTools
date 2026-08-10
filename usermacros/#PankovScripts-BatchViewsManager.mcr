@@ -68,22 +68,24 @@
 * Разделители "----- Группа N -----". Перемещаются/удаляются как блок.
 * Сворачивание по двойному клику: ▶ свёрнута / ▼ развёрнута.
 *
-* СВИТКИ
-* ======
-*   roll_Cams   "Cameras"                     — камеры + параметры + rename + create view
-*   roll_batch  "Batch Views"                 — виды + база разрешения + sync + render output
-*   roll_global "Global Batch Views Settings" — global scale + пути
-*   roll_states "Manage Scene States"         — scene states: список/apply/save/new/rename/delete
-*
-* ЦЕПОЧКА ИНИЦИАЛИЗАЦИИ
-* =====================
-*   showUI()
-*     → local roll_Cams / roll_batch / roll_global / roll_states — свитки на уровне макроса
-*     → g_roll_cams/batch/global/states = <свиток> — ссылки для кросс-доступа
-*     → addRollout roll_Cams   → on open: initCamListBox, relist_cams, change_active
-*     → addRollout roll_batch  → on open: initListBox, list_views, set scale checkbox state
-*     → addRollout roll_global → on open: восстановить scale
-*     → addRollout roll_states → on open: refreshStates
+ * СВИТКИ
+ * ======
+ *   roll_Cams   "Cameras"                     — камеры + параметры + rename + create view
+ *   roll_batch  "Batch Views"                 — виды + база разрешения + sync + render output
+ *   roll_global "Global Batch Views Settings" — global scale + пути
+ *   roll_states "Manage Scene States"         — scene states: список/apply/save/new/rename/delete
+ *   roll_lang   "Language & Info"             — язык интерфейса + версия + репозиторий
+ *
+ * ЦЕПОЧКА ИНИЦИАЛИЗАЦИИ
+ * =====================
+ *   showUI()
+ *     → local roll_Cams / roll_batch / roll_global / roll_states / roll_lang — свитки на уровне макроса
+ *     → g_roll_cams/batch/global/states/lang = <свиток> — ссылки для кросс-доступа
+ *     → addRollout roll_Cams   → on open: initCamListBox, relist_cams, change_active
+ *     → addRollout roll_batch  → on open: initListBox, list_views, set scale checkbox state
+ *     → addRollout roll_global → on open: восстановить scale
+ *     → addRollout roll_states → on open: refreshStates
+ *     → addRollout roll_lang   → on open: drp_lang (язык), версия, ссылка на репозиторий
 */
 macroScript Pankovea_BatchViewsManager
 	category:     "#PankovScripts"
@@ -93,6 +95,85 @@ macroScript Pankovea_BatchViewsManager
 	icon:         #("extratools", 1)
 (
 	--------------------------------------------------------------
+	-- i18n: общий модуль локализации (#PankovScripts-L10N.ms)
+	-- L10N -- глобальный и живёт всю сессию Max, поэтому может быть
+	-- устаревшим (движок без engineVer или старше текущего). Сравнение
+	-- версий заставляет перезагрузить движок при первом запуске.
+	global L10N
+	local l10n_stale = (L10N == undefined)
+	if not l10n_stale do (
+		try ( if L10N.engineVer < 2 then l10n_stale = true ) catch ( l10n_stale = true )
+	)
+	if l10n_stale do (
+		-- Встроенный английский словарь: только строки, которых нет
+		-- в коде скрипта (динамические сообщения и заголовки диалогов).
+		local l10n_en = Dictionary #(
+			"appTitle", "Batch Views Manager") #(
+			"titleCameras", "Cameras") #(
+			"titleError", "Error") #(
+			"titleCameraBase", "Camera Base") #(
+			"titleBatchViews", "Batch Views") #(
+			"titleApplyState", "Apply Scene State") #(
+			"titleManageStates", "Manage Scene States") #(
+			"titleNewState", "New Scene State") #(
+			"titleUpdateState", "Update Scene State") #(
+			"titleRenameState", "Rename Scene State") #(
+			"titleDeleteState", "Delete Scene State") #(
+			"camerasInfo", "Single click — preview camera parameters and resolution in the UI (scene unchanged).\nDouble click — activate the camera and load its resolution into the scene.") #(
+			"selectCameraFirst", "Select a camera first") #(
+			"createdBatchViews", "Created batch views: {0}") #(
+			"viewExists", "View already exists.\nChange name and try again.") #(
+			"dirNotExist", "Directory doesn't exist") #(
+			"applyAsBase", "Apply {0}x{1} as base for this view?") #(
+			"batchViewsInfoMsg", "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state (checkbox unchanged).\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all.") #(
+			"deleteView", "Delete this view?") #(
+			"selectStateToApply", "Select a scene state to apply.") #(
+			"cantRestoreState", "Can't restore scene state:\n{0}") #(
+			"statesInfo", "Scene States manager.\n\nApply — restore the selected scene state.\nUpdate — overwrite the selected state with the current scene.\nNew — create a state from the selected one,\nappending a sequence number.\nDelete — remove the selected state.\n\nState name field: single click on a state\nloads its name — edit it and press Enter\nto rename.\n\n'Parts to capture' — select parts (light/camera/\nobject/layer/material/environment...)\nwith Ctrl+click when creating or overwriting\na state. Single click on a state loads its parts.") #(
+			"enterNewStateName", "Enter a name for the new state.") #(
+			"stateExists", "A state with this name already exists.") #(
+			"selectPartToCapture", "Select at least one part to capture.") #(
+			"cantCreateState", "Can't create scene state (Capture failed).") #(
+			"cantCreateStateEx", "Can't create scene state:\n{0}") #(
+			"selectStateToOverwrite", "Select a scene state to overwrite.") #(
+			"overwriteState", "Overwrite \"{0}\" with the current scene?") #(
+			"cantUpdateState", "Can't update scene state (Capture failed).") #(
+			"cantUpdateStateEx", "Can't update scene state:\n{0}") #(
+			"enterNewName", "Enter a new name.") #(
+			"cantRenameState", "Can't rename scene state:\n{0}") #(
+			"selectStateToDelete", "Select a scene state to delete.") #(
+			"deleteStateQuery", "Delete scene state \"{0}\"?") #(
+			"cantDeleteState", "Can't delete scene state:\n{0}") #(
+			"deleteEmptyGroup", "Delete empty group \"{0}\"?") #(
+			"groupWord", "Group") #(
+			"scaleText", "Scale: {0}%") #(
+			"deleteGroupQuery", "Delete \"{0}\"?") #(
+			"selectOutputFolder", "Select output folder") #(
+			"selectReFolder", "Select folder for Render Elements") #(
+			"version", "Version"
+		)
+		try (
+			L10N = fileIn ((getFilenamePath (getThisScriptFilename())) + "#PankovScripts-L10N.ms")
+			L10N.dictBase = (getFilenamePath (getThisScriptFilename())) + "#PankovScripts-BatchViewsManager"
+			L10N.discoverDicts()
+			L10N.registerDict "en" l10n_en
+		) catch ( L10N = undefined )
+	)
+	if L10N == undefined do (
+		struct _L10N_Fallback (
+			engineVer = 2,
+			lang = "en",
+			dictBase = "",
+			codes = #("en"),
+			langLabels = #(#("en", "English")),
+			fn trMsg key args: = key,
+			fn setLang code = true,
+			fn applyRollout roll = true,
+			fn langLabel code = code
+		)
+		L10N = _L10N_Fallback()
+	)
+	--------------------------------------------------------------
 	-- SHARED STATE (уровень макроса, обмен между свитками)
 	--------------------------------------------------------------
 	local g_floater
@@ -101,6 +182,10 @@ macroScript Pankovea_BatchViewsManager
 	local g_roll_batch
 	local g_roll_global
 	local g_roll_states
+	local g_roll_lang
+	local g_updating_lang = false
+	local g_version = "1.0.0 (2026-08-09)"
+	local g_repoUrl = "https://github.com/Pankovea"
 	local g_last_opened_tab = "Cams"
 	local g_accordion_lock = false
 
@@ -108,6 +193,7 @@ macroScript Pankovea_BatchViewsManager
 	local g_active_cam
 	local g_cam_list = #()          -- массив камер (node)
 	local g_curr_itm = 1
+	local g_only_visible = true     -- показывать только видимые камеры
 
 	-- batch views
 	local g_visibleIndices = #()    -- UI-индекс -> реальный индекс batch view
@@ -272,9 +358,16 @@ macroScript Pankovea_BatchViewsManager
 		default: 0
 	)
 
-	-- Получить отсортированный по имени список видимых камер сцены
+	-- Получить отсортированный по имени список камер сцены.
+	-- При g_only_visible=true показываются только видимые (не скрытые) камеры,
+	-- иначе — все камеры сцены.
 	fn getCameraList = (
-		local ls = for cam in cameras where (isKindOf cam camera) and not cam.isHidden collect cam
+		local ls
+		if g_only_visible then (
+			ls = for cam in cameras where (isKindOf cam camera) and not cam.isHidden collect cam
+		) else (
+			ls = for cam in cameras where (isKindOf cam camera) collect cam
+		)
 		qsort ls compareCamNames
 		ls
 	)
@@ -454,6 +547,34 @@ macroScript Pankovea_BatchViewsManager
 		)
 		the_view.name = finalName
 		true
+	)
+
+	-- Увеличить хвостовой номер в чистом имени:
+	-- "Cam 2" -> "Cam 3", "Cam2" -> "Cam3", без номера -> "Cam 2"
+	fn incrementNameNumber name = (
+		if name == undefined or name == "" then return "2"
+		local end = name.count
+		while end > 0 and (findstring "0123456789" name[end]) != undefined do end -= 1
+		if end == name.count then name + " 2" else (
+			local numStr = subString name (end + 1) (name.count - end)
+			local prefix = subString name 1 end
+			prefix + ((numStr as integer) + 1) as string
+		)
+	)
+
+	-- Имя для дубликата вида: увеличить номер в чистом имени источника,
+	-- сохранив суффикс разрешения ("Cam 2 (66% of 1920x1280)" -> "Cam 3 (66% of 1920x1280)").
+	-- Если такое имя занято — перебирать "Cam 4", "Cam 5", ...
+	fn duplicateViewName srcName excludeView = (
+		if srcName == undefined or srcName == "" then return "View"
+		local data = parseViewName srcName
+		local suffix = ""
+		if data[1].count < srcName.count then suffix = subString srcName (data[1].count + 1) -1
+		local candidate = incrementNameNumber data[1]
+		while not (isViewNameUnique (candidate + suffix) excludeView) do (
+			candidate = incrementNameNumber candidate
+		)
+		candidate + suffix
 	)
 	--) Конец ХЕЛПЕРЫ ИМЁН BATCH VIEWS
 	--------------------------------------------------------------
@@ -963,11 +1084,12 @@ macroScript Pankovea_BatchViewsManager
 	-- hasViews=false: простой queryBox (true=delete, false=cancel)
 	fn confirmDeleteGroup grpName hasViews = (
 		if not hasViews then (
-			if queryBox ("Delete empty group \"" + grpName + "\"?") then 2 else 0
+			if queryBox (L10N.trMsg "deleteEmptyGroup" args:#(grpName)) then 2 else 0
 		) else (
 			g_deleteGroupResult = 0
-			roll_del_confirm.lbl_msg.text = "Delete \"" + grpName + "\"?"
+			roll_del_confirm.lbl_msg.text = L10N.trMsg "deleteGroupQuery" args:#(grpName)
 			createDialog roll_del_confirm modal:true width:340
+			L10N.applyRollout roll_del_confirm
 			g_deleteGroupResult
 		)
 	)
@@ -997,6 +1119,7 @@ macroScript Pankovea_BatchViewsManager
 		if opened == undefined or opened == "" then opened = "Cams"
 		setINISetting iniPath "CamManager" "RolloutOpened" opened
 		setINISetting iniPath "CamManager" "Snap" (g_snap as string)
+		setINISetting iniPath "CamManager" "OnlyVisible" (g_only_visible as string)
 	)
 
 		-- Есть ли реальные batch views (не только группы-разделители)?
@@ -1022,7 +1145,7 @@ macroScript Pankovea_BatchViewsManager
 		if state do (
 			local keepGlobal = (thisRollout == g_roll_batch)
 			local keepBatch  = (thisRollout == g_roll_global)
-			for other in #(g_roll_cams, g_roll_batch, g_roll_global, g_roll_states) do (
+			for other in #(g_roll_cams, g_roll_batch, g_roll_global, g_roll_states, g_roll_lang) do (
 				if other == undefined or other == thisRollout do continue
 				if other == g_roll_global and keepGlobal do continue
 				if other == g_roll_batch and keepBatch do continue
@@ -1035,6 +1158,7 @@ macroScript Pankovea_BatchViewsManager
 		else if g_roll_batch != undefined and g_roll_batch.open then g_last_opened_tab = "Batch"
 		else if g_roll_global != undefined and g_roll_global.open then g_last_opened_tab = "Global"
 		else if g_roll_states != undefined and g_roll_states.open then g_last_opened_tab = "States"
+		else if g_roll_lang != undefined and g_roll_lang.open then g_last_opened_tab = "Lang"
 		updateFloaterHeight()
 	)
 	--) Конец СЕРВИСНЫЕ ФУНКЦИИ FLOATER
@@ -1046,8 +1170,10 @@ macroScript Pankovea_BatchViewsManager
 	local roll_Cams = rollout roll_Cams "Cameras" (
 		local roll_w = 250
 		--------------------------------
-		button btn_refresh "🔄️ Refresh" width:(roll_w / 2) align:#left offset:[roll_w / 2 - 45, 0] \
+		button btn_refresh "🔄️ Refresh" width:120 align:#left across:2 \
 			tooltip:"Update scene cameras list"
+		checkbox chk_only_visible "Only Visible" align:#right \
+			tooltip:"Show only visible cameras.\nOff — show all cameras in the scene."
 		dotNetControl lst_cams "System.Windows.Forms.ListBox" height:265 offset:[-10, 0]
 		button btn_cams_info "?" width:20 height:18 align:#right offset:[10,-23] tooltip:"Single click — preview camera parameters and resolution in the UI (scene unchanged).\nDouble click — activate the camera and load its resolution into the scene."
 		button btn_pick_pathrev_cam "<<" width:60 align:#left across:3 tooltip:"Previous camera"
@@ -1298,6 +1424,7 @@ macroScript Pankovea_BatchViewsManager
 		--------------------------------
 		on roll_Cams open do (
 			initCamListBox()
+			chk_only_visible.checked = g_only_visible
 			relist_cams()
 			change_active()
 			syncCameraUI()
@@ -1313,6 +1440,13 @@ macroScript Pankovea_BatchViewsManager
 			relist_cams()
 			change_active()
 			syncCameraUI()
+		)
+
+		on chk_only_visible changed state do (
+			g_only_visible = state
+			relist_cams()
+			syncCameraUI()
+			if g_roll_batch != undefined do g_roll_batch.list_views()
 		)
 
 		on btn_s pressed do ( selCam active_cam )
@@ -1347,7 +1481,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_cams_info pressed do (
-			messageBox "Single click — preview camera parameters and resolution in the UI (scene unchanged).\nDouble click — activate the camera and load its resolution into the scene." title:"Cameras"
+			messageBox (L10N.trMsg "camerasInfo") title:(L10N.trMsg "titleCameras")
 		)
 
 		-- CAMERA PARAMETERS
@@ -1383,7 +1517,7 @@ macroScript Pankovea_BatchViewsManager
 		-- CREATE BATCH VIEW
 		on btn_create_view pressed do (
 			if active_cam == undefined or not (isValidNode active_cam) then (
-				messageBox "Select a camera first" title:"Cameras"
+				messageBox (L10N.trMsg "selectCameraFirst") title:(L10N.trMsg "titleCameras")
 				return false
 			)
 			local bv = createBatchViewForCam active_cam
@@ -1405,7 +1539,7 @@ macroScript Pankovea_BatchViewsManager
 				g_roll_batch.list_views()
 				g_roll_batch.open = true
 			)
-			messageBox ("Created batch views: " + (created as string)) title:"Cameras"
+			messageBox (L10N.trMsg "createdBatchViews" args:#(created)) title:(L10N.trMsg "titleCameras")
 		)
 
 	)
@@ -1757,9 +1891,12 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
-		-- Заполнить drdwn_cam выпадающий список камер
+		-- Заполнить drdwn_cam выпадающий список камер.
+		-- ВСЕГДА все камеры сцены, независимо от галки "Only Visible".
 		fn list_cameras_for_batch = (
-			local cam_names = for cam in (getCameraList()) collect (getCameraDisplayName cam)
+			local cams = for cam in cameras where (isKindOf cam camera) collect cam
+			qsort cams compareCamNames
+			local cam_names = for cam in cams collect (getCameraDisplayName cam)
 			drdwn_cam.items = #("---------------------") + cam_names
 		)
 
@@ -2175,7 +2312,7 @@ macroScript Pankovea_BatchViewsManager
 				if prefix == PROP_COLLAPSED or prefix == PROP_EXPANDED do newName = prefix + newName
 				if bv.name != newName then (
 					if batchRenderMgr.FindView newName then (
-						messageBox "View already exists.\nChange name and try again."
+						messageBox (L10N.trMsg "viewExists")
 						return undefined
 					)
 					bv.name = newName
@@ -2186,7 +2323,7 @@ macroScript Pankovea_BatchViewsManager
 				local finalName = if baseW > 0 and baseH > 0 then viewNameFor clean baseW baseH else clean
 				if bv.name != finalName then (
 					if batchRenderMgr.FindView finalName and bv.name != finalName then (
-						messageBox "View already exists.\nChange name and try again."
+						messageBox (L10N.trMsg "viewExists")
 						return undefined
 					)
 					bv.name = finalName
@@ -2205,7 +2342,7 @@ macroScript Pankovea_BatchViewsManager
 				bv.outputFilename = g_view_path
 				any_changed = true
 			) else (
-				messageBox "Directory doesn't exist" title:"Error"
+				messageBox (L10N.trMsg "dirNotExist") title:(L10N.trMsg "titleError")
 				return undefined
 			)
 
@@ -2341,7 +2478,7 @@ macroScript Pankovea_BatchViewsManager
 						)
 						local res = getCamResFromViews cam
 						if res[1] > 0 and res[2] > 0 then (
-							if queryBox ("Apply " + res[1] as string + "x" + res[2] as string + " as base for this view?") title:"Camera Base" do (
+							if queryBox (L10N.trMsg "applyAsBase" args:#(res[1], res[2])) title:(L10N.trMsg "titleCameraBase") do (
 								close_batch_window()
 								setViewBase bv res[1] res[2]
 								list_views()
@@ -2383,7 +2520,7 @@ macroScript Pankovea_BatchViewsManager
 			if txt_view_path.text != "" then (
 				if doesfileexist txt_view_path.text then (
 					ShellLaunch "explorer.exe" ("\"" + txt_view_path.text + "\"")
-				) else messageBox "Directory doesn't exist" title:"Error"
+				) else messageBox (L10N.trMsg "dirNotExist") title:(L10N.trMsg "titleError")
 			)
 		)
 
@@ -2569,7 +2706,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_views_info pressed do (
-			messageBox "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state (checkbox unchanged).\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all." title:"Batch Views"
+			messageBox (L10N.trMsg "batchViewsInfoMsg") title:(L10N.trMsg "titleBatchViews")
 		)
 
 		-- DELETE VIEW / GROUP
@@ -2607,7 +2744,7 @@ macroScript Pankovea_BatchViewsManager
 					batchRenderMgr.DeleteView realIdx
 				)
 			) else (
-				if not (queryBox "Delete this view?") do return false
+				if not (queryBox (L10N.trMsg "deleteView")) do return false
 				batchRenderMgr.DeleteView realIdx
 			)
 
@@ -2624,28 +2761,46 @@ macroScript Pankovea_BatchViewsManager
 			if getSel() != 0 then (
 				local realIdx = getRealIndex (getSel())
 				local srcView = batchRenderMgr.GetView realIdx
+				if srcView == undefined do return false
 				local viewName = srcView.name
 				local srcFile = srcView.outputFilename
 				batchRenderMgr.DuplicateView realIdx
 				-- Дубликат создаётся в конце списка
 				local dupView = batchRenderMgr.GetView batchRenderMgr.numViews
-				local dupName = dupView.name
-				-- К имени файла добавить тот же числовой суффикс,
-				-- который Max добавил к имени вида ("CamA" -> "CamA 02", "CamA_2", ...)
-				if srcFile != undefined and srcFile != "" then (
-					local suffix = ""
-					if dupName.count > viewName.count and (subString dupName 1 viewName.count) == viewName then
-						suffix = subString dupName (viewName.count + 1) -1
-					if suffix != "" then (
-						dupView.outputFilename = (getFilenamePath srcFile) + (getFilenameFile srcFile) + suffix + (getFilenameType srcFile)
+				if dupView != undefined then (
+					-- Правильное имя дубликата: увеличить номер в чистом имени источника,
+					-- сохранив суффикс разрешения ("Cam 2 (66% of 1920x1280)" -> "Cam 3 (66% of 1920x1280)")
+					local dupName = duplicateViewName viewName dupView
+					dupView.name = dupName
+					-- Обновить имя файла вывода: заменить в нём чистое имя источника на новое
+					if srcFile != undefined and srcFile != "" then (
+						local path = getFilenamePath srcFile
+						local fname = getFilenameFile srcFile
+						local ftype = getFilenameType srcFile
+						local oldClean = getCleanViewName viewName
+						local newClean = getCleanViewName dupName
+						local p = findString fname oldClean
+						if p != undefined and oldClean != "" then (
+							fname = replace fname p oldClean.count newClean
+						) else (
+							fname = fname + " 02"
+						)
+						dupView.outputFilename = path + fname + ftype
 					)
-				)
-				move_view_index batchRenderMgr.numViews (realIdx + 1)
-				list_views()
-				for i = 1 to g_visibleIndices.count do (
-					if (batchRenderMgr.GetView g_visibleIndices[i]).name == dupName do (
-						setSel (i + 1); exit
+					move_view_index batchRenderMgr.numViews (realIdx + 1)
+					list_views()
+					-- Выделить созданный дубликат
+					local selSet = false
+					for i = 1 to g_visibleIndices.count do (
+						if (batchRenderMgr.GetView g_visibleIndices[i]).name == dupName do (
+							setSel i
+							g_active_view = get_view_params g_visibleIndices[i]
+							selSet = true
+							exit
+						)
 					)
+					if not selSet do setSel 0
+					lst_views_update_buttons()
 				)
 			)
 		)
@@ -2707,7 +2862,7 @@ macroScript Pankovea_BatchViewsManager
 			local n = 0
 			do (
 				n += 1
-				sep_name = " ----- Group " + n as string + " -----"
+				sep_name = " ----- " + L10N.trMsg "groupWord" + " " + n as string + " -----"
 			) while not (isGroupNameAvailable sep_name)
 
 			local sep_view = batchRenderMgr.CreateView undefined
@@ -2950,7 +3105,7 @@ macroScript Pankovea_BatchViewsManager
 		fn updateScaleDisplay percent = (
 			if percent == undefined then percent = 1
 			local displayPercent = getClosestScaleValue percent
-			sld_global_res.text = "Scale: " + ((displayPercent * 100) as integer) as string + "%"
+			sld_global_res.text = L10N.trMsg "scaleText" args:#(((displayPercent * 100) as integer) as string)
 			updating_scale = true
 			sld_global_res.value = getSliderIndexByPercent displayPercent
 			updating_scale = false
@@ -3027,7 +3182,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_set_folder pressed do (
-			local folder = getSavePath caption:"Select output folder"
+			local folder = getSavePath caption:(L10N.trMsg "selectOutputFolder")
 			if folder == undefined do return false
 			local count = setOutputFolderForAll folder
 			if chk_update_re.checked do setRePathsForAll folder
@@ -3040,7 +3195,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_update_re pressed do (
-			local folder = getSavePath caption:"Select folder for Render Elements"
+			local folder = getSavePath caption:(L10N.trMsg "selectReFolder")
 			if folder == undefined do return false
 			setRePathsForAll folder
 		)
@@ -3228,13 +3383,13 @@ macroScript Pankovea_BatchViewsManager
 
 		-- Восстановить состояние сцены
 		fn state_retore = (
-			if getStatesSel() <= 0 do ( messageBox "Select a scene state to apply." title:"Apply Scene State"; return false )
+			if getStatesSel() <= 0 do ( messageBox (L10N.trMsg "selectStateToApply") title:(L10N.trMsg "titleApplyState"); return false )
 			local name = lst_states.SelectedItem as string
 			try (
 				local ssp = sceneStateMgr.GetParts name
 				sceneStateMgr.Restore name ssp
 			) catch (
-				messageBox ("Can't restore scene state:\n" + (getCurrentException() as string)) title:"Apply Scene State"
+				messageBox (L10N.trMsg "cantRestoreState" args:#(getCurrentException())) title:(L10N.trMsg "titleApplyState")
 				return false
 			)
 		)
@@ -3263,7 +3418,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_states_info pressed do (
-			messageBox "Scene States manager.\n\nApply — restore the selected scene state.\nUpdate — overwrite the selected state with the current scene.\nNew — create a state from the selected one,\nappending a sequence number.\nDelete — remove the selected state.\n\nState name field: single click on a state\nloads its name — edit it and press Enter\nto rename.\n\n'Parts to capture' — select parts (light/camera/\nobject/layer/material/environment...)\nwith Ctrl+click when creating or overwriting\na state. Single click on a state loads its parts." title:"Manage Scene States"
+			messageBox (L10N.trMsg "statesInfo") title:(L10N.trMsg "titleManageStates")
 		)
 
 		on btn_parts_all pressed do ( selectAllParts() )
@@ -3275,18 +3430,18 @@ macroScript Pankovea_BatchViewsManager
 				name = nextStateName (lst_states.SelectedItem as string)
 			) else (
 				name = trimLeft (trimRight txt_states_new.text)
-				if name == "" do ( messageBox "Enter a name for the new state." title:"New Scene State"; return false )
-				if findItem (stateNames()) name != 0 do ( messageBox "A state with this name already exists." title:"New Scene State"; return false )
+				if name == "" do ( messageBox (L10N.trMsg "enterNewStateName") title:(L10N.trMsg "titleNewState"); return false )
+				if findItem (stateNames()) name != 0 do ( messageBox (L10N.trMsg "stateExists") title:(L10N.trMsg "titleNewState"); return false )
 			)
 			local parts = selectedParts()
-			if parts.isEmpty do ( messageBox "Select at least one part to capture." title:"New Scene State"; return false )
+			if parts.isEmpty do ( messageBox (L10N.trMsg "selectPartToCapture") title:(L10N.trMsg "titleNewState"); return false )
 			try (
 				if not (sceneStateMgr.Capture name parts) then (
-					messageBox "Can't create scene state (Capture failed)." title:"New Scene State"
+					messageBox (L10N.trMsg "cantCreateState") title:(L10N.trMsg "titleNewState")
 					return false
 				)
 			) catch (
-				messageBox ("Can't create scene state:\n" + (getCurrentException() as string)) title:"New Scene State"
+				messageBox (L10N.trMsg "cantCreateStateEx" args:#(getCurrentException())) title:(L10N.trMsg "titleNewState")
 				return false
 			)
 			refreshStates()
@@ -3296,19 +3451,19 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_states_update pressed do (
-			if getStatesSel() <= 0 do ( messageBox "Select a scene state to overwrite." title:"Update Scene State"; return false )
+			if getStatesSel() <= 0 do ( messageBox (L10N.trMsg "selectStateToOverwrite") title:(L10N.trMsg "titleUpdateState"); return false )
 			local name = lst_states.SelectedItem as string
-			if not (queryBox ("Overwrite \"" + name + "\" with the current scene?") title:"Update Scene State") do return false
+			if not (queryBox (L10N.trMsg "overwriteState" args:#(name)) title:(L10N.trMsg "titleUpdateState")) do return false
 			local parts = selectedParts()
-			if parts.isEmpty do ( messageBox "Select at least one part to capture." title:"Update Scene State"; return false )
+			if parts.isEmpty do ( messageBox (L10N.trMsg "selectPartToCapture") title:(L10N.trMsg "titleUpdateState"); return false )
 			try (
 				sceneStateMgr.Delete name
 				if not (sceneStateMgr.Capture name parts) then (
-					messageBox "Can't update scene state (Capture failed)." title:"Update Scene State"
+					messageBox (L10N.trMsg "cantUpdateState") title:(L10N.trMsg "titleUpdateState")
 					return false
 				)
 			) catch (
-				messageBox ("Can't update scene state:\n" + (getCurrentException() as string)) title:"Update Scene State"
+				messageBox (L10N.trMsg "cantUpdateStateEx" args:#(getCurrentException())) title:(L10N.trMsg "titleUpdateState")
 				return false
 			)
 			if g_roll_batch != undefined do g_roll_batch.refreshStatesList()
@@ -3319,13 +3474,13 @@ macroScript Pankovea_BatchViewsManager
 			if getStatesSel() <= 0 do return false
 			local oldName = lst_states.SelectedItem as string
 			local newName = trimLeft (trimRight val)
-			if newName == "" do ( messageBox "Enter a new name." title:"Rename Scene State"; return false )
+			if newName == "" do ( messageBox (L10N.trMsg "enterNewName") title:(L10N.trMsg "titleRenameState"); return false )
 			if newName == oldName do return false
-			if findItem (stateNames()) newName != 0 do ( messageBox "A state with this name already exists." title:"Rename Scene State"; return false )
+			if findItem (stateNames()) newName != 0 do ( messageBox (L10N.trMsg "stateExists") title:(L10N.trMsg "titleRenameState"); return false )
 			try (
 				sceneStateMgr.Rename oldName newName
 			) catch (
-				messageBox ("Can't rename scene state:\n" + (getCurrentException() as string)) title:"Rename Scene State"
+				messageBox (L10N.trMsg "cantRenameState" args:#(getCurrentException())) title:(L10N.trMsg "titleRenameState")
 				return false
 			)
 			refreshStates()
@@ -3335,13 +3490,13 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_states_del pressed do (
-			if getStatesSel() <= 0 do ( messageBox "Select a scene state to delete." title:"Delete Scene State"; return false )
+			if getStatesSel() <= 0 do ( messageBox (L10N.trMsg "selectStateToDelete") title:(L10N.trMsg "titleDeleteState"); return false )
 			local name = lst_states.SelectedItem as string
-			if not (queryBox ("Delete scene state \"" + name + "\"?") title:"Delete Scene State") do return false
+			if not (queryBox (L10N.trMsg "deleteStateQuery" args:#(name)) title:(L10N.trMsg "titleDeleteState")) do return false
 			try (
 				sceneStateMgr.Delete name
 			) catch (
-				messageBox ("Can't delete scene state:\n" + (getCurrentException() as string)) title:"Delete Scene State"
+				messageBox (L10N.trMsg "cantDeleteState" args:#(getCurrentException())) title:(L10N.trMsg "titleDeleteState")
 				return false
 			)
 			refreshStates()
@@ -3353,7 +3508,70 @@ macroScript Pankovea_BatchViewsManager
 
 
 	--------------------------------------------------------------
+	--( ROLLOUT: LANGUAGE & INFO
+
+	local roll_lang = rollout roll_lang "Language & Info" (
+		local roll_w = 250
+		--------------------------------
+		group "Language" (
+			dropdownlist drp_lang items:#() width:(roll_w - 40) offset:[0,5] \
+				tooltip:"Switch interface language"
+		)
+
+		group "About" (
+			label lbl_version "" align:#left offset:[0,5]
+			hyperLink lbl_repo "https://github.com/Pankovea" address:"https://github.com/Pankovea" align:#left \
+				offset:[0,3]
+		)
+		--------------------------------
+		local updating_lang = false
+		--------------------------------
+
+		on roll_lang open do (
+			local langItems = #()
+			for code in L10N.codes do append langItems (L10N.langLabel code)
+			drp_lang.items = langItems
+			local langIdx = findItem L10N.codes L10N.lang
+			if langIdx == 0 then langIdx = 1
+			updating_lang = true
+			drp_lang.selection = langIdx
+			updating_lang = false
+			lbl_version.text = L10N.trMsg "version" + ": " + g_version
+		)
+
+		on roll_lang close do ( saveFloaterState() )
+		on roll_lang rolledUp state do ( accordion roll_lang state )
+
+		on drp_lang selected idx do (
+			if updating_lang then return false
+			local code = L10N.codes[idx]
+			if code == undefined do return false
+			if code == L10N.lang do return false
+			setINISetting (getmaxinifile()) "CamManager" "Language" code
+			L10N.setLang code
+			-- Применить перевод на месте, без пересоздания окна:
+			-- хендлеры свитков не видят функции, объявленные ПОСЛЕ свитков,
+			-- поэтому showUI() здесь вызывать нельзя.
+			for r in #(g_roll_cams, g_roll_batch, g_roll_global, g_roll_states, g_roll_lang) do (
+				try ( L10N.applyRollout r ) catch ()
+			)
+			try ( g_floater.title = L10N.trMsg "appTitle" ) catch ()
+			try ( g_roll_global.updateScaleDisplay g_globalScale ) catch ()
+			try ( lbl_version.text = L10N.trMsg "version" + ": " + g_version ) catch ()
+		)
+	)
+
+	--) Конец ROLLOUT: LANGUAGE & INFO
+	--------------------------------------------------------------
+
+
+	--------------------------------------------------------------
 	-- TOOL MAIN UI
+	fn getLangCode = (
+		local code = getINISetting (getmaxinifile()) "CamManager" "Language"
+		if code == "" or findItem L10N.codes code == 0 then "en" else code
+	)
+
 	fn showUI =
 	(
 		local res = false
@@ -3365,6 +3583,9 @@ macroScript Pankovea_BatchViewsManager
 			g_roll_batch  = roll_batch
 			g_roll_global = roll_global
 			g_roll_states = roll_states
+			g_roll_lang   = roll_lang
+
+			L10N.setLang (getLangCode())
 
 			local iniPath = getmaxinifile()
 			local posStr = getINISetting iniPath "CamManager" "Position"
@@ -3372,26 +3593,37 @@ macroScript Pankovea_BatchViewsManager
 			if posStr != "" and sizeStr != "" then (
 				local p = execute posStr
 				local s = execute sizeStr
-				g_floater = newRolloutFloater "Batch Views Manager" s[1] s[2] p[1] p[2] lockHeight:false lockWidth:true
+				g_floater = newRolloutFloater (L10N.trMsg "appTitle") s[1] s[2] p[1] p[2] lockHeight:false lockWidth:true
 			) else (
-				g_floater = newRolloutFloater "Batch Views Manager" g_dialog_width 663 50 50 lockHeight:false lockWidth:true
+				g_floater = newRolloutFloater (L10N.trMsg "appTitle") g_dialog_width 663 50 50 lockHeight:false lockWidth:true
 			)
 			local rolloutOpened = getINISetting iniPath "CamManager" "RolloutOpened"
 			if not (hasBatchViews()) then rolloutOpened = "Cams"
-			if rolloutOpened != "Batch" and rolloutOpened != "Global" and rolloutOpened != "States" then rolloutOpened = "Cams"
+			if rolloutOpened != "Batch" and rolloutOpened != "Global" and rolloutOpened != "States" and rolloutOpened != "Lang" then rolloutOpened = "Cams"
 			local snapStr = getINISetting iniPath "CamManager" "Snap"
 			try ( if snapStr != "" then g_snap = (snapStr as BooleanClass) ) catch ()
+			local ovStr = getINISetting iniPath "CamManager" "OnlyVisible"
+			try ( if ovStr != "" then g_only_visible = (ovStr as BooleanClass) ) catch ()
 			g_accordion_lock = true
 			addRollout g_roll_cams g_floater rolledup:(rolloutOpened != "Cams")
 			addRollout g_roll_batch g_floater rolledUp:(rolloutOpened != "Batch")
 			addRollout g_roll_global g_floater rolledUp:(rolloutOpened != "Global")
 			addRollout g_roll_states g_floater rolledUp:(rolloutOpened != "States")
+			addRollout g_roll_lang g_floater rolledUp:(rolloutOpened != "Lang")
 			g_roll_cams.open   = (rolloutOpened == "Cams")
 			g_roll_batch.open  = (rolloutOpened == "Batch")
 			g_roll_global.open = (rolloutOpened == "Global")
 			g_roll_states.open = (rolloutOpened == "States")
+			g_roll_lang.open   = (rolloutOpened == "Lang")
 			g_accordion_lock = false
 			g_last_opened_tab = rolloutOpened
+
+			L10N.applyRollout g_roll_cams
+			L10N.applyRollout g_roll_batch
+			L10N.applyRollout g_roll_global
+			L10N.applyRollout g_roll_states
+			L10N.applyRollout g_roll_lang
+
 			updateFloaterHeight()
 
 			res = true

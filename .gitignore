@@ -6,5 +6,6 @@
 
 !.gitignore
 !usermacros/#PankovScripts-*.mcr
+!usermacros/#PankovScripts-*.ms
 !usericons/pankov_*.bmp
 !README*.md
