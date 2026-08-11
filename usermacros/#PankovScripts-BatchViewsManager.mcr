@@ -850,6 +850,17 @@ macroScript Pankovea_BatchViewsManager
 		redrawViews()
 	)
 
+	-- Проверить, активирован ли вид в сцене: его камера стоит в каком-либо вьюпорте
+	fn isViewActivated the_view = (
+		if the_view == undefined then return false
+		local cam = the_view.camera
+		if not (isValidNode cam) or not (isKindOf cam camera) then return false
+		for i in 1 to viewport.numViews do (
+			if (viewport.getCamera index:i) == cam do return true
+		)
+		false
+	)
+
 	-- Синхронизировать все виды камеры с источником.
 	-- srcBase — база источника; srcCur — текущее (масштабированное) разрешение источника.
 	-- Зависит от галки "Base size" (chk_edit_base):
@@ -1619,6 +1630,10 @@ macroScript Pankovea_BatchViewsManager
 			spinner spn_start_frame "Start" type:#integer range:[0,99999,0] fieldWidth:60 across:2 align:#left offset:[0,10]
 			spinner spn_end_frame "End" type:#integer range:[0,99999,100] fieldWidth:60 align:#left offset:[0,10]
 
+			-- Невидимый таймер: задержка применения вида по «второму клику»,
+			-- чтобы отличить его от двойного клика (двойной клик — вкл/выкл).
+			timer tmr_apply "applyTimer" interval:300 active:false
+
 		--)
 
 
@@ -1627,15 +1642,15 @@ macroScript Pankovea_BatchViewsManager
 		local loading_view = false
 		local suppress_res_events = false
 		local suppress_preset_events = false
-		-- Клики: первый клик — выделение, повторный клик по уже выделенному → toggle.
+		-- Клики: первый клик — выделение, повторный клик по уже выделенному → загрузка в сцену.
 		-- prev_sel — выделение на момент прошлого клика
 		local prev_sel = 0
 		-- Флаг: следующий MouseUp — хвост двойного клика (Windows шлёт MouseUp на каждый клик,
-		-- а MouseDoubleClick срабатывает между ними). По нему второй клик не делает второй toggle.
+		-- а MouseDoubleClick срабатывает между ними). По нему второй клик не делает второе действие.
 		local g_dblPending = false
-		-- Последний re-click toggle: #(realIdx, enabled_до_переключения).
-		-- MouseDoubleClick откатывает его, чтобы двойной клик не менял галку.
-		local g_lastToggle = undefined
+		-- Отложенное применение вида (realIdx) через tmr_apply: повторный клик = «применить в сцену»,
+		-- но если до тика придёт MouseDoubleClick — применение отменяется (двойной клик = вкл/выкл).
+		local g_pending_apply = 0
 		--------------------------------
 
 		-- ПОРЯДОК СОБЫТИЙ WINFORMS (проверено тестовым скриптом, флоатер с ListBox, 3ds Max 2026):
@@ -1645,14 +1660,25 @@ macroScript Pankovea_BatchViewsManager
 		-- Итого РОВНО два MouseUp, Click на втором клике НЕ приходит — его заменяет DoubleClick.
 		-- Следствие: «чистого» разделения одинарного/двойного клика в MouseUp не существует —
 		-- первый клик двойного нажатия НЕ отличить от одиночного. Поэтому:
-		--   * toggle (галка / сворачивание) срабатывает в MouseUp первого клика двойного тоже;
-		--   * чтобы двойной клик не менял галку, MouseDoubleClick откатывает этот toggle
-		--     через g_lastToggle;
-		--   * второй (хвостовой) MouseUp гасится флагом g_dblPending, иначе был бы лишний toggle.
-		-- Группа при двойном клике не сворачивается: MouseDoubleClick делает early-return,
-		-- но g_dblPending всё равно ставится, чтобы хвостовой MouseUp не сделал toggle.
+		--   * «второй клик» по выделенному элементу (вид — загрузка в сцену, группа — свернуть/развернуть)
+		--     откладывается через tmr_apply;
+		--   * если до тика пришёл MouseDoubleClick — отложенное действие отменяется, вместо него
+		--     вид — вкл/выкл, группа — свернуть/развернуть;
+		--   * второй (хвостовой) MouseUp гасится флагом g_dblPending, иначе было бы лишнее действие.
 
 		-- Маппинг UI-индекс → реальный индекс batch view строится в list_views
+
+		-- Включить двойную буферизацию dotNet-контрола (свойство DoubleBuffered
+		-- защищённое — доступ через рефлексию). Owner-draw ListBox без неё мигает
+		-- при каждой перерисовке (выделение, Invalidate).
+		fn enableDoubleBuffered ctrl = (
+			try (
+				-- BindingFlags: Instance | NonPublic (свойство DoubleBuffered защищённое)
+				local bf = bitor (dotNetClass "System.Reflection.BindingFlags").Instance (dotNetClass "System.Reflection.BindingFlags").NonPublic
+				local prop = (dotNetClass "System.Windows.Forms.Control").GetProperty "DoubleBuffered" bf
+				if prop != undefined do prop.SetValue ctrl true
+			) catch ()
+		)
 
 		-- Инициализация dotNet ListBox
 		fn initListBox = (
@@ -1664,6 +1690,7 @@ macroScript Pankovea_BatchViewsManager
 			lst_views.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
 			lst_views.ForeColor = (dotNetClass "System.Drawing.Color").White
 			lst_views.EndUpdate()
+			enableDoubleBuffered lst_views
 			lst_views.Invalidate()
 		)
 
@@ -2374,6 +2401,12 @@ macroScript Pankovea_BatchViewsManager
 			if selected_scene_state != bv.sceneStateName do (
 				bv.sceneStateName = selected_scene_state
 				any_changed = true
+				-- Если вид активирован в сцене — сразу применить новое состояние сцены
+				if selected_scene_state != "" and isViewActivated bv then (
+					local ssp = sceneStateMgr.GetParts selected_scene_state
+					sceneStateMgr.Restore selected_scene_state ssp
+					redrawViews()
+				)
 			)
 
 			if baseW > 0 and baseH > 0 and chk_sync_views.checked and isValidNode bv.camera do (
@@ -2413,7 +2446,10 @@ macroScript Pankovea_BatchViewsManager
 			selectFirstViewForCamera cam
 		)
 
-		on roll_batch close do ( saveFloaterState() )
+		on roll_batch close do (
+			try ( tmr_apply.active = false ) catch ()
+			saveFloaterState()
+		)
 		on roll_batch rolledUp state do ( accordion roll_batch state )
 
 		on btn_open_batch pressed do ( actionMan.executeAction -43434444 "4096" )
@@ -2447,7 +2483,13 @@ macroScript Pankovea_BatchViewsManager
 		on txt_view_path entered txt do view_update()
 		on txt_view_file entered txt do view_update()
 
-		on drdwn_state selected index do view_update()
+		on drdwn_state selected index do (
+			-- Программная установка из get_view_params (loading_view=true) не должна
+			-- вызывать view_update: иначе при выделении вида список может перестроиться
+			-- (view_update → переименование → list_views) и мигать.
+			if loading_view then return false
+			view_update()
+		)
 		on spn_start_frame changed val do (
 			if loading_view then return false
 			if getSel() != 0 then (
@@ -2593,17 +2635,31 @@ macroScript Pankovea_BatchViewsManager
 			true
 		)
 
+		-- Найти ближайший UI-индекс вида (НЕ группы) в направлении dir (-1/1) от startIdx.
+		-- 0 — если в этом направлении видов больше нет.
+		fn findViewUiIndex startIdx dir = (
+			local n = g_visibleIndices.count
+			local i = startIdx + dir
+			while i >= 1 and i <= n do (
+				local r = getRealIndex i
+				local v = if r > 0 then batchRenderMgr.GetView r else undefined
+				if v != undefined and not (isGroupView v) do return i
+				i += dir
+			)
+			0
+		)
+
 		on btn_prev_view pressed do (
 			local uiIdx = getSel()
-			if uiIdx > 1 then uiIdx -= 1
-			selectViewByUiIndex uiIdx
+			if uiIdx == 0 do uiIdx = g_visibleIndices.count + 1
+			local target = findViewUiIndex uiIdx -1
+			if target > 0 then selectViewByUiIndex target
 		)
 
 		on btn_next_view pressed do (
 			local uiIdx = getSel()
-			if uiIdx == 0 then uiIdx = 1
-			else if uiIdx < g_visibleIndices.count then uiIdx += 1
-			selectViewByUiIndex uiIdx
+			local target = findViewUiIndex uiIdx 1
+			if target > 0 then selectViewByUiIndex target
 		)
 
 		on btn_select_cam pressed do (
@@ -2634,18 +2690,19 @@ macroScript Pankovea_BatchViewsManager
 
 		-- Одиночный клик без Ctrl/Shift:
 		--   первый клик — только выделение (галочка не меняется);
-		--   повторный клик по выделенному элементу → toggle (вид: enabled, группа: свернуть/развернуть).
+		--   повторный клик по выделенному элементу → загрузка вида в сцену (с задержкой через
+		--   tmr_apply, чтобы отличить от двойного клика); группа — свернуть/развернуть.
 		-- Ctrl/Shift+клик — только управление выделением, галку не трогаем.
-		-- Двойной клик по виду — загрузка в сцену БЕЗ изменения галки (см. MouseDoubleClick).
+		-- Двойной клик по виду — вкл/выкл (см. MouseDoubleClick).
 		-- Windows шлёт MouseUp на каждый клик; при двойном клике хвостовые MouseUp гасятся
-		-- флагом g_dblPending, а toggle от первого клика откатывается в MouseDoubleClick.
+		-- флагом g_dblPending, а отложенное применение отменяется в MouseDoubleClick.
 		-- Invalidate() после клика убирает залипшие подсветки старых строк.
 		on lst_views MouseUp sender args do (
 			if (args.Button.ToString()) != "Left" do return false
 			local uiIdx = (lst_views.IndexFromPoint args.X args.Y) + 1
 			if uiIdx <= 0 or uiIdx > g_visibleIndices.count do return false
 
-			-- Второй клик двойного нажатия: toggle уже сделал первый клик (или MouseDoubleClick),
+			-- Второй клик двойного нажатия: действие уже сделал первый клик (или MouseDoubleClick),
 			-- этот MouseUp — просто хвост двойного клика.
 			if g_dblPending do (
 				g_dblPending = false
@@ -2655,33 +2712,49 @@ macroScript Pankovea_BatchViewsManager
 			local modStr = (dotNetClass "System.Windows.Forms.Control").ModifierKeys.ToString()
 			if matchPattern modStr pattern:"*Control*" or matchPattern modStr pattern:"*Shift*" do (
 				prev_sel = 0
-				g_lastToggle = undefined
+				g_pending_apply = 0
+				tmr_apply.active = false
 				lst_views.Invalidate()
 				return false
 			)
 
 			local realIdx = getRealIndex uiIdx
 			local the_view = if realIdx > 0 then batchRenderMgr.GetView realIdx else undefined
-			local isGroup = (the_view != undefined and isGroupView the_view)
 
 			if uiIdx == prev_sel and getSel() == uiIdx and (getSelectedUiIndices()).count == 1 then (
-				-- повторный клик по единственному выделенному элементу
-				if isGroup then (
-					toggleGroupCollapse realIdx
-				) else if the_view != undefined then (
-					-- запомнить состояние до toggle — MouseDoubleClick его откатит
-					g_lastToggle = #(realIdx, the_view.enabled)
-					setViewCheckedAtUi uiIdx (not the_view.enabled)
+				-- повторный клик по единственному выделенному элементу:
+				-- вид — применить в сцену, группа — свернуть/развернуть (отложено через
+				-- tmr_apply, чтобы отличить от двойного клика).
+				-- Список при этом не трогаем: содержимое не меняется, полная
+				-- перерисовка здесь была бы лишним «обновлением»/миганием.
+				if the_view != undefined then (
+					tmr_apply.active = false
+					g_pending_apply = realIdx
+					tmr_apply.active = true
 				)
 			) else (
-				-- новый выбор: только выделяем, галочку не трогаем
+				-- новый выбор: только выделяем, галочку не трогаем.
+				-- У owner-draw списка в хостинге 3ds Max нативной перерисовки строк при
+				-- смене выделения нет (см. камеры — там нативная отрисовка, поэтому контрол
+				-- сам обновляет выделение). Поэтому перерисовываем только изменившиеся
+				-- строки (старую и новую), а не весь список — полная перерисовка давала
+				-- мигание всего списка при каждом выборе.
+				local oldUi = prev_sel
 				prev_sel = uiIdx
-				g_lastToggle = undefined
+				g_pending_apply = 0
+				tmr_apply.active = false
+				if oldUi > 0 and oldUi <= lst_views.Items.Count and oldUi != uiIdx do (
+					local r = lst_views.GetItemRectangle (oldUi - 1)
+					lst_views.Invalidate r
+				)
+				if uiIdx > 0 and uiIdx <= lst_views.Items.Count do (
+					local r = lst_views.GetItemRectangle (uiIdx - 1)
+					lst_views.Invalidate r
+				)
 			)
-			lst_views.Invalidate()
 		)
 
-		-- Нативного чекбокса больше нет (plain ListBox) — все toggle-ы делает MouseUp
+		-- Нативного чекбокса больше нет (plain ListBox) — toggle делает MouseDoubleClick
 
 		-- OWNER DRAW: у групп галочки нет, у видов рисуем квадрат-галочку сами
 		on lst_views DrawItem sender args do (
@@ -2751,25 +2824,44 @@ macroScript Pankovea_BatchViewsManager
 			local realIdx = getRealIndex (idx + 1)
 			if realIdx <= 0 do return false
 			local the_view = batchRenderMgr.GetView realIdx
+			if the_view == undefined do return false
 			close_batch_window()
 			-- Windows шлёт MouseUp на каждый клик + ещё раз после MouseDoubleClick.
-			-- Гасим следующие MouseUp: toggle уже отработал (или отработает) через первый клик.
+			-- Гасим следующие MouseUp: действие двойного клика уже сделано здесь.
 			g_dblPending = true
-			-- Группа: сворачивание делает повторный клик в MouseUp, здесь ничего не делаем.
-			if isGroupView the_view do return false
-			-- Двойной клик по виду — загрузить в сцену, галку НЕ меняем:
-			-- первый клик двойного мог уже сделать toggle (вид был выделен) — откатываем его.
-			if g_lastToggle != undefined and g_lastToggle[1] == realIdx then (
-				local v2 = batchRenderMgr.GetView realIdx
-				if v2 != undefined do v2.enabled = g_lastToggle[2]
-				g_lastToggle = undefined
-				lst_views.Invalidate()
+			-- Отменить отложенное действие «второго клика» — двойной клик = toggle.
+			tmr_apply.active = false
+			g_pending_apply = 0
+			-- Двойной клик: группа — свернуть/развернуть, вид — вкл/выкл enabled.
+			if isGroupView the_view then (
+				toggleGroupCollapse realIdx
+			) else (
+				setViewCheckedAtUi (idx + 1) (not the_view.enabled)
 			)
-			local savedIdx = idx + 1
-			applyViewToScene the_view
-			list_views()
-			if savedIdx <= lst_views.Items.Count then setSel savedIdx
-			get_view_params realIdx
+		)
+
+		-- Тик таймера: отложенное действие по «второму клику» — вид: применить в сцену, группа: свернуть/развернуть.
+		on tmr_apply tick do (
+			tmr_apply.active = false
+			local idx = g_pending_apply
+			g_pending_apply = 0
+			if idx > 0 then (
+				local uiIdx = findItem g_visibleIndices idx
+				if uiIdx > 0 and uiIdx == getSel() then (
+					local the_view = batchRenderMgr.GetView idx
+					if the_view != undefined then (
+						if isGroupView the_view then (
+							toggleGroupCollapse idx
+						) else (
+							-- Применение вида не меняет содержимое списка (имя и галочка те же),
+							-- поэтому список не перестраиваем — иначе он лишний раз мигает.
+							close_batch_window()
+							applyViewToScene the_view
+							get_view_params idx
+						)
+					)
+				)
+			)
 		)
 
 		on btn_views_info pressed do (
