@@ -7,18 +7,73 @@
 -- Автовыбор формата в зависимости от наличия прозрачности
 -- Автовыбор базового имени по имени группы
 
-- added Russian docstrings to all functions
+-- added Russian docstrings to all functions
 
 macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" tooltip:"CropToAtlas - pack textures to atlas and apply crops" icon:#("Patches", 1)
 (
 	global MapToAtlasRollout
-
+	local iniFile = "$temp/MapToAtlasRollout.ini"
+	local iniSection = getFilenameFile (getThisScriptFilename())
+				
 	try(destroyDialog MapToAtlasRollout) catch()
+	------------------------------------------------------------------------
+	-- i18n: general wrapper #PankovScripts-L10N.ms (protection against missing file)
+	local L10N_VER = 1 -- Expected engine API version
+	local L10N
+	local thisScriptPath = getThisScriptFilename()
+	local scriptBaseName = getFilenamePath thisScriptPath + getFilenameFile thisScriptPath
+	local l10n_engine = getFilenamePath thisScriptPath + "#PankovScripts-L10N.ms"
+	local l10n_en = Dictionary #(
+		"appTitle", "Crop To Atlas") #(
+		-- Messages
+		"locateFolder", "Please locate this folder: {0}") #(
+		"selOutputFolder", "Select an existing output folder first.") #(
+		"selObjects", "Select objects with textures first.") #(
+		"noTexturesFound", "No textures found on selected objects.") #(
+		"nothingToPack", "Nothing to pack.") #(
+		"ltTwoTextures", "Less than 2 unique textures - no atlas needed.") #(
+		"failedBuildAtlas", "Failed to build atlas images.") #(
 
+		-- Message titles
+		"titleInfo", "Info") #(
+		"titleError", "Error") #(
+		"titleResult", "Result") #(
+		"titleDone", "Done") #(
+		"titleSuccess", "Success")
+
+	-- Fallback (English only) for a missing or broken engine file.
+	local L10N_Fallback = struct _L10N_Fallback (
+		scriptBaseName,
+		enDict = Dictionary #string,
+		engineVer = L10N_VER,
+		codes = #(),
+		fn trMsg key args: = (
+			local r = enDict[key]
+			if args != unsupplied and args.count > 0 then
+				for i = 1 to args.count do r = substituteString r ("{" + ((i - 1) as string) + "}") (args[i] as string)
+			r
+		),
+		fn setLang code = true,
+		fn applyRollout roll = true,
+		fn langLabel code = code,
+		fn registerDict code dict = true
+	)
+	-- Load the engine; on failure fall back to English (version check is inside).
+	local L10N_struct = L10N_Fallback
+	try (
+		if doesFileExist l10n_engine then L10N_struct = fileIn l10n_engine
+		L10N = L10N_struct scriptBaseName:scriptBaseName enDict:l10n_en engineVer:L10N_VER
+	) catch (
+		format ">>> L10N: %\n" (getCurrentException())
+		L10N = L10N_Fallback scriptBaseName:scriptBaseName enDict:l10n_en
+	)
+	-- load ini setting
+	L10N.setLang (getINISetting iniFile iniSection "Lang")
+	------------------------------------------------------------------------
+	
 	dotNet.loadAssembly "System.Drawing"
 
-	rollout MapToAtlasRollout "Crop To Atlas" width:350
-		(
+	rollout MapToAtlasRollout "Crop To Atlas" width:350 (
 		-- Структуры данных
 		--   sprInfo      — исходная текстура: имя, путь, размер
 		--   placedSprite — размещённый спрайт: рамка (fx,fy,fw,fh), контент (w,h), признак поворота
@@ -64,6 +119,17 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 		button btnMapList "Maps info" width:150 across:2 align:#left
 		button btnMap "Crop Selected To Atlas" width:150 across:2 align:#right
 		label lblSep2 "" height:4
+		group "About" (
+			label lblVersion "v2.0 (2026.08.15)" height:16 across:3 align:#left offset:[0,3]
+			hyperLink hlnkGitHub "@PankovEA @ github" align:#left offset:[-17,3] \
+				address:"https://github.com/Pankovea"
+			dropdownlist drpLang items:#() width:120 align:#right visible:false
+			hyperLink hlnkLangEngine "Download language Engine" align:#right offset:[0,-33] \
+				address:"https://github.com/Pankovea/Pankovea_MaxScriptsTools/tree/main/usermacros/#PankovScripts-L10N.ms"
+			hyperLink hlnkLangRU "Download Russian Translate" align:#right offset:[0,-7] \
+				address:("https://github.com/Pankovea/Pankovea_MaxScriptsTools/tree/main/usermacros/" \
+					+ (getFilenameFile (getThisScriptFilename())) + ".ru.ms")
+		)
 		--) Конец UI
 		----------------------------------------------------------------------------------
 
@@ -126,7 +192,7 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 		-- initDir — начальная директория (по умолчанию maxFilePath).
 		fn BrowseForFolder editBox captionText initDir:maxFilePath =
 		(
-			dir = getSavePath caption:("Please locate this folder: " + captionText) initialDir:initDir
+			dir = getSavePath caption:(L10N.trMsg "locateFolder" args:#(captionText)) initialDir:initDir
 			if dir != undefined do
 			(
 				editBox.text = dir
@@ -861,13 +927,13 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			local outDir = edtOutDir.text
 			if outDir == "" or not (doesDirectoryExist outDir) then
 			(
-				messageBox "Select an existing output folder first." title:"Crop To Atlas"
+				messageBox (L10N.trMsg "selOutputFolder") title:(L10N.trMsg "appTitle")
 				return false
 			)
 			local selObjects = getCurrentSelection()
 			if selObjects.count == 0 then
 			(
-				messageBox "Select objects with textures first." title:"Crop To Atlas"
+				messageBox (L10N.trMsg "selObjects") title:(L10N.trMsg "appTitle")
 				return false
 			)
 
@@ -914,7 +980,7 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 
 			if items.count == 0 then
 			(
-				messageBox "No textures found on selected objects." title:"Crop To Atlas"
+				messageBox (L10N.trMsg "noTexturesFound") title:(L10N.trMsg "appTitle")
 				return false
 			)
 
@@ -922,7 +988,7 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			local fullAtlases = packTextures items spnMaxSize.value spnMaxTex.value spnPad.value chkRotate.checked skipped
 			if fullAtlases.count == 0 then
 			(
-				messageBox "Nothing to pack." title:"Crop To Atlas"
+				messageBox (L10N.trMsg "nothingToPack") title:(L10N.trMsg "appTitle")
 				return false
 			)
 
@@ -936,7 +1002,7 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			)
 			if atlases.count == 0 then
 			(
-				messageBox "Less than 2 unique textures - no atlas needed." title:"Crop To Atlas"
+				messageBox (L10N.trMsg "ltTwoTextures") title:(L10N.trMsg "appTitle")
 				return false
 			)
 
@@ -967,7 +1033,7 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 
 			if builtRefs.count == 0 then
 			(
-				messageBox "Failed to build atlas images." title:"Crop To Atlas"
+				messageBox (L10N.trMsg "failedBuildAtlas.") title:(L10N.trMsg "appTitle")
 				return false
 			)
 
@@ -1039,9 +1105,9 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 
 		on MapToAtlasRollout open do
 		(
-			clearlistener()
+			--clearlistener()
 
-			LoadControlSettings MapToAtlasRollout "$temp/MapToAtlasRollout.ini"
+			LoadControlSettings MapToAtlasRollout iniFile
 
 			local d = getOutputDir()
 			if d != "" do edtOutDir.text = d
@@ -1050,19 +1116,34 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			spnQuality.enabled = (rbFormat.state != 2)
 			UpdateNamePreview()
 
-			RollPos = getIniSetting (getMaxINIFile()) "MapToAtlasSettings" "WindowPos"
+			RollPos = getIniSetting iniFile iniSection "WindowPos"
 			if RollPos != "" and RollPos != undefined do
 			(
 				if not keyboard.escPressed do SetDialogPos MapToAtlasRollout (execute RollPos)
+			)
+
+			-- Localization
+			if L10N.codes.count > 1 then (
+				drpLang.visible = true
+				hlnkLangEngine.visible = false
+				hlnkLangRU.visible = false
+				drpLang.items = for c in L10N.codes collect (L10N.langLabel c)
+				local cur = findItem L10N.codes L10N.lang
+				if cur > 0 then drpLang.selection = cur
+				if L10N.lang != "en" do L10N.applyRollout MapToAtlasRollout
+			) else (
+				drpLang.visible = false
+				hlnkLangRU.visible = true
+				hlnkLangEngine.visible = (classof L10N) == _L10N_Fallback
 			)
 		)
 
 		on MapToAtlasRollout close do
 		(
-			SaveControlSettings MapToAtlasRollout "$temp/MapToAtlasRollout.ini"
+			SaveControlSettings MapToAtlasRollout iniFile
 
 			RollPos = GetDialogPos MapToAtlasRollout
-			setIniSetting (getMaxINIFile()) "MapToAtlasSettings" "WindowPos" (RollPos as string)
+			setIniSetting iniFile iniSection "WindowPos" (RollPos as string)
 		)
 
 		on btnBrowseDir pressed do
@@ -1099,9 +1180,16 @@ macroScript CropToAtlas category:"#PankovScripts" buttontext:"CropToAtlas" toolt
 			RunCrop()
 		)
 
+		on drpLang selected idx do (
+			if classof L10N == _L10N_Fallback then return false			
+			L10N.setLang L10N.codes[idx]
+			setINISetting iniFile iniSection "Lang" L10N.lang
+			-- применить перевод на месте, без пересоздания окна
+			L10N.applyRollout MapToAtlasRollout
+		)
 		--) Конец Обработчиков событий
 		----------------------------------------------------------------------------------
 	)
-
+	
 	createDialog MapToAtlasRollout
 )

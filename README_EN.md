@@ -174,11 +174,17 @@ For single-script installation, copy icons [1](usericons/PankovScripts_24i.bmp) 
 [back (contents)](#contents)
 
 ## Crop To Atlas
-This script works with the free TexturePacker tool (https://www.codeandweb.com/texturepacker).
+Create a texture atlas (this is when multiple textures are located in a single file)
 
-Use TexturePacker to create a texture atlas and reduce asset count for many small decoration textures. Then run this script to update material bitmap references to the atlas and adjust cropping accordingly.
+Using the program, you can create a texture atlas while reducing the number of assets. This is done when using a decoration that uses many small textures. They can be reduced and combined into a single file.
+This script:
+- will collect textures from the selected objects
+- will reduce them if necessary
+- will place the content compactly in one or more atlases using the MaxRects algorithm (rotation is possible)
+- will change material references to the new texture atlas
+- will perform correct cropping and reverse rotation (takes into account the previous cropping coordinates)
 
-* Works with Bitmap and CoronaBitmap.
+- Works with Bitmap, CoronaBitmap, VrayBitmap
 
 [back (contents)](#contents)
 
