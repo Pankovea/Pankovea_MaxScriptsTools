@@ -10,6 +10,7 @@
 * Общее состояние живёт в переменных уровня макроса (префикс g_),
 * свитки обмениваются данными напрямую через них.
 * Одно поведение = одна функция. owner-цепочки отсутствуют.
+* Функции и обработчики названы в camelCase.
 *
 * РАЗРЕШЕНИЕ
 * ===============
@@ -18,6 +19,10 @@
 * Исходное разрешение хранится в ИМЕНИ batch view как база: "CamA (1920x1080)".
 * для точного восстановления.
 * Смена камеры читает разрешение из её видов (getCamResFromViews).
+*
+* Галка "Base size" (chk_edit_base) — режим отображения И применения размеров:
+*   ON  — поля показывают БАЗУ (100%), ввод трактуется как база;
+*   OFF — поля показывают ТЕКУЩИЙ (масштабированный) размер, база = ввод / масштаб.
 *
 * РАСЧЁТ / ОКРУГЛЕНИЕ / ПРИЛИПАНИЕ (Snap)
 * =========================================
@@ -36,11 +41,56 @@
 * 4. Галка "Snap" (по умолчанию ВКЛ, сохраняется в INI): включает/выключает
 *    конвейер 2-3 целиком. Единая точка входа — snapResolution(w, h).
 *
+* ВВОД РАЗМЕРОВ (блок Render output в roll_batch)
+* =================================================
+* LOCK (chk_ratio + пресеты drdwn_re_presets): при вводе одной стороны вторая
+* пересчитывается под пропорцию.
+* "Preserve MegaPix" (chk_preserve_mp): при смене ratio/копировании обе стороны
+* пересчитываются под пропорции с сохранением MP.
+*   applyFieldRes(w,h)  — ввод размеров (снэп + LOCK), force:true — всегда;
+*   applyRatio(r)       — ввод пропорции;
+*   applyViewRes(w,h)   — применение размера (без снэпа);
+*   applyMultiFieldRes(m,v) — см. МАССОВОЕ РЕДАКТИРОВАНИЕ.
+*
+* МАССОВОЕ РЕДАКТИРОВАНИЕ (2+ выделенных видов в lst_views)
+* ===========================================================
+* При выделении 2+ НЕ-групповых видов включается мульти-режим: цели —
+* getMultiEditIdxs() (выделенные виды, группы исключаются), активность — isMultiEdit().
+* Применимые контролы (batch_multi_controls) активны, неприменимые
+* (batch_single_controls — имя, файл, explorer, btn_copy_res) деактивируются.
+* updateMultiUI() заполняет поля ОБЩИМ значением (совпадает у всех) либо маркером "*";
+* изменение применяется ко ВСЕМ выделенным видам.
+* g_multi_ovr_editable — разрешено ли редактирование размера/кадров (Override общий
+* ВКЛ или отличается у видов);
+* updateOverrideUI() — диспетчер single/multi.
+* Применение:
+*   applyViewRes(w,h)       — ОБЩАЯ база: установить базу всем целям
+*                             (singleMode сохраняет прежнее поведение активного вида);
+*   applyMultiFieldRes(m,v) — РАЗНЫЕ базы (поля "*"): как btn_copy_res — каждый вид
+*                             получает своё целевое разрешение под свои пропорции;
+*                             предупреждение только при смене пропорций (и не включён
+*                             Preserve MegaPix), иначе молча. mode: #w/#h/#ratio/#swap.
+* Путь: txt_view_path/btn_pick_path → setMultiPath/setMultiPathFromPicked — массово
+* меняется только папка, имена файлов видов сохраняются.
+* Камера: drdwn_cam/btn_use_active_cam — назначается всем, диалог базы — один раз.
+* restoreSelectionByReal() — перестроить список и вернуть выделение по реальным индексам.
+*
+* UI-СОБЫТИЯ И ПРОГРАММНОЕ ЗАПОЛНЕНИЕ
+* ====================================
+* Программная установка свойств UI (text, selection, value, checked) НЕ триггерит
+* обработчики changed/entered/selected (подтверждено тестом) — suppression-флагов
+* в коде нет и они не нужны. Обработчики вызываются только действиями пользователя.
+*
+* КЛЮЧЕВЫЕ ФУНКЦИИ
+* =================
 *   parseViewName()        — база из имени вида
 *   viewNameFor()          — имя с базой из w/h
 *   getCleanViewName()     — имя без суффикса базы
 *   getViewBase()          — база вида (имя → разрешение вида → render)
 *   setViewBase()          — переименовать вид + обновить width/height
+*   resFromBase()          — фактическое разрешение из базы и масштаба
+*   orientedCopyResForView() — WxH, развёрнутое под ориентацию вида
+*   ratioString()          — "W:H" для диалогов
 *   getCamResFromViews()   — разрешение камеры из её видов
 *   applyCamResToScene()   — загрузить разрешение камеры в сцену
 *   applyGlobalScale()     — применить глобальный масштаб ко всем видам
@@ -48,6 +98,17 @@
 *   snapResolution()       — конвейер снэпа: список стандартов → округление (галка Snap)
 *   findClosestStandardResolution() — прилипание к g_standardResolutions
 *   calculateSmartResolution()      — округление к сетке 32/16 и стандартному аспекту
+*   updateMultiUI/updateOverrideUI/updateRatioUI/updateCopyResBtn — состояние UI
+*   listViews()/restoreSelectionByReal() — список и восстановление выделения
+*
+* КОПИРОВАНИЕ РАЗМЕРА (btn_copy_res)
+* ===================================
+* Источник — АКТИВНЫЙ вид (загруженный в интерфейс, g_active_view). Копирование в
+* текущем представлении ('Base size' ON — база, OFF — текущий размер). При Preserve
+* MegaPix OFF каждый вид получает WxH источника, развёрнутое под его ориентацию
+* (orientedCopyResForView); при ON — пропорции вида сохраняются, пересчитывается
+* мегапиксель. Диалог-подтверждение только если у какого-то из ОСТАЛЬНЫХ видов
+* меняются пропорции (и не включён Preserve MegaPix).
 *
 * СИНХРОНИЗАЦИЯ ВИДОВ (sync)
 * ==========================
@@ -70,23 +131,23 @@
 *
  * СВИТКИ
  * ======
- *   roll_Cams   "Cameras"                     — камеры + параметры + rename + create view
- *   roll_batch  "Batch Views"                 — виды + база разрешения + sync + render output
- *   roll_global "Global Batch Views Settings" — global scale + пути
- *   roll_states "Manage Scene States"         — scene states: список/apply/save/new/rename/delete
- *   roll_lang   "Language & Info"             — язык интерфейса + версия + репозиторий
+ *   roll_Cams   "Cameras"             — камеры + параметры + rename + create view
+ *   roll_batch  "Batch Views"         — виды + база разрешения + sync + render output
+ *   roll_global "Batch Views Global"  — global scale + пути
+ *   roll_states "Scene States" — scene states: список/apply/save/new/rename/delete
+ *   roll_lang   "Language & Info"     — язык интерфейса, версия и репозиторий
  *
  * ЦЕПОЧКА ИНИЦИАЛИЗАЦИИ
  * =====================
  *   showUI()
- *     → local roll_Cams / roll_batch / roll_global / roll_states / roll_lang — свитки на уровне макроса
+ *     → rollout roll_Cams / roll_batch / roll_global / roll_states / roll_lang — свитки на уровне макроса
  *     → g_roll_cams/batch/global/states/lang = <свиток> — ссылки для кросс-доступа
- *     → addRollout roll_Cams   → on open: initCamListBox, relist_cams, change_active
- *     → addRollout roll_batch  → on open: initListBox, list_views, set scale checkbox state
+ *     → addRollout roll_Cams   → on open: initCamListBox, relistCams, changeActive
+ *     → addRollout roll_batch  → on open: initListBox, listViews, chk_snap, updateOverrideUI
  *     → addRollout roll_global → on open: восстановить scale
  *     → addRollout roll_states → on open: refreshStates
- *     → addRollout roll_lang   → on open: drp_lang (язык), версия, ссылка на репозиторий
-*/
+ *     → addRollout roll_lang   → on open: язык (или ссылки на скачивание), версия
+ */
 macroScript Pankovea_BatchViewsManager
 	category:     "#PankovScripts"
 	ButtonText:   "Batch Views Manager"
@@ -95,19 +156,13 @@ macroScript Pankovea_BatchViewsManager
 	icon:         #("extratools", 1)
 (
 	--------------------------------------------------------------
-	-- i18n: общий модуль локализации ё(#PankovScripts-L10N.ms)
-	-- L10N -- глобальный и живёт всю сессию Max, поэтому может быть
-	-- устаревшим (движок без engineVer или старше текущего). Сравнение
-	-- версий заставляет перезагрузить движок при первом запуске.
-	global L10N
-	local l10n_stale = (L10N == undefined)
-	if not l10n_stale do (
-		try ( if L10N.engineVer < 2 then l10n_stale = true ) catch ( l10n_stale = true )
-	)
-	if l10n_stale do (
-		-- Встроенный английский словарь: только строки, которых нет
-		-- в коде скрипта (динамические сообщения и заголовки диалогов).
-		local l10n_en = Dictionary #(
+	-- i18n: general wrapper #PankovScripts-L10N.ms (protection against missing file)
+	local L10N_VER = 1 -- Expected engine API version
+	local L10N
+	local thisScriptPath = getThisScriptFilename()
+	local scriptBaseName = getFilenamePath thisScriptPath + getFilenameFile thisScriptPath
+	local l10n_engine = getFilenamePath thisScriptPath + "#PankovScripts-L10N.ms"
+	local l10n_en = Dictionary #(
 			"appTitle", "Batch Views Manager") #(
 			"titleCameras", "Cameras") #(
 			"titleError", "Error") #(
@@ -126,7 +181,7 @@ macroScript Pankovea_BatchViewsManager
 			"dirNotExist", "Directory doesn't exist") #(
 			"applyAsBase", "Apply {0}x{1} as base for this view?") #(
 			"batchViewsInfoMsg", "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state (checkbox unchanged).\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all.") #(
-			"deleteView", "Delete this view?") #(
+			"deleteView", "Delete this view(s)?") #(
 			"selectStateToApply", "Select a scene state to apply.") #(
 			"cantRestoreState", "Can't restore scene state:\n{0}") #(
 			"statesInfo", "Scene States manager.\n\nApply — restore the selected scene state.\nUpdate — overwrite the selected state with the current scene.\nNew — create a state from the selected one,\nappending a sequence number.\nDelete — remove the selected state.\n\nState name field: single click on a state\nloads its name — edit it and press Enter\nto rename.\n\n'Parts to capture' — select parts (light/camera/\nobject/layer/material/environment...)\nwith Ctrl+click when creating or overwriting\na state. Single click on a state loads its parts.") #(
@@ -148,30 +203,41 @@ macroScript Pankovea_BatchViewsManager
 			"groupWord", "Group") #(
 			"scaleText", "Scale: {0}%") #(
 			"deleteGroupQuery", "Delete \"{0}\"?") #(
+			"delGroupAll", "Group + Views") #(
+			"delGroupOnly", "Group Only") #(
+			"delViewOk", "Delete") #(
 			"selectOutputFolder", "Select output folder") #(
 			"selectReFolder", "Select folder for Render Elements") #(
-			"version", "Version"
-		)
-		try (
-			L10N = fileIn ((getFilenamePath (getThisScriptFilename())) + "#PankovScripts-L10N.ms")
-			L10N.dictBase = (getFilenamePath (getThisScriptFilename())) + "#PankovScripts-BatchViewsManager"
-			L10N.discoverDicts()
-			L10N.registerDict "en" l10n_en
-		) catch ( L10N = undefined )
+			"copyResConfirm", "Copy current view's resolution to ALL views?\nThis cannot be undone.\n\nThe following views will change their PROPORTIONS:\n{0}") #(
+			"roll_batch.btn_copy_res", "Copy cur res to all views") #(
+			"roll_batch.btn_copy_res_mp", "Copy MegaPix to all views") #(
+			"setFolderConfirm", "Set the output folder for ALL views?\nThis cannot be undone.\n\nCurrent output folders:\n{0}") #(
+			"version", "Version")
+	-- Fallback (English only) for a missing or broken engine file.
+	local L10N_Fallback = struct _L10N_Fallback (
+		scriptBaseName,
+		enDict = Dictionary #string,
+		engineVer = L10N_VER,
+		codes = #(),
+		fn trMsg key args: = (
+			local r = enDict[key]
+			if args != unsupplied and args.count > 0 then
+				for i = 1 to args.count do r = substituteString r ("{" + ((i - 1) as string) + "}") (args[i] as string)
+			r
+		),
+		fn setLang code = true,
+		fn applyRollout roll = true,
+		fn langLabel code = code,
+		fn registerDict code dict = true
 	)
-	if L10N == undefined do (
-		struct _L10N_Fallback (
-			engineVer = 2,
-			lang = "en",
-			dictBase = "",
-			codes = #("en"),
-			langLabels = #(#("en", "English")),
-			fn trMsg key args: = key,
-			fn setLang code = true,
-			fn applyRollout roll = true,
-			fn langLabel code = code
-		)
-		L10N = _L10N_Fallback()
+	-- Load the engine; on failure fall back to English (version check is inside).
+	local L10N_struct = L10N_Fallback
+	try (
+		if doesFileExist l10n_engine then L10N_struct = fileIn l10n_engine
+		L10N = L10N_struct scriptBaseName:scriptBaseName enDict:l10n_en engineVer:L10N_VER
+	) catch (
+		format ">>> L10N: %\n" (getCurrentException())
+		L10N = L10N_Fallback scriptBaseName:scriptBaseName enDict:l10n_en
 	)
 	--------------------------------------------------------------
 	-- SHARED STATE (уровень макроса, обмен между свитками)
@@ -183,11 +249,9 @@ macroScript Pankovea_BatchViewsManager
 	local g_roll_global
 	local g_roll_states
 	local g_roll_lang
-	local g_updating_lang = false
 	local g_version = "1.0.0 (2026-08-09)"
 	local g_repoUrl = "https://github.com/Pankovea"
 	local g_last_opened_tab = "Cams"
-	local g_accordion_lock = false
 
 	-- камеры
 	local g_active_cam
@@ -248,8 +312,9 @@ macroScript Pankovea_BatchViewsManager
 	local g_presetRatios = #(0.0, 1.0, 3.0/2.0, 4.0/3.0, 16.0/10.0, 16.0/9.0, 2.0, 21.0/9.0, sqrt(2.0))
 	local g_presetNames = #("Free", "1:1", "3:2", "4:3", "16:10", "16:9", "2:1", "21:9", "A series")
 
-	-- результат диалога удаления группы
-	local g_deleteGroupResult = 0
+	-- контекстное меню удаления: rcmenu rmc_del_group/rmc_del_view определены на
+	-- уровне макроса (блок перед rollout roll_batch); их обработчики обращаются
+	-- к rollout-локалям свитка через объект g_roll_batch (delApply/delGroupsCtx).
 
 	--------------------------------------------------------------
 	-- ДАННЫЕ BATCH VIEW (для перемещения позиций)
@@ -510,75 +575,6 @@ macroScript Pankovea_BatchViewsManager
 		)
 	)
 
-	--------------------------------------------------------------
-	--( ХЕЛПЕРЫ ИМЁН BATCH VIEWS
-
-	-- Уникально ли имя среди всех batch views (исключая excludeView)
-	fn isViewNameUnique name excludeView = (
-		if name == undefined or name == "" then return false
-		for i = 1 to batchRenderMgr.NumViews do (
-			local v = batchRenderMgr.GetView i
-			if v != undefined and v != excludeView and v.name == name then return false
-		)
-		true
-	)
-
-	-- Уникальное имя: baseName, baseName_2, baseName_3, ...
-	fn getUniqueViewName baseName excludeView = (
-		local candidate = baseName
-		local counter = 2
-		while not (isViewNameUnique candidate excludeView) do (
-			candidate = baseName + "_" + (counter as string)
-			counter += 1
-		)
-		candidate
-	)
-
-	-- Безопасно установить имя виду с проверкой уникальности (без ошибок дублирования)
-	fn safeSetViewName the_view newName = (
-		if the_view == undefined then return false
-		if the_view.name == newName then return true
-		local finalName = newName
-		if not (isViewNameUnique newName the_view) then (
-			local clean = getCleanViewName newName
-			local data = parseViewName newName
-			finalName = getUniqueViewName clean the_view
-			if data[2] > 0 and data[3] > 0 then finalName = viewNameFor finalName data[2] data[3]
-		)
-		the_view.name = finalName
-		true
-	)
-
-	-- Увеличить хвостовой номер в чистом имени:
-	-- "Cam 2" -> "Cam 3", "Cam2" -> "Cam3", без номера -> "Cam 2"
-	fn incrementNameNumber name = (
-		if name == undefined or name == "" then return "2"
-		local end = name.count
-		while end > 0 and (findstring "0123456789" name[end]) != undefined do end -= 1
-		if end == name.count then name + " 2" else (
-			local numStr = subString name (end + 1) (name.count - end)
-			local prefix = subString name 1 end
-			prefix + ((numStr as integer) + 1) as string
-		)
-	)
-
-	-- Имя для дубликата вида: увеличить номер в чистом имени источника,
-	-- сохранив суффикс разрешения ("Cam 2 (66% of 1920x1280)" -> "Cam 3 (66% of 1920x1280)").
-	-- Если такое имя занято — перебирать "Cam 4", "Cam 5", ...
-	fn duplicateViewName srcName excludeView = (
-		if srcName == undefined or srcName == "" then return "View"
-		local data = parseViewName srcName
-		local suffix = ""
-		if data[1].count < srcName.count then suffix = subString srcName (data[1].count + 1) -1
-		local candidate = incrementNameNumber data[1]
-		while not (isViewNameUnique (candidate + suffix) excludeView) do (
-			candidate = incrementNameNumber candidate
-		)
-		candidate + suffix
-	)
-	--) Конец ХЕЛПЕРЫ ИМЁН BATCH VIEWS
-	--------------------------------------------------------------
-
 	-- Переименовать вид с новой базой + обновить width/height (с учётом масштаба)
 	fn setViewBase the_view w h = (
 		if the_view == undefined or w == undefined or h == undefined do return false
@@ -603,6 +599,22 @@ macroScript Pankovea_BatchViewsManager
 			if srcIsLand != viewIsLand then return #(h, w)
 		)
 		#(w, h)
+	)
+
+	-- Формат пропорций "W:H" (упрощённо через НОД): 1920x1080 -> "16:9"
+	fn ratioString w h = (
+		if w == undefined or h == undefined or w <= 0 or h <= 0 then return ""
+		local a = w as integer
+		local b = h as integer
+		local x = a
+		local y = b
+		while y != 0 do (
+			local t = y
+			y = mod x y
+			x = t
+		)
+		local g = if x <= 0 then 1 else x
+		((a / g) as string) + ":" + ((b / g) as string)
 	)
 	--) Конец ИМЯ ВИДА И БАЗА РАЗРЕШЕНИЯ
 	--------------------------------------------------------------
@@ -747,9 +759,110 @@ macroScript Pankovea_BatchViewsManager
 	--------------------------------------------------------------
 
 	--------------------------------------------------------------
+	--( ХЕЛПЕРЫ ИМЁН BATCH VIEWS
+
+	-- Разобрать имя и хвостовой номер с разделителем: "Cam_2" -> #("Cam", 2),
+	-- "Cam 2" -> #("Cam", 2), "Cam" -> #("Cam", 0), "Camera001" -> #("Camera001", 0)
+	-- (номер без разделителя считается частью базы и не трогается).
+	fn parseTrailingNum name = (
+		if name == undefined or name == "" then return #("", 0)
+		local i = name.count
+		while i > 0 and (findstring "0123456789" name[i]) != undefined do i -= 1
+		if i == name.count then return #(name, 0)
+		if (findstring " _" name[i]) == undefined then return #(name, 0)
+		local numStr = subString name (i + 1) (name.count - i)
+		local prefix = subString name 1 (i - 1)
+		#(prefix, (numStr as integer))
+	)
+
+	-- Уникально ли БАЗОВОЕ имя (без суффикса разрешения) среди всех batch views (исключая excludeView)
+	fn isBaseNameUnique baseName excludeView = (
+		if baseName == undefined or baseName == "" then return false
+		for i = 1 to batchRenderMgr.NumViews do (
+			local v = batchRenderMgr.GetView i
+			if v != undefined and v != excludeView and (getCleanViewName v.name) == baseName then return false
+		)
+		true
+	)
+
+	-- Уникальное имя базы: baseName, baseName_2, baseName_3, ...
+	-- Если baseName уже содержит хвостовой номер с разделителем ("Cam_2") —
+	-- продолжить с него ("Cam_3"), а не копить суффиксы ("Cam_2_2_2").
+	fn getUniqueBaseName baseName excludeView = (
+		if baseName == undefined or baseName == "" then return "View"
+		local candidate = baseName
+		if isBaseNameUnique candidate excludeView then return candidate
+		local parsed = parseTrailingNum baseName
+		local base = parsed[1]
+		local counter = if parsed[2] > 0 then parsed[2] + 1 else 2
+		do (
+			candidate = base + "_" + (counter as string)
+			counter += 1
+		) while not (isBaseNameUnique candidate excludeView)
+		candidate
+	)
+
+	-- При конфликте копий между собой: "Cam_2" -> "Cam_3", "Cam" -> "Cam_2"
+	fn bumpBaseName baseName = (
+		local parsed = parseTrailingNum baseName
+		if parsed[2] > 0 then parsed[1] + "_" + ((parsed[2] + 1) as string) else baseName + "_2"
+	)
+
+	-- Безопасно установить имя виду с проверкой уникальности БАЗОВОГО имени
+	fn safeSetViewName the_view newName = (
+		if the_view == undefined then return false
+		if the_view.name == newName then return true
+		local data = parseViewName newName
+		local clean = getCleanViewName newName
+		local finalName = newName
+		if not (isBaseNameUnique clean the_view) then (
+			local base = getUniqueBaseName clean the_view
+			if data[2] > 0 and data[3] > 0 then finalName = viewNameFor base data[2] data[3] else finalName = base
+		)
+		the_view.name = finalName
+		true
+	)
+
+	-- Имя для дубликата вида: уникальная база источника + суффикс разрешения
+	-- ("Cam (50% of 1920x1280)" -> "Cam_2 (50% of 1920x1280)",
+	--  "Cam_2 (50% of 1920x1280)" -> "Cam_3 (50% of 1920x1280)").
+	fn duplicateViewName srcName excludeView = (
+		if srcName == undefined or srcName == "" then return "View"
+		local data = parseViewName srcName
+		local suffix = ""
+		if data[1].count < srcName.count then suffix = subString srcName (data[1].count + 1) -1
+		local base = getUniqueBaseName data[1] excludeView
+		base + suffix
+	)
+
+	-- Уникальное имя копии ГРУППЫ: " ----- Group 3 -----" -> " ----- Group 4 -----".
+	-- Номер извлекается из внутреннего текста заголовка и продолжается с него,
+	-- чтобы копии не копили суффиксы ("Group 3 2", "Group 3 3").
+	fn duplicateGroupName grName = (
+		local clean = stripCollapsePrefix grName
+		local inner = clean
+		local p1 = findString inner "-----"
+		if p1 != undefined do inner = subString inner (p1 + 5) -1
+		local p2 = findString inner "-----"
+		if p2 != undefined do inner = subString inner 1 (p2 - 1)
+		inner = trimLeft (trimRight inner)
+		local parsed = parseTrailingNum inner
+		local base = parsed[1]
+		local counter = if parsed[2] > 0 then parsed[2] + 1 else 2
+		local candidate = " ----- " + base + " " + (counter as string) + " -----"
+		while not (isGroupNameAvailable candidate) do (
+			counter += 1
+			candidate = " ----- " + base + " " + (counter as string) + " -----"
+		)
+		candidate
+	)
+	--) Конец ХЕЛПЕРЫ ИМЁН BATCH VIEWS
+	--------------------------------------------------------------
+	
+	--------------------------------------------------------------
 	--( НАТИВНОЕ ОКНО BATCH RENDER
 	-- Закрыть нативное окно Batch Render (Win32 API)
-	fn close_batch_window = (
+	fn closeBatchWindow = (
 		local batch_window = windows.getChildHWND 0 "Batch Render" parent:#max
 		if batch_window != undefined and batch_window[4] == "#32770" do (
 			windows.sendMessage batch_window[1] 0x0010 0 0
@@ -764,8 +877,8 @@ macroScript Pankovea_BatchViewsManager
 	--( ПЕРЕМЕЩЕНИЕ ВИДОВ / ГРУПП
 
 	-- Переместить batch view из позиции from_idx в позицию to_idx
-	fn move_view_index from_idx to_idx = (
-		close_batch_window()
+	fn moveViewIndex from_idx to_idx = (
+		closeBatchWindow()
 		if from_idx == to_idx or from_idx < 1 or to_idx < 1 then return false
 		local num = batchRenderMgr.numViews
 		if from_idx > num or to_idx > num then return false
@@ -823,18 +936,55 @@ macroScript Pankovea_BatchViewsManager
 		)
 	)
 
+	-- Централизованное применение камеры к вьюпорту (используется и свитком камер,
+	-- и Batch Views). Не ломаем существующее расположение видов
+	-- (например, Top/Front/Left/Camera-Perspective):
+	--   1) если эта камера уже стоит в каком-то вьюпорте — используем его;
+	--   2) иначе вьюпорт, где уже стоит любая камера — меняем камеру там;
+	--   3) иначе перспективный вьюпорт (#view_persp_user) — ставим камеру туда;
+	--   4) иначе — текущий активный вьюпорт.
+	fn applyCamToViewport cam = (
+		if not (isValidNode cam) or not (isKindOf cam camera) then return false
+		for i = 1 to viewport.numViews do (
+			if (viewport.getCamera index:i) == cam do (
+				viewport.activeViewport = i
+				return true
+			)
+		)
+		for i = 1 to viewport.numViews do (
+			if (viewport.getCamera index:i) != undefined then (
+				viewport.activeViewport = i
+				if viewport.CanSetToViewport cam do (
+					viewport.SetCamera cam
+					return true
+				)
+			)
+		)
+		for i = 1 to viewport.numViews do (
+			if (viewport.getType index:i) == #view_persp_user then (
+				viewport.activeViewport = i
+				if viewport.CanSetToViewport cam do (
+					viewport.SetCamera cam
+					return true
+				)
+			)
+		)
+		if viewport.CanSetToViewport cam then viewport.SetCamera cam
+		true
+	)
+
 	-- Загрузить вид в СЦЕНУ: активировать камеру во вьюпорте,
 	-- применить разрешение вида и восстановить scene state.
-	-- Сцену трогает только эта функция; для UI используется get_view_params.
+	-- Сцену трогает только эта функция; для UI используется getViewParams.
 	fn applyViewToScene the_view = (
 		if the_view == undefined then return false
 		local cam = the_view.camera
 		if isValidNode cam and (isKindOf cam camera) then (
-			if viewport.CanSetToViewport cam then viewport.SetCamera cam
+			applyCamToViewport cam
 			-- Синхронизировать камеры: выбрать активированную камеру в списке (если она там есть)
 			if g_roll_cams != undefined do (
 				g_roll_cams.active_cam = cam
-				g_roll_cams.change_active()
+				g_roll_cams.changeActive()
 				g_roll_cams.syncCameraUI()
 			)
 		)
@@ -850,15 +1000,36 @@ macroScript Pankovea_BatchViewsManager
 		redrawViews()
 	)
 
-	-- Проверить, активирован ли вид в сцене: его камера стоит в каком-либо вьюпорте
+	-- Активирован ли вид в сцене: его камера стоит в каком-либо вьюпорте
+	-- И его текущее (масштабированное) разрешение совпадает с разрешением сцены
+	-- (renderWidth/renderHeight) — т.е. вид, выделенный в интерфейсе, совпадает
+	-- с тем, что сейчас в сцене.
 	fn isViewActivated the_view = (
 		if the_view == undefined then return false
 		local cam = the_view.camera
 		if not (isValidNode cam) or not (isKindOf cam camera) then return false
-		for i in 1 to viewport.numViews do (
-			if (viewport.getCamera index:i) == cam do return true
+		local camInViewport = false
+		for i = 1 to viewport.numViews do (
+			if (viewport.getCamera index:i) == cam do ( camInViewport = true; exit )
 		)
-		false
+		if not camInViewport then return false
+		local base = getViewBase the_view
+		if base[1] <= 0 or base[2] <= 0 then return false
+		local scaled = resFromBase base[1] base[2]
+		(scaled[1] == renderWidth and scaled[2] == renderHeight)
+	)
+
+	-- Найти активный вид — тот, что загружен в интерфейс:
+	-- имя вида определяется текущим значением поля View name.
+	fn getActiveView = (
+		if g_roll_batch == undefined or not g_roll_batch.open then return undefined
+		local uiName = g_roll_batch.txt_view_name.text
+		if uiName == "" then return undefined
+		for i = 1 to batchRenderMgr.NumViews do (
+			local v = batchRenderMgr.GetView i
+			if v != undefined and not (isGroupView v) and (stripCollapsePrefix v.name) == uiName do return v
+		)
+		undefined
 	)
 
 	-- Синхронизировать все виды камеры с источником.
@@ -868,7 +1039,7 @@ macroScript Pankovea_BatchViewsManager
 	--   OFF — синхронизируется ТЕКУЩИЙ размер: база пересчитывается делением srcCur на масштаб.
 	fn syncViewsForCam cam srcBase srcCur = (
 		if cam == undefined or not (isValidNode cam) then return 0
-		close_batch_window()
+		closeBatchWindow()
 		local scale = if g_globalScale == undefined then 1.0 else g_globalScale
 		local baseW = srcBase[1] as integer
 		local baseH = srcBase[2] as integer
@@ -898,7 +1069,7 @@ macroScript Pankovea_BatchViewsManager
 	-- Применить глобальный масштаб ко всем видам:
 	-- width/height = база x масштаб, имя пересобирается с процентом масштаба
 	fn applyGlobalScale = (
-		close_batch_window()
+		closeBatchWindow()
 		local count = 0
 		for i = 1 to batchRenderMgr.NumViews do (
 			local v = batchRenderMgr.GetView i
@@ -959,14 +1130,14 @@ macroScript Pankovea_BatchViewsManager
 	-- или текущие renderWidth/renderHeight.
 	fn createBatchViewForCam cam = (
 		if cam == undefined or not (isValidNode cam) then return undefined
-		close_batch_window()
+		closeBatchWindow()
 		local new_view = batchRenderMgr.CreateView cam
 		if new_view != undefined then (
 			local base = getCamResFromViews cam
 			if base[1] <= 0 then base = #(renderWidth, renderHeight)
 			if base[1] <= 0 then base = #(1920, 1080)
 			new_view.overridePreset = true
-			new_view.name = viewNameFor (getUniqueViewName cam.name "") base[1] base[2]
+			new_view.name = viewNameFor (getUniqueBaseName (getCleanViewName cam.name) new_view) base[1] base[2]
 			new_view.pixelAspect = 1
 			if new_view.outputFilename == undefined or new_view.outputFilename == "" do (
 				local outName = (getCleanViewName new_view.name) + ".jpg"
@@ -1001,7 +1172,7 @@ macroScript Pankovea_BatchViewsManager
 	-- Установить output folder для всех видов (только у тех, где задан filename)
 	fn setOutputFolderForAll folder = (
 		if folder == undefined then return 0
-		close_batch_window()
+		closeBatchWindow()
 		local count = 0
 		for i = 1 to batchRenderMgr.NumViews do (
 			local v = batchRenderMgr.GetView i
@@ -1085,34 +1256,7 @@ macroScript Pankovea_BatchViewsManager
 	--) Конец СОЗДАНИЕ / ПЕРЕИМЕНОВАНИЕ / ПУТИ
 	--------------------------------------------------------------
 
-	--------------------------------------------------------------
-	--( ДИАЛОГ УДАЛЕНИЯ ГРУППЫ
-	local roll_del_confirm = rollout _rollDelConfirm "Delete Group" (
-		label lbl_msg "" align:#center
-		button btn_all "Group + Views" width:100 across:3
-		button btn_sep "Group Only" width:100
-		button btn_cancel "Cancel" width:100
-		on btn_all pressed do (g_deleteGroupResult = 1; destroyDialog roll_del_confirm)
-		on btn_sep pressed do (g_deleteGroupResult = 2; destroyDialog roll_del_confirm)
-		on btn_cancel pressed do (g_deleteGroupResult = 0; destroyDialog roll_del_confirm)
-	)
 
-	-- Показать диалог удаления группы.
-	-- hasViews=true: 3 кнопки (1=group+views, 2=group only, 0=cancel)
-	-- hasViews=false: простой queryBox (true=delete, false=cancel)
-	fn confirmDeleteGroup grpName hasViews = (
-		if not hasViews then (
-			if queryBox (L10N.trMsg "deleteEmptyGroup" args:#(grpName)) then 2 else 0
-		) else (
-			g_deleteGroupResult = 0
-			roll_del_confirm.lbl_msg.text = L10N.trMsg "deleteGroupQuery" args:#(grpName)
-			createDialog roll_del_confirm modal:true width:340
-			L10N.applyRollout roll_del_confirm
-			g_deleteGroupResult
-		)
-	)
-	--) Конец ДИАЛОГ УДАЛЕНИЯ ГРУППЫ
-	--------------------------------------------------------------
 
 	--------------------------------------------------------------
 	--( СЕРВИСНЫЕ ФУНКЦИИ FLOATER
@@ -1159,7 +1303,6 @@ macroScript Pankovea_BatchViewsManager
 	--  (Global может быть открыт вместе с Batch, в остальных случаях закрыт)
 	fn accordion thisRollout state = (
 		if g_floater == undefined do return false
-		if g_accordion_lock do return false
 		if state do (
 			local keepGlobal = (thisRollout == g_roll_batch)
 			local keepBatch  = (thisRollout == g_roll_global)
@@ -1167,9 +1310,7 @@ macroScript Pankovea_BatchViewsManager
 				if other == undefined or other == thisRollout do continue
 				if other == g_roll_global and keepGlobal do continue
 				if other == g_roll_batch and keepBatch do continue
-				g_accordion_lock = true
 				other.open = false
-				g_accordion_lock = false
 			)
 		)
 		if g_roll_cams != undefined and g_roll_cams.open then g_last_opened_tab = "Cams"
@@ -1185,7 +1326,7 @@ macroScript Pankovea_BatchViewsManager
 	--------------------------------------------------------------
 	--( ROLLOUT: CAMERAS
 
-	local roll_Cams = rollout roll_Cams "Cameras" (
+	rollout roll_Cams "Cameras" (
 		local roll_w = 250
 		--------------------------------
 		button btn_refresh "🔄️ Refresh" width:100 align:#left offset:[-10, 0] across:2 \
@@ -1230,6 +1371,15 @@ macroScript Pankovea_BatchViewsManager
 		local active_cam
 		local list_cam
 		local curr_itm = 1
+		-- Контролы блока камер: активны только когда в списке выделена камера.
+		-- prev/next дополнительно зависят от положения в списке (см. updateCamControls).
+		local cam_controls = #(
+			btn_pick_pathrev_cam, btn_s, btn_next_cam,
+			btn_create_view, btn_for_all_cams,
+			txt_rename_cam,
+			spn_fl, spn_fov, chk_fov, chk_dof, spn_f, chk_tilt,
+			rd_ex, drp_ev, spn_ev, spn_sh, spn_iso
+		)
 		--------------------------------
 
 		--------------------------------
@@ -1245,7 +1395,16 @@ macroScript Pankovea_BatchViewsManager
 			#(#exposure_value, #(spn_ev))
 		)
 
+		fn getCamSel = ( lst_cams.SelectedIndex + 1 )
+		fn setCamSel idx = (
+			local cnt = lst_cams.Items.Count
+			if cnt == 0 do return -1
+			lst_cams.SelectedIndex = if idx > 0 then (amin idx cnt) - 1 else -1
+		)
+
 		fn updateUIForCamera cam = (
+			-- Если в списке не выделена камера — контролы остаются отключенными
+			if getCamSel() <= 0 do return false
 			for item in uiPropMap do (
 				local genName = item[1]
 				local controls = item[2]
@@ -1309,7 +1468,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		-- Загрузить свойства камеры в UI
-		fn get_camprops cam = (
+		fn getCamProps cam = (
 			if not (isValidNode cam) do return false
 			local typ = classOf cam
 			local fov_state = getCamProp cam #specify_fov
@@ -1350,25 +1509,37 @@ macroScript Pankovea_BatchViewsManager
 			lst_cams.ForeColor = (dotNetClass "System.Drawing.Color").White
 		)
 
-		fn getCamSel = ( lst_cams.SelectedIndex + 1 )
-		fn setCamSel idx = ( lst_cams.SelectedIndex = if idx > 0 then idx - 1 else -1 )
-
+		-- Активировать/деактивировать контролы камер в зависимости от того,
+		-- выделена ли камера в списке. prev/next — только если есть камера
+		-- в этом направлении. updateUIForCamera уточняет доступность
+		-- по типу камеры (вызывается после того, как контролы включены).
+		fn updateCamControls = (
+			local hasSel = getCamSel() > 0
+			for c in cam_controls do c.enabled = hasSel
+			if hasSel do (
+				btn_pick_pathrev_cam.enabled = curr_itm > 1
+				btn_next_cam.enabled = curr_itm < list_cam.count
+			)
+		)
+		
 		-- Обновить список камер в lst_cams
-		fn relist_cams = (
+		fn relistCams = (
 			list_cam = getCameraList()
 			lst_cams.BeginUpdate()
 			lst_cams.Items.Clear()
 			for cam in list_cam do lst_cams.Items.Add (getCameraDisplayName cam)
 			lst_cams.EndUpdate()
+			updateCamControls()
 		)
 
-		-- change_active: определить активную камеру и обновить UI.
+		-- changeActive: определить активную камеру и обновить UI.
 		-- НЕ устанавливает selection в lst_cams / drdwn_cam.
-		fn change_active = (
+		fn changeActive = (
 			if active_cam == undefined or not (isvalidnode active_cam) then active_cam = getActiveCamera()
 			lbl_rename_warn.visible = false
+			updateCamControls()
 			if active_cam != undefined then (
-				get_camprops active_cam
+				getCamProps active_cam
 				txt_rename_cam.text = active_cam.name
 				if g_roll_batch != undefined do g_roll_batch.syncCamDropdown active_cam
 				if g_roll_batch != undefined do g_roll_batch.displayCamRes active_cam
@@ -1391,19 +1562,14 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
-		-- Установить камеру в viewport и вызвать change_active().
+		-- Установить камеру в viewport и вызвать changeActive().
 		fn setActiveCam n = (
 			if n != undefined then (
 				local cam = if (isKindOf n string) then (getNodeByName n) else n
-				local store_old_active_cam = viewport.activeViewport
-				for i in 1 to viewport.numViews do (
-					if (viewport.getCamera index:i) == active_cam do viewport.activeViewport = i
-				)
 				if isValidNode cam AND (isKindOf cam camera) then (
-					if viewport.CanSetToViewport cam then viewport.SetCamera cam
-					viewport.activeViewport = store_old_active_cam
+					applyCamToViewport cam
 					active_cam = cam
-					change_active()
+					changeActive()
 					applyCamResToScene cam
 					syncCameraUI()
 				)
@@ -1434,9 +1600,9 @@ macroScript Pankovea_BatchViewsManager
 			)
 			lbl_rename_warn.visible = false
 			renameCamera active_cam newName
-			relist_cams()
+			relistCams()
 			syncCameraUI()
-			if g_roll_batch != undefined do g_roll_batch.list_views()
+			if g_roll_batch != undefined do g_roll_batch.listViews()
 			true
 		)
 
@@ -1444,8 +1610,8 @@ macroScript Pankovea_BatchViewsManager
 		on roll_Cams open do (
 			initCamListBox()
 			chk_only_visible.checked = g_only_visible
-			relist_cams()
-			change_active()
+			relistCams()
+			changeActive()
 			syncCameraUI()
 		)
 
@@ -1456,16 +1622,16 @@ macroScript Pankovea_BatchViewsManager
 		on roll_Cams rolledUp state do ( accordion roll_Cams state )
 
 		on btn_refresh pressed do (
-			relist_cams()
-			change_active()
+			relistCams()
+			changeActive()
 			syncCameraUI()
 		)
 
 		on chk_only_visible changed state do (
 			g_only_visible = state
-			relist_cams()
+			relistCams()
 			syncCameraUI()
-			if g_roll_batch != undefined do g_roll_batch.list_views()
+			if g_roll_batch != undefined do g_roll_batch.listViews()
 		)
 
 		on btn_s pressed do ( selCam active_cam )
@@ -1486,10 +1652,10 @@ macroScript Pankovea_BatchViewsManager
 
 		on lst_cams SelectedIndexChanged sender args do (
 			local idx = getCamSel()
-			if idx <= 0 do return false
+			if idx <= 0 do ( updateCamControls(); return false )
 			curr_itm = idx
 			active_cam = list_cam[idx]
-			change_active()
+			changeActive()
 		)
 
 		on lst_cams MouseDoubleClick sender args do (
@@ -1541,9 +1707,9 @@ macroScript Pankovea_BatchViewsManager
 			)
 			local bv = createBatchViewForCam active_cam
 			if bv != undefined then (
-				relist_cams()
+				relistCams()
 				if g_roll_batch != undefined then (
-					g_roll_batch.list_views()
+					g_roll_batch.listViews()
 					g_roll_batch.open = true
 					g_roll_batch.selectView bv
 				)
@@ -1553,9 +1719,9 @@ macroScript Pankovea_BatchViewsManager
 		-- CREATE BATCH VIEWS FOR ALL CAMS
 		on btn_for_all_cams pressed do (
 			local created = createMissingViews()
-			relist_cams()
+			relistCams()
 			if g_roll_batch != undefined then (
-				g_roll_batch.list_views()
+				g_roll_batch.listViews()
 				g_roll_batch.open = true
 			)
 			messageBox (L10N.trMsg "createdBatchViews" args:#(created)) title:(L10N.trMsg "titleCameras")
@@ -1567,9 +1733,53 @@ macroScript Pankovea_BatchViewsManager
 
 
 	--------------------------------------------------------------
+	--( КОНТЕКСТНОЕ МЕНЮ УДАЛЕНИЯ (RCMenu) — уровень макроса
+	-- rcmenu (и их обработчики) — члены скоупа макроса, а НЕ rollout'а:
+	-- внутри rollout'а rcmenu не допускается (см. Rollout Clauses: только
+	-- local | fn | struct | mousetool | item_group | rollout_item | rollout_handler).
+	-- Обработчики обращаются к rollout-локалям roll_batch через объект g_roll_batch
+	-- (g_roll_batch.delApply, g_roll_batch.delGroupsCtx) — документированный способ
+	-- доступа к локальным переменным rollout'а из внешнего кода.
+	-- popUpMenu НЕ блокирует выполнение: on <item> picked срабатывает после
+	-- возврата из popUpMenu. Пункта «Отмена» нет: отмена = клик вне меню
+	-- (тогда ни один picked не сработает; «протухший» контекст обнуляется
+	-- при следующем нажатии btn_rem — см. сброс в начале обработчика).
+	-- delApply принимает true (удалить группу с содержимым) / false (только заголовок).
+
+	rcmenu rmc_del_group (
+		menuItem mi_hdr "" enabled:false
+		separator sep_hdr
+		menuItem mi_all ""
+		menuItem mi_single ""
+
+		on rmc_del_group open do (
+			mi_hdr.text = L10N.trMsg "deleteGroupQuery" args:#(g_roll_batch.delGroupsCtx[1][1])
+			mi_all.text = L10N.trMsg "delGroupAll"
+			mi_single.text = L10N.trMsg "delGroupOnly"
+		)
+		on mi_all picked do (g_roll_batch.delApply groupWithContent:true)
+		on mi_single picked do (g_roll_batch.delApply())
+	)
+
+	rcmenu rmc_del_view (
+		menuItem vi_hdr "" enabled:false
+		separator sep_v
+		menuItem vi_ok ""
+
+		on rmc_del_view open do (
+			vi_hdr.text = L10N.trMsg "deleteView"
+			vi_ok.text = L10N.trMsg "delViewOk"
+		)
+		on vi_ok picked do (g_roll_batch.delApply())
+	)
+	--) Конец КОНТЕКСТНОЕ МЕНЮ УДАЛЕНИЯ (RCMenu)
+	--------------------------------------------------------------
+
+
+	--------------------------------------------------------------
 	--( ROLLOUT: BATCH
 
-	local roll_batch = rollout roll_batch "Batch Views" (
+	rollout roll_batch "Batch Views" (
 		local roll_w = 250
 		--------------------------------
 		button btn_open_batch "Batch Views" width:80 height:25 align:#left offset:[-10,0]
@@ -1592,7 +1802,7 @@ macroScript Pankovea_BatchViewsManager
 		checkbutton btn_net_render "🕸️ Net" width:60 height:25 align:#left offset:[-10,0]
 		button btn_render "🫖 Render" height:25 width:145 align:#left offset:[55,-30]
 		
-		--group "Edit batch view" (
+		--( Edit batch view
 			edittext txt_view_name "View name" fieldWidth:(roll_w - 35) bold:true labelOnTop:true
 			
 			button btn_open_in_explorer "Open" align:#right width:40 height:18 offset:[5,0] tooltip:"Open folder in explorer"
@@ -1625,6 +1835,8 @@ macroScript Pankovea_BatchViewsManager
 				tooltip:"When changing aspect ratio, keep total megapixels\nconstant by recalculating both dimensions.\nSnaps to nearest standard resolution."
 			checkbox chk_sync_views "Sync by Camera" align:#left \
 				tooltip:"On — update all batch views using this camera.\n'Base size' ON  — syncs the BASE size.\n'Base size' OFF — syncs the CURRENT (scaled) size."
+			button btn_copy_res "Copy active view res to all views" width:(roll_w - 35) height:25 offset:[0,6] \
+				tooltip:"Copy the current view's resolution to ALL batch views.\n\n'Preserve MegaPix' OFF — copies WxH as-is,\nswapping for portrait/landscape views.\n'Preserve MegaPix' ON — keeps total megapixels,\nrecalculating both dimensions for each view's proportions."
 		)
 			
 			spinner spn_start_frame "Start" type:#integer range:[0,99999,0] fieldWidth:60 across:2 align:#left offset:[0,10]
@@ -1634,14 +1846,13 @@ macroScript Pankovea_BatchViewsManager
 			-- чтобы отличить его от двойного клика (двойной клик — вкл/выкл).
 			timer tmr_apply "applyTimer" interval:300 active:false
 
-		--)
+		--) End Edit batch view
 
 
 		--------------------------------
-		local suppress_cam_dropdown = false
-		local loading_view = false
-		local suppress_res_events = false
-		local suppress_preset_events = false
+		-- В мульти-режиме: можно ли редактировать разрешение/кадры
+		-- (override общий ВКЛ или отличается между видами — редактирование разрешено)
+		local g_multi_ovr_editable = false
 		-- Клики: первый клик — выделение, повторный клик по уже выделенному → загрузка в сцену.
 		-- prev_sel — выделение на момент прошлого клика
 		local prev_sel = 0
@@ -1666,7 +1877,7 @@ macroScript Pankovea_BatchViewsManager
 		--     вид — вкл/выкл, группа — свернуть/развернуть;
 		--   * второй (хвостовой) MouseUp гасится флагом g_dblPending, иначе было бы лишнее действие.
 
-		-- Маппинг UI-индекс → реальный индекс batch view строится в list_views
+		-- Маппинг UI-индекс → реальный индекс batch view строится в listViews
 
 		-- Включить двойную буферизацию dotNet-контрола (свойство DoubleBuffered
 		-- защищённое — доступ через рефлексию). Owner-draw ListBox без неё мигает
@@ -1700,7 +1911,9 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		fn setSel idx = (
-			lst_views.SelectedIndex = if idx > 0 then idx - 1 else -1
+			local cnt = lst_views.Items.Count
+			if cnt == 0 do return false
+			lst_views.SelectedIndex = if idx > 0 then (amin idx cnt) - 1 else -1
 		)
 
 		-- Преобразовать UI-индекс lst_views в реальный индекс batchRenderMgr
@@ -1739,6 +1952,25 @@ macroScript Pankovea_BatchViewsManager
 			res
 		)
 
+		-- Реальные индексы выделенных ВИДОВ (группы-заголовки исключаются) —
+		-- цели массового редактирования.
+		fn getMultiEditIdxs = (
+			local res = #()
+			for ui in getSelectedUiIndices() do (
+				local r = getRealIndex ui
+				if r > 0 then (
+					local v = batchRenderMgr.GetView r
+					if v != undefined and not (isGroupView v) and findItem res r == 0 do append res r
+				)
+			)
+			res
+		)
+
+		-- Активен ли режим массового редактирования (выделено 2+ видов)
+		fn isMultiEdit = (
+			(getMultiEditIdxs()).count >= 2
+		)
+
 		-- Выделить ровно эти UI-индексы
 		fn setSelectedUiIndices uiIdxes = (
 			local n = lst_views.Items.Count
@@ -1749,55 +1981,364 @@ macroScript Pankovea_BatchViewsManager
 			lst_views.Invalidate()
 		)
 
-		-- Перестроить список и восстановить выделение по реальным индексам
-		fn restoreSelectionByReal realIdxs = (
-			g_roll_batch.list_views()
-			local selUis = #()
-			for r in realIdxs do (
-				local ui = findItem g_visibleIndices r
-				if ui > 0 and findItem selUis ui == 0 do append selUis ui
-			)
-			if selUis.count > 0 do setSelectedUiIndices selUis
+
+		-- Заполнить drdwn_cam выпадающий список камер.
+		-- ВСЕГДА все камеры сцены, независимо от галки "Only Visible".
+		fn listCamerasForBatch = (
+			local cams = for cam in cameras where (isKindOf cam camera) collect cam
+			qsort cams compareCamNames
+			local cam_names = for cam in cams collect (getCameraDisplayName cam)
+			drdwn_cam.items = #("---------------------") + cam_names
 		)
 
-		-- Цели переключения enabled: выделенные виды + все виды внутри выделенных групп
-		fn collectToggleTargets = (
-			local targets = #()
-			for ui in getSelectedUiIndices() do (
-				local realIdx = getRealIndex ui
-				if realIdx > 0 then (
-					local v = batchRenderMgr.GetView realIdx
-					if v != undefined then (
-						if isGroupView v then (
-							local bounds = getGroupBounds realIdx
-							for j = (bounds[1] + 1) to bounds[2] do (
-								local m = batchRenderMgr.GetView j
-								if not (isGroupView m) and findItem targets j == 0 do append targets j
-							)
-						) else (
-							if findItem targets realIdx == 0 do append targets realIdx
-						)
-					)
+		-- Найти индекс камеры в drdwn_cam по имени (поддерживает суффикс разрешения)
+		fn findCameraInDropdown camName = (
+			for i in 2 to drdwn_cam.items.count do (
+				if matchPattern drdwn_cam.items[i] pattern:(camName + "*") do return i
+			)
+			0
+		)
+
+		-- Синхронизировать выделение в drdwn_cam с камерой (без побочных эффектов)
+		fn syncCamDropdown cam = (
+			if cam == undefined do return false
+			local drdwnIdx = findCameraInDropdown cam.name
+			if drdwnIdx != 0 and drdwn_cam.selection != drdwnIdx do drdwn_cam.selection = drdwnIdx
+		)
+
+		-- Синхронизировать пресет с текущим ratio (Free если нет совпадения).
+		-- Для вертикального кадра (h > w) ratio нормализуется к пейзажному.
+		-- LOCK включается при совпадении с пресетом, иначе выключается.
+		fn syncPresetFromRatio ratio = (
+			local idx = 1
+			if ratio != undefined and ratio > 0 then (
+				local cmp = ratio
+				local w = txt_out_w.text as integer
+				local h = txt_out_h.text as integer
+				if h != undefined and w != undefined and h > w then cmp = 1.0 / ratio
+				for i = 2 to g_presetRatios.count do (
+					if abs(g_presetRatios[i] - cmp) < 0.01 then (idx = i; exit)
 				)
 			)
-			targets
+			drdwn_re_presets.selection = idx
+			chk_ratio.checked = (idx > 1)
+			idx
 		)
 
-		-- Свернуть/развернуть группу (второй клик по выделенной группе)
-		fn toggleGroupCollapse realIdx = (
-			local the_view = batchRenderMgr.GetView realIdx
-			if the_view == undefined or not (isGroupView the_view) do return false
-			local prefix = substring the_view.name 1 1
-			if prefix == PROP_COLLAPSED then
-				the_view.name = PROP_EXPANDED + substring the_view.name 2 -1
-			else if prefix == PROP_EXPANDED then
-				the_view.name = PROP_COLLAPSED + substring the_view.name 2 -1
-			else
-				the_view.name = PROP_COLLAPSED + the_view.name
-			g_roll_batch.list_views()
-			local savedIdx = findItem g_visibleIndices realIdx
-			if savedIdx > 0 do setSel savedIdx
+		-- Показать в полях Render output базовое или текущее разрешение
+		-- (зависит от галки chk_edit_base и глобального масштаба)
+		fn showResForBase baseW baseH = (
+			if baseW > 0 and baseH > 0 then (
+				if chk_edit_base.checked and abs(g_globalScale - 1.0) > 0.001 then (
+					txt_out_w.text = (baseW as integer) as string
+					txt_out_h.text = (baseH as integer) as string
+				) else (
+					local scaled = resFromBase baseW baseH
+					txt_out_w.text = (scaled[1] as integer) as string
+					txt_out_h.text = (scaled[2] as integer) as string
+				)
+				if (txt_out_h.text as integer) > 0 then (
+					local w = txt_out_w.text as integer
+					local h = txt_out_h.text as integer
+					txt_out_ratio.text = (w as float / h) as string
+				)
+			) else (
+				txt_out_w.text = renderWidth as string
+				txt_out_h.text = renderHeight as string
+				if renderHeight > 0 then txt_out_ratio.text = (renderWidth as float / renderHeight) as string
+			)
+			syncPresetFromRatio (txt_out_ratio.text as float)
+		)
+
+		-- Контролы блока "Edit batch view": все, кроме управляющих списком.
+		-- Без активированного вида (загруженного в интерфейс) блок недоступен.
+		local edit_batch_view_controls = #(
+			txt_view_name,
+			btn_open_in_explorer, txt_view_path, txt_view_file, btn_pick_path,
+			drdwn_cam, btn_use_active_cam,
+			drdwn_state, drdwn_render_preset,
+			chk_override_preset, chk_edit_base,
+			txt_out_w, txt_out_ratio, txt_out_h,
+			drdwn_re_presets, chk_ratio, btn_swap,
+			chk_snap, chk_preserve_mp, chk_sync_views,
+			btn_copy_res,
+			spn_start_frame, spn_end_frame
+		)
+
+		-- Контролы, применимые К НЕСКОЛЬКИМ видам сразу (активны в мульти-режиме).
+		-- В мульти-режиме показывают общее значение, если оно совпадает у всех
+		-- выделенных видов, иначе маркер "*". Изменение применяется ко всем.
+		--
+		-- ПРАВИЛО добавления нового контрола в мульти-список:
+		--   1) мульти-ветка в его обработчике (if isMultiEdit() then ... return false);
+		--   2) отображение общего значения (или "*") в updateMultiUI.
+		local batch_multi_controls = #(
+								-- СТАТУС мульти-поддержки (ветка `if isMultiEdit() then` в обработчике):
+			txt_view_path,		-- setMultiPath()          (on txt_view_path entered)
+			btn_pick_path,		-- setMultiPathFromPicked  (on btn_pick_path pressed)
+			drdwn_cam,			-- ветка в on drdwn_cam selected + общая камера в updateMultiUI
+			btn_use_active_cam,	-- мульти-ветка в on btn_use_active_cam pressed (активная камера всем)
+			drdwn_state,		-- on drdwn_state selected
+			drdwn_render_preset,-- on drdwn_render_preset selected
+			chk_override_preset,-- on chk_override_preset changed
+			chk_edit_base,		-- мульти: пересчёт общей базы (on chk_edit_base changed)
+			txt_out_w,			-- общие базы: applyFieldRes -> applyViewRes (все виды);
+			txt_out_h,			--		разные базы (второе поле "*"): если LOCK (chk_ratio)
+								--		ВКЛ — применяем сразу (applyMultiFieldRes #w/#h, вторая
+								--		сторона под пропорции каждого вида, молча); если LOCK
+								--		ВЫКЛ — ждём ввод второго значения, затем общие W/H
+								--		применяются через applyFieldRes -> applyViewRes.
+			txt_out_ratio,		-- общие базы: applyRatio -> applyViewRes; разные базы:
+								--		applyMultiFieldRes #ratio — как btn_copy_res: предупреждение
+								--		при смене пропорций, иначе молча.
+			drdwn_re_presets,	-- общие базы: через applyRatio; разные базы: applyMultiFieldRes #ratio
+			chk_ratio,			-- TOGGLE-режим (LOCK), к видам не применяется; updateRatioUI мульти-aware
+			btn_swap,			-- общие базы: через applyViewRes; разные базы: applyMultiFieldRes #swap
+			chk_snap,			-- глобальный g_snap + applyFieldRes (on chk_snap changed)
+			chk_preserve_mp,	-- TOGGLE-режим пересчёта, читается в applyRatio / applyMultiFieldRes / updateCopyResBtn
+			chk_sync_views,		-- on chk_sync_views changed
+			spn_start_frame,	-- on spn_start_frame
+			spn_end_frame		-- spn_end_frame changed
+		)
+
+		-- Контролы ТОЛЬКО одиночного вида (деактивируются в мульти-режиме).
+		--
+		-- Если контрол переносится между списками (или добавляется новый) — кроме самого
+		-- переноса обязательны: мульти-ветка в его обработчике, отображение общего значения
+		-- в updateMultiUI и suppression-флаг при программном заполнении (см. ПРАВИЛО в
+		-- комментарии batch_multi_controls). Пример реализации — btn_use_active_cam (в мульти-списке).
+		local batch_single_controls = #(
+			txt_view_name,			-- у каждого вида своё имя, общего значения нет
+			txt_view_file,			-- имя файла у каждого вида своё (массово меняется только папка через txt_view_path / btn_pick_path)
+			btn_open_in_explorer,	-- открывает папку одного вида
+			btn_copy_res			-- источник — АКТИВНЫЙ вид, загруженный в интерфейс; в мульти-режиме активного вида нет (g_active_view = undefined).
+		)
+
+		-- Активность Ratio и чек-бокса Preserve MegaPix (всегда доступен при Override)
+		fn updateRatioUI = (
+			if isMultiEdit() then (
+				local isFree = (drdwn_re_presets.selection <= 1)
+				chk_preserve_mp.enabled = g_multi_ovr_editable
+				txt_out_ratio.enabled = g_multi_ovr_editable and isFree
+				chk_ratio.enabled = g_multi_ovr_editable
+				return false
+			)
+			local hasActive = (getActiveView() != undefined)
+			local ovr = chk_override_preset.checked
+			local isFree = (drdwn_re_presets.selection <= 1)
+			chk_preserve_mp.enabled = hasActive and ovr
+			txt_out_ratio.enabled = hasActive and ovr and isFree
+			chk_ratio.enabled = hasActive and ovr
+		)
+
+		-- Текст кнопки копирования отражает режим Preserve MegaPix:
+		-- ON — мегапиксели сохраняются (пересчёт под пропорции каждого вида),
+		-- OFF — копируется как есть (WxH источника).
+		fn updateCopyResBtn = (
+			local key = if chk_preserve_mp.checked then "roll_batch.btn_copy_res_mp" else "roll_batch.btn_copy_res"
+			btn_copy_res.text = L10N.trMsg key
+		)
+
+		-- Обновить UI для множественного выделения (2+ видов):
+		-- значение показывается только если оно совпадает у всех выделенных видов,
+		-- иначе ставится маркер "*" / пустой пункт. Правки применяются ко всем.
+		fn updateMultiUI = (
+			local idxs = getMultiEditIdxs()
+			if idxs.count < 2 do return false
+
+			for c in batch_multi_controls do c.enabled = true
+			for c in batch_single_controls do c.enabled = false
+
+			txt_view_name.text = ""
+			txt_view_file.text = ""
+
+			-- Путь: общая папка вывода
+			local commonPath = undefined
+			for r in idxs do (
+				local v = batchRenderMgr.GetView r
+				local p = if v.outputFilename != undefined and v.outputFilename != "" then getFilenamePath v.outputFilename else ""
+				if commonPath == undefined then commonPath = p
+				else if commonPath != p do ( commonPath = undefined; exit )
+			)
+			txt_view_path.text = if commonPath != undefined then commonPath else "*"
+
+			-- Camera: общая камера (совпадает у всех выделенных видов).
+			local commonCam = undefined
+			for r in idxs do (
+				local c = (batchRenderMgr.GetView r).camera
+				if commonCam == undefined then commonCam = c
+				else if commonCam != c do ( commonCam = undefined; exit )
+			)
+			if commonCam != undefined and isValidNode commonCam then (
+				local ci = findCameraInDropdown commonCam.name
+				drdwn_cam.selection = if ci == 0 then 1 else ci
+			) else drdwn_cam.selection = 1
+
+			-- Scene State
+			local commonState = undefined
+			for r in idxs do (
+				local s = (batchRenderMgr.GetView r).sceneStateName
+				if commonState == undefined then commonState = s
+				else if commonState != s do ( commonState = undefined; exit )
+			)
+			if commonState != undefined then (
+				local si = findItem drdwn_state.items commonState
+				drdwn_state.selection = if si == 0 then 1 else si
+			) else drdwn_state.selection = 1
+
+			-- Render Preset
+			local commonPreset = undefined
+			for r in idxs do (
+				local v = batchRenderMgr.GetView r
+				local p = if v.presetFile != undefined and v.presetFile != "" then getFilenameFile v.presetFile else ""
+				if commonPreset == undefined then commonPreset = p
+				else if commonPreset != p do ( commonPreset = undefined; exit )
+			)
+			if commonPreset != undefined then (
+				local pi = findItem drdwn_render_preset.items commonPreset
+				drdwn_render_preset.selection = if pi == 0 then 1 else pi
+			) else drdwn_render_preset.selection = 1
+
+			-- Override Preset: галка — только если включён у всех;
+			-- редактирование разрешения разрешено при общем ВКЛ или смешанном состоянии.
+			local ovr = undefined
+			for r in idxs do (
+				local o = (batchRenderMgr.GetView r).overridePreset
+				if ovr == undefined then ovr = o
+				else if ovr != o do ( ovr = undefined; exit )
+			)
+			g_multi_ovr_editable = (ovr == undefined or ovr)
+			chk_override_preset.checked = (ovr == true)
+
+			-- Кадры
+			local commonStart = undefined
+			local commonEnd = undefined
+			for r in idxs do (
+				local v = batchRenderMgr.GetView r
+				if commonStart == undefined then commonStart = v.startFrame
+				else if commonStart != v.startFrame do commonStart = undefined
+				if commonEnd == undefined then commonEnd = v.endFrame
+				else if commonEnd != v.endFrame do commonEnd = undefined
+			)
+			spn_start_frame.value = if commonStart != undefined then commonStart as integer else 0
+			spn_end_frame.value = if commonEnd != undefined then commonEnd as integer else 0
+
+			-- Разрешение: общая база
+			local commonBase = undefined
+			for r in idxs do (
+				local b = getViewBase (batchRenderMgr.GetView r)
+				if commonBase == undefined then commonBase = b
+				else if commonBase[1] != b[1] or commonBase[2] != b[2] do ( commonBase = undefined; exit )
+			)
+			if commonBase != undefined and commonBase[1] > 0 and commonBase[2] > 0 then
+				showResForBase commonBase[1] commonBase[2]
+			else (
+				txt_out_w.text = "*"
+				txt_out_h.text = "*"
+				txt_out_ratio.text = "*"
+			)
+
+			-- Sync by camera: по уникальным камерам выделенных видов
+			local sync = undefined
+			local cams = #()
+			for r in idxs do (
+				local bv = batchRenderMgr.GetView r
+				if bv != undefined and isValidNode bv.camera and findItem cams bv.camera == 0 do append cams bv.camera
+			)
+			for cam in cams do (
+				local s = getCamSync cam
+				if sync == undefined then sync = s
+				else if sync != s do ( sync = undefined; exit )
+			)
+			chk_sync_views.checked = if sync == undefined then false else sync
+
+			-- Включение зависимых от Override контролов
+			txt_out_w.enabled = g_multi_ovr_editable
+			txt_out_h.enabled = g_multi_ovr_editable
+			btn_swap.enabled = g_multi_ovr_editable
+			drdwn_re_presets.enabled = g_multi_ovr_editable
+			spn_start_frame.enabled = g_multi_ovr_editable
+			spn_end_frame.enabled = g_multi_ovr_editable
+			chk_edit_base.enabled = g_multi_ovr_editable and abs(g_globalScale - 1.0) > 0.001
+			updateRatioUI()
 			true
+		)
+
+		-- Активность контролов размера/кадров в зависимости от Override Preset.
+		-- Без активированного вида (загруженного в интерфейс) редактировать
+		-- нечего — весь блок "Edit batch view" отключен.
+		fn updateOverrideUI = (
+			if isMultiEdit() then (
+				updateMultiUI()
+				return false
+			)
+			local hasActive = (getActiveView() != undefined)
+			for c in edit_batch_view_controls do c.enabled = hasActive
+			if not hasActive do return false
+			local ovr = chk_override_preset.checked
+			local canEditBase = ovr and abs(g_globalScale - 1.0) > 0.001
+			chk_edit_base.enabled = canEditBase
+			txt_out_w.enabled = ovr
+			txt_out_h.enabled = ovr
+			btn_swap.enabled = ovr
+			drdwn_re_presets.enabled = ovr
+			spn_start_frame.enabled = ovr
+			spn_end_frame.enabled = ovr
+			updateRatioUI()
+		)
+
+		-- Загрузить параметры batch view в UI
+		fn getViewParams index = (
+			local the_view = try (batchRenderMgr.GetView index) catch undefined
+			if the_view == undefined then return undefined
+
+			disableSceneRedraw()
+			txt_view_name.text = stripCollapsePrefix the_view.name
+
+			local cam = the_view.camera
+			if isValidNode cam then (
+				local drdwnIdx = findCameraInDropdown cam.name
+				drdwn_cam.selection = if drdwnIdx == 0 then 1 else drdwnIdx
+			) else drdwn_cam.selection = 1
+
+			if the_view.outputFilename != "" then (
+				txt_view_path.text = getFilenamePath the_view.outputFilename
+				txt_view_file.text = filenameFromPath the_view.outputFilename
+			) else (
+				txt_view_path.text = ""
+				txt_view_file.text = ""
+			)
+
+			local idx = finditem drdwn_state.items the_view.sceneStateName
+			drdwn_state.selection = if idx == 0 then 1 else idx
+
+			-- Отразить масштаб из имени вида в глобальном слайдере
+			local nameData = parseViewName the_view.name
+			local nameScale = nameData[4]
+			if nameScale != undefined and nameScale > 0 and abs(nameScale - g_globalScale) > 0.001 do (
+				g_globalScale = nameScale
+				if g_roll_global != undefined do g_roll_global.updateScaleDisplay nameScale
+			)
+
+			local base = getViewBase the_view
+			showResForBase base[1] base[2]
+			chk_sync_views.checked = getCamSync cam
+
+			chk_override_preset.checked = the_view.overridePreset
+			updateOverrideUI()
+			local pf = the_view.presetFile
+			local presetIdx = 1
+			if pf != undefined and pf != "" then (
+				presetIdx = findItem drdwn_render_preset.items (getFilenameFile pf)
+				if presetIdx == 0 then presetIdx = 1
+			)
+			drdwn_render_preset.selection = presetIdx
+
+			spn_start_frame.value = the_view.startFrame
+			spn_end_frame.value = the_view.endFrame
+
+			enableSceneRedraw()
+			the_view
 		)
 
 		-- Позиция блока с тегом origIdx в массиве blocks
@@ -1907,14 +2448,28 @@ macroScript Pankovea_BatchViewsManager
 				flatIdx += blocks[bi][3].count
 			)
 
-			close_batch_window()
+			closeBatchWindow()
 			local newGroups = for w in blocks collect w[3]
 			rebuildFromGroups newGroups
 			newReal
 		)
 
+		-- Найти ближайший UI-индекс вида (НЕ группы) в направлении dir (-1/1) от startIdx.
+		-- 0 — если в этом направлении видов больше нет.
+		fn findViewUiIndex startIdx dir = (
+			local n = g_visibleIndices.count
+			local i = startIdx + dir
+			while i >= 1 and i <= n do (
+				local r = getRealIndex i
+				local v = if r > 0 then batchRenderMgr.GetView r else undefined
+				if v != undefined and not (isGroupView v) do return i
+				i += dir
+			)
+			0
+		)
+
 		-- Обновить состояние кнопок в зависимости от выделения в lst_views
-		fn lst_views_update_buttons = (
+		fn updateViewsListButtons = (
 			local selUis = getSelectedUiIndices()
 			if selUis.count == 0 then (
 				btn_up.enabled = false
@@ -1928,170 +2483,40 @@ macroScript Pankovea_BatchViewsManager
 				btn_down.enabled = canMoveSelectedAny #down
 				btn_rem.enabled = true
 			)
-		)
 
-		-- Заполнить drdwn_cam выпадающий список камер.
-		-- ВСЕГДА все камеры сцены, независимо от галки "Only Visible".
-		fn list_cameras_for_batch = (
-			local cams = for cam in cameras where (isKindOf cam camera) collect cam
-			qsort cams compareCamNames
-			local cam_names = for cam in cams collect (getCameraDisplayName cam)
-			drdwn_cam.items = #("---------------------") + cam_names
-		)
-
-		-- Найти индекс камеры в drdwn_cam по имени (поддерживает суффикс разрешения)
-		fn findCameraInDropdown camName = (
-			for i in 2 to drdwn_cam.items.count do (
-				if matchPattern drdwn_cam.items[i] pattern:(camName + "*") do return i
-			)
-			0
-		)
-
-		-- Синхронизировать выделение в drdwn_cam с камерой (без побочных эффектов)
-		fn syncCamDropdown cam = (
-			if cam == undefined do return false
-			local drdwnIdx = findCameraInDropdown cam.name
-			if drdwnIdx != 0 and drdwn_cam.selection != drdwnIdx then (
-				suppress_cam_dropdown = true
-				drdwn_cam.selection = drdwnIdx
-				suppress_cam_dropdown = false
-			)
-		)
-
-		-- Синхронизировать пресет с текущим ratio (Free если нет совпадения).
-		-- Для вертикального кадра (h > w) ratio нормализуется к пейзажному.
-		-- LOCK включается при совпадении с пресетом, иначе выключается.
-		fn syncPresetFromRatio ratio = (
-			local idx = 1
-			if ratio != undefined and ratio > 0 then (
-				local cmp = ratio
-				local w = txt_out_w.text as integer
-				local h = txt_out_h.text as integer
-				if h != undefined and w != undefined and h > w then cmp = 1.0 / ratio
-				for i = 2 to g_presetRatios.count do (
-					if abs(g_presetRatios[i] - cmp) < 0.01 then (idx = i; exit)
-				)
-			)
-			if not suppress_preset_events then (
-				suppress_preset_events = true
-				drdwn_re_presets.selection = idx
-				suppress_preset_events = false
-			)
-			chk_ratio.checked = (idx > 1)
-			idx
-		)
-
-		-- Показать в полях Render output базовое или текущее разрешение
-		-- (зависит от галки chk_edit_base и глобального масштаба)
-		fn showResForBase baseW baseH = (
-			suppress_res_events = true
-			if baseW > 0 and baseH > 0 then (
-				if chk_edit_base.checked and abs(g_globalScale - 1.0) > 0.001 then (
-					txt_out_w.text = (baseW as integer) as string
-					txt_out_h.text = (baseH as integer) as string
-				) else (
-					local scaled = resFromBase baseW baseH
-					txt_out_w.text = (scaled[1] as integer) as string
-					txt_out_h.text = (scaled[2] as integer) as string
-				)
-				if (txt_out_h.text as integer) > 0 then (
-					local w = txt_out_w.text as integer
-					local h = txt_out_h.text as integer
-					txt_out_ratio.text = (w as float / h) as string
-				)
-			) else (
-				txt_out_w.text = renderWidth as string
-				txt_out_h.text = renderHeight as string
-				if renderHeight > 0 then txt_out_ratio.text = (renderWidth as float / renderHeight) as string
-			)
-			suppress_res_events = false
-			syncPresetFromRatio (txt_out_ratio.text as float)
-		)
-
-		-- Активность Ratio и чек-бокса Preserve MegaPix (всегда доступен при Override)
-		fn updateRatioUI = (
-			local ovr = chk_override_preset.checked
-			local isFree = (drdwn_re_presets.selection <= 1)
-			chk_preserve_mp.enabled = ovr
-			txt_out_ratio.enabled = ovr and isFree
-			chk_ratio.enabled = ovr
-		)
-
-		-- Активность контролов размера/кадров в зависимости от Override Preset
-		fn updateOverrideUI = (
-			local ovr = chk_override_preset.checked
-			local canEditBase = ovr and abs(g_globalScale - 1.0) > 0.001
-			chk_edit_base.enabled = canEditBase
-			txt_out_w.enabled = ovr
-			txt_out_h.enabled = ovr
-			btn_swap.enabled = ovr
-			drdwn_re_presets.enabled = ovr
-			spn_start_frame.enabled = ovr
-			spn_end_frame.enabled = ovr
-			updateRatioUI()
-		)
-
-		-- Загрузить параметры batch view в UI
-		fn get_view_params index = (
-			local the_view = try (batchRenderMgr.GetView index) catch undefined
-			if the_view == undefined then return undefined
-
-			disableSceneRedraw()
-			loading_view = true
-
-			txt_view_name.text = stripCollapsePrefix the_view.name
-
-			local cam = the_view.camera
-			if isValidNode cam then (
-				local drdwnIdx = findCameraInDropdown cam.name
-				suppress_cam_dropdown = true
-				drdwn_cam.selection = if drdwnIdx == 0 then 1 else drdwnIdx
-				suppress_cam_dropdown = false
-			) else (
-				suppress_cam_dropdown = true
-				drdwn_cam.selection = 1
-				suppress_cam_dropdown = false
-			)
-
-			if the_view.outputFilename != "" then (
-				txt_view_path.text = getFilenamePath the_view.outputFilename
-				txt_view_file.text = filenameFromPath the_view.outputFilename
-			) else (
-				txt_view_path.text = ""
-				txt_view_file.text = ""
-			)
-
-			local idx = finditem drdwn_state.items the_view.sceneStateName
-			drdwn_state.selection = if idx == 0 then 1 else idx
-
-			-- Отразить масштаб из имени вида в глобальном слайдере
-			local nameData = parseViewName the_view.name
-			local nameScale = nameData[4]
-			if nameScale != undefined and nameScale > 0 and abs(nameScale - g_globalScale) > 0.001 do (
-				g_globalScale = nameScale
-				if g_roll_global != undefined do g_roll_global.updateScaleDisplay nameScale
-			)
-
-			local base = getViewBase the_view
-			showResForBase base[1] base[2]
-			chk_sync_views.checked = getCamSync cam
-
-			chk_override_preset.checked = the_view.overridePreset
+			-- prev/next/select_cam: неактивны при пустом списке,
+			-- prev/next — только если есть вид в этом направлении.
+			local hasViews = g_visibleIndices.count > 0
+			btn_select_cam.enabled = hasViews
+			local cur = getSel()
+			if cur == 0 do cur = g_visibleIndices.count + 1
+			btn_prev_view.enabled = (findViewUiIndex cur -1) > 0
+			btn_next_view.enabled = (findViewUiIndex cur 1) > 0
+			-- Разрешение можно редактировать/копировать только при активированном виде
 			updateOverrideUI()
-			local pf = the_view.presetFile
-			local presetIdx = 1
-			if pf != undefined and pf != "" then (
-				presetIdx = findItem drdwn_render_preset.items (getFilenameFile pf)
-				if presetIdx == 0 then presetIdx = 1
+		)
+
+		-- Перелистывание видов: выбрать вид по UI-индексу (клампится к границам)
+		fn selectViewByUiIndex uiIdx = (
+			if g_visibleIndices.count == 0 do return false
+			if uiIdx < 1 then uiIdx = 1
+			if uiIdx > g_visibleIndices.count then uiIdx = g_visibleIndices.count
+			-- MultiExtended: SelectedIndex не снимает остальные выделения — чистим явно
+			lst_views.ClearSelected()
+			setSel uiIdx
+			lst_views.Invalidate()
+			local realIdx = getRealIndex uiIdx
+			if realIdx > 0 then (
+				local the_view = batchRenderMgr.GetView realIdx
+				if isGroupView the_view then (
+					txt_view_name.text = stripCollapsePrefix the_view.name
+				) else (
+					applyViewToScene the_view
+					g_active_view = getViewParams realIdx
+				)
+				updateViewsListButtons()
 			)
-			drdwn_render_preset.selection = presetIdx
-
-			spn_start_frame.value = the_view.startFrame
-			spn_end_frame.value = the_view.endFrame
-
-			loading_view = false
-			enableSceneRedraw()
-			the_view
+			true
 		)
 
 		-- Выбрать первый вид камеры в списке
@@ -2101,8 +2526,11 @@ macroScript Pankovea_BatchViewsManager
 				local bv = batchRenderMgr.GetView i
 				if bv != undefined and bv.camera == cam then (
 					local uiIdx = findItem g_visibleIndices i
-					if uiIdx != 0 then setSel uiIdx
-					get_view_params i
+					if uiIdx != 0 then (
+						lst_views.ClearSelected()
+						setSel uiIdx
+					)
+					getViewParams i
 					return true
 				)
 			)
@@ -2117,9 +2545,13 @@ macroScript Pankovea_BatchViewsManager
 				local v = batchRenderMgr.GetView i
 				if v != undefined and v == the_view then (
 					local uiIdx = findItem g_visibleIndices i
-					if uiIdx != 0 then setSel uiIdx
-					g_active_view = get_view_params i
-					lst_views_update_buttons()
+					if uiIdx != 0 then (
+						-- MultiExtended: SelectedIndex не снимает остальные выделения — чистим явно
+						lst_views.ClearSelected()
+						setSel uiIdx
+					)
+					g_active_view = getViewParams i
+					updateViewsListButtons()
 					return true
 				)
 			)
@@ -2128,9 +2560,12 @@ macroScript Pankovea_BatchViewsManager
 					local v = batchRenderMgr.GetView i
 					if v != undefined and v.name == theName then (
 						local uiIdx = findItem g_visibleIndices i
-						if uiIdx != 0 then setSel uiIdx
-						g_active_view = get_view_params i
-						lst_views_update_buttons()
+						if uiIdx != 0 then (
+							lst_views.ClearSelected()
+							setSel uiIdx
+						)
+						g_active_view = getViewParams i
+						updateViewsListButtons()
 						return true
 					)
 				)
@@ -2139,7 +2574,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		-- Обновить txt_view_path (путь) и txt_view_file (имя файла) из g_view_path
-		fn update_Path = (
+		fn updatePath = (
 			if g_view_path != undefined then (
 				txt_view_path.text = getFilenamePath g_view_path
 				txt_view_file.text = filenameFromPath g_view_path
@@ -2149,9 +2584,48 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
+		-- Массовое применение пути (txt_view_path) ко всем выделенным видам.
+		-- У каждого вида сохраняется его собственное имя файла.
+		fn setMultiPath = (
+			local idxs = getMultiEditIdxs()
+			if idxs.count < 2 do return false
+			local p = txt_view_path.text
+			if p == "*" do return false
+			closeBatchWindow()
+			if p == "" then (
+				for r in idxs do (batchRenderMgr.GetView r).outputFilename = undefined
+			) else (
+				for r in idxs do (
+					local v = batchRenderMgr.GetView r
+					local fn_ = if v.outputFilename != undefined and v.outputFilename != "" then filenameFromPath v.outputFilename else ""
+					v.outputFilename = if fn_ != "" then p + fn_ else p
+				)
+			)
+			updateOverrideUI()
+			true
+		)
+
+		-- Массовое применение папки из диалога сохранения: у каждого вида сохраняется
+		-- его собственное имя файла, меняется только папка.
+		fn setMultiPathFromPicked fullPath = (
+			local idxs = getMultiEditIdxs()
+			if idxs.count < 2 do return false
+			local folder = getFilenamePath fullPath
+			local defaultFn = filenameFromPath fullPath
+			closeBatchWindow()
+			for r in idxs do (
+				local v = batchRenderMgr.GetView r
+				local ownFn = if v.outputFilename != undefined and v.outputFilename != "" then filenameFromPath v.outputFilename else ""
+				local fn_ = if ownFn != "" then ownFn else defaultFn
+				v.outputFilename = if fn_ != "" then folder + fn_ else undefined
+			)
+			updateOverrideUI()
+			true
+		)
+
 		-- Обновить lst_views, drdwn_state, drdwn_cam.
 		-- Строит g_visibleIndices — маппинг UI-индекс → реальный индекс batch view
-		fn list_views restoreName:"" = (
+		fn listViews restoreName:"" = (
 			local gv = batchRenderMgr.GetView
 			local num = batchRenderMgr.numViews
 			local col = #()
@@ -2210,9 +2684,9 @@ macroScript Pankovea_BatchViewsManager
 			for item in col do lst_views.Items.Add item
 			lst_views.EndUpdate()
 			lst_views.Invalidate()
-			lst_views_update_buttons()
+			updateViewsListButtons()
 
-			list_cameras_for_batch()
+			listCamerasForBatch()
 
 			local states_names = for i in 1 to sceneStateMgr.getCount() collect (sceneStateMgr.GetSceneState i)
 			qsort states_names (fn cmp a b = ( stricmp a b ))
@@ -2242,6 +2716,17 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
+		-- Перестроить список и восстановить выделение по реальным индексам
+		fn restoreSelectionByReal realIdxs = (
+			g_roll_batch.listViews()
+			local selUis = #()
+			for r in realIdxs do (
+				local ui = findItem g_visibleIndices r
+				if ui > 0 and findItem selUis ui == 0 do append selUis ui
+			)
+			if selUis.count > 0 do setSelectedUiIndices selUis
+		)
+
 		-- Обновить drdwn_state (список scene states) после изменения состояний
 		fn refreshStatesList = (
 			local prevName = if drdwn_state.selection > 1 then drdwn_state.items[drdwn_state.selection] else ""
@@ -2254,12 +2739,24 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
-		-- Применить W/H из спиннеров Render output к выделенному виду
+		-- Применить W/H ко ВСЕМ выделенным видам (мульти-режим) или к текущему виду.
 		fn applyViewRes w h = (
-			if getSel() == 0 do return false
-			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
-			if bv == undefined or isGroupView bv do return false
 			if w == undefined or h == undefined or w <= 0 or h <= 0 do return false
+			local idxs = getMultiEditIdxs()
+			if idxs.count == 0 then (
+				-- Одиночный режим: целевой вид — текущий в списке
+				if getSel() == 0 do return false
+				local r0 = getRealIndex (getSel())
+				if r0 <= 0 do return false
+				local v0 = batchRenderMgr.GetView r0
+				if v0 == undefined or isGroupView v0 do return false
+				idxs = #(r0)
+			) else (
+				for r in idxs do (
+					local v = batchRenderMgr.GetView r
+					if v == undefined or isGroupView v do return false
+				)
+			)
 			local scale = if g_globalScale == undefined then 1.0 else g_globalScale
 			local baseW = w as integer
 			local baseH = h as integer
@@ -2271,11 +2768,29 @@ macroScript Pankovea_BatchViewsManager
 				baseH = (h as float / scale) as integer
 				if baseW <= 0 or baseH <= 0 do return false
 			)
-			close_batch_window()
-			setViewBase bv baseW baseH
-			if chk_sync_views.checked and isValidNode bv.camera do syncViewsForCam bv.camera #(baseW, baseH) #(w, h)
-			list_views()
-			if getSel() > 0 do get_view_params (getRealIndex (getSel()))
+			local singleMode = idxs.count == 1
+			closeBatchWindow()
+			for r in idxs do (
+				local bv = batchRenderMgr.GetView r
+				-- Проверяем активность ДО изменения: после setViewBase разрешение вида
+				-- уже не совпадает со старым renderWidth/renderHeight.
+				local wasActive = singleMode and isViewActivated bv
+				setViewBase bv baseW baseH
+				if chk_sync_views.checked and isValidNode bv.camera do syncViewsForCam bv.camera #(baseW, baseH) #(w, h)
+				-- Если вид активирован в сцене — сразу применить новое разрешение к сцене
+				-- (как с состоянием сцены в viewUpdate: изменение параметров активного вида
+				-- сразу отражается в render output).
+				if wasActive do (
+					if renderSceneDialog.isOpen() then renderSceneDialog.close()
+					renderWidth = bv.width
+					renderHeight = bv.height
+					redrawViews()
+				)
+			)
+			restoreSelectionByReal idxs
+			if singleMode then (
+				if getSel() > 0 do getViewParams (getRealIndex (getSel()))
+			) else updateViewsListButtons()
 			true
 		)
 
@@ -2307,29 +2822,114 @@ macroScript Pankovea_BatchViewsManager
 				local newH = (sqrt(mp / ratio)) as integer
 				-- Снэп: сначала список стандартных разрешений, затем сетка/пропорция
 				local snapped = snapResolution newW newH
-				suppress_res_events = true
 				txt_out_w.text = (snapped[1] as integer) as string
 				txt_out_h.text = (snapped[2] as integer) as string
 				txt_out_ratio.text = ratio as string
-				suppress_res_events = false
 				applyViewRes snapped[1] snapped[2]
 			) else (
 				local newH = if w > 0 then floor(w as float / ratio) else h
 				if newH > 0 then (
 					-- Снэп: сначала список стандартных разрешений, затем сетка/пропорция
 					local snapped = snapResolution w newH
-					suppress_res_events = true
 					txt_out_h.text = (snapped[2] as integer) as string
 					txt_out_ratio.text = ratio as string
-					suppress_res_events = false
 					applyViewRes snapped[1] snapped[2]
 				)
 			)
 			true
 		)
 
+		-- Мульти-режим при РАЗНЫХ базах (res-поля показывают "*"): применить изменение
+		-- стороны/пропорции ко всем выделенным видам тем же механизмом, что и btn_copy_res —
+		-- каждый вид получает своё целевое разрешение t; предупреждение показывается,
+		-- только если у какого-то вида меняются пропорции (и не включён Preserve MegaPix),
+		-- иначе применяем молча. mode: #w / #h / #ratio / #swap.
+		fn applyMultiFieldRes mode val = (
+			local idxs = getMultiEditIdxs()
+			if idxs.count < 2 do return false
+			local scale = if g_globalScale == undefined then 1.0 else g_globalScale
+			local baseMode = chk_edit_base.checked and abs(scale - 1.0) > 0.001
+			local targets = #()
+			local propChanged = #()
+			for r in idxs do (
+				local bv = batchRenderMgr.GetView r
+				if bv == undefined or isGroupView bv do continue
+				local bb = getViewBase bv
+				if bb[1] <= 0 or bb[2] <= 0 do continue
+				local cur = if baseMode then #(bb[1], bb[2]) else resFromBase bb[1] bb[2]
+				local t
+				case mode of (
+					#w: (
+						if chk_ratio.checked and cur[1] > 0 and cur[2] > 0 then (
+							-- LOCK: сохранить пропорции вида (пересчёт высоты)
+							t = #(val, floor(cur[2] as float * val / cur[1]))
+						) else t = #(val, cur[2])
+					)
+					#h: (
+						if chk_ratio.checked and cur[1] > 0 and cur[2] > 0 then (
+							-- LOCK: сохранить пропорции вида (пересчёт ширины)
+							t = #(floor(cur[1] as float * val / cur[2]), val)
+						) else t = #(cur[1], val)
+					)
+					#ratio: (
+						-- как applyRatio: Preserve MegaPix ON — обе стороны под новые пропорции
+						-- с сохранением мегапикселей (снэп к стандарту), иначе — ширина
+						-- сохраняется, высота = w / ratio (снэп к стандарту).
+						if chk_preserve_mp.checked and cur[1] > 0 and cur[2] > 0 then (
+							local mp = cur[1] as float * cur[2]
+							local newW = (sqrt(mp * val)) as integer
+							local newH = (sqrt(mp / val)) as integer
+							local snapped = snapResolution newW newH
+							t = #(snapped[1], snapped[2])
+						) else (
+							local snapped = snapResolution cur[1] (cur[1] as float / val)
+							t = #(snapped[1], snapped[2])
+						)
+					)
+					#swap: t = #(cur[2], cur[1])
+					default: t = cur
+				)
+				if t[1] <= 0 or t[2] <= 0 do continue
+				-- LOCK (chk_ratio при #w/#h) сохраняет пропорции по построению — не предупреждаем;
+				-- иначе пропорции меняются, только если cur[1]*t[2] != t[1]*cur[2].
+				local ratioKept = false
+				if chk_ratio.checked and (mode == #w or mode == #h) then ratioKept = true
+				else if cur[1] * t[2] == t[1] * cur[2] then ratioKept = true
+				if not ratioKept then append propChanged #(bv, cur, t)
+				append targets #(r, bv, t)
+			)
+			if targets.count == 0 do return false
+			-- Переспрашиваем только если у какого-то из видов меняются пропорции и не включён
+			-- 'Preserve MegaPix' (при нём каждый вид получает своё разрешение под свои пропорции).
+			if propChanged.count > 0 and not chk_preserve_mp.checked then (
+				local propChanged_str = ""
+				for p in propChanged do (
+					propChanged_str += "   " + (getCleanViewName p[1].name) + ": " + \
+						(ratioString p[2][1] p[2][2]) + " -> " + (ratioString p[3][1] p[3][2]) + "\n"
+				)
+				propChanged_str = substring propChanged_str 1 (propChanged_str.count - 1)
+				if not (queryBox (L10N.trMsg "copyResConfirm" args:#(propChanged_str)) title:(L10N.trMsg "titleBatchViews")) do return false
+			)
+			closeBatchWindow()
+			for item in targets do (
+				local t = item[3]
+				local baseW = t[1]
+				local baseH = t[2]
+				if not baseMode and abs(scale - 1.0) > 0.001 then (
+					baseW = (t[1] as float / scale) as integer
+					baseH = (t[2] as float / scale) as integer
+					if baseW <= 0 or baseH <= 0 do continue
+				)
+				setViewBase item[2] baseW baseH
+			)
+			listViews()
+			restoreSelectionByReal idxs
+			updateOverrideUI()
+			true
+		)
+
 		-- Обновить batch view из UI (txt_view_name/2/3, drdwn_state, база)
-		fn view_update = (
+		fn viewUpdate = (
 			if getSel() == 0 do return undefined
 			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 			if bv == undefined do return undefined
@@ -2416,10 +3016,10 @@ macroScript Pankovea_BatchViewsManager
 			if any_changed do (
 				-- Список и нативное окно перерисовываем только при смене имени вида
 				if name_changed do (
-					close_batch_window()
-					list_views()
+					closeBatchWindow()
+					listViews()
 				)
-				if getSel() > 0 do get_view_params (getRealIndex (getSel()))
+				if getSel() > 0 do getViewParams (getRealIndex (getSel()))
 			)
 		)
 
@@ -2429,19 +3029,58 @@ macroScript Pankovea_BatchViewsManager
 			showResForBase base[1] base[2]
 		)
 
+		-- Цели переключения enabled: выделенные виды + все виды внутри выделенных групп
+		fn collectToggleTargets = (
+			local targets = #()
+			for ui in getSelectedUiIndices() do (
+				local realIdx = getRealIndex ui
+				if realIdx > 0 then (
+					local v = batchRenderMgr.GetView realIdx
+					if v != undefined then (
+						if isGroupView v then (
+							local bounds = getGroupBounds realIdx
+							for j = (bounds[1] + 1) to bounds[2] do (
+								local m = batchRenderMgr.GetView j
+								if not (isGroupView m) and findItem targets j == 0 do append targets j
+							)
+						) else (
+							if findItem targets realIdx == 0 do append targets realIdx
+						)
+					)
+				)
+			)
+			targets
+		)
+
+		-- Свернуть/развернуть группу (второй клик по выделенной группе)
+		fn toggleGroupCollapse realIdx = (
+			local the_view = batchRenderMgr.GetView realIdx
+			if the_view == undefined or not (isGroupView the_view) do return false
+			local prefix = substring the_view.name 1 1
+			if prefix == PROP_COLLAPSED then
+				the_view.name = PROP_EXPANDED + substring the_view.name 2 -1
+			else if prefix == PROP_EXPANDED then
+				the_view.name = PROP_COLLAPSED + substring the_view.name 2 -1
+			else
+				the_view.name = PROP_COLLAPSED + the_view.name
+			g_roll_batch.listViews()
+			local savedIdx = findItem g_visibleIndices realIdx
+			if savedIdx > 0 do setSel savedIdx
+			true
+		)
+
 		--------------------------------
 		on roll_batch open do (
 			initListBox()
-			list_views()
+			listViews()
 			setSel 0
 			chk_snap.checked = g_snap
 			updateOverrideUI()
+			updateCopyResBtn()
 			local cam = if g_roll_cams != undefined then g_roll_cams.active_cam else undefined
 			if isValidNode cam and (isKindOf cam camera) then (
 				local camIdx = findCameraInDropdown cam.name
-				suppress_cam_dropdown = true
 				if camIdx != 0 do drdwn_cam.selection = camIdx
-				suppress_cam_dropdown = false
 			)
 			selectFirstViewForCamera cam
 		)
@@ -2462,36 +3101,44 @@ macroScript Pankovea_BatchViewsManager
 			g_batch_view = undefined
 			g_view_name = ""
 			g_active_view = undefined
-			list_views()
+			listViews()
 			if g_roll_cams != undefined do (
-				g_roll_cams.relist_cams()
-				g_roll_cams.change_active()
+				g_roll_cams.relistCams()
+				g_roll_cams.changeActive()
 				g_roll_cams.syncCameraUI()
 			)
 			if prevView != undefined then (
 				for i = 1 to g_visibleIndices.count do (
 					if batchRenderMgr.GetView g_visibleIndices[i] == prevView do (
 						setSel i
-						get_view_params g_visibleIndices[i]
+						getViewParams g_visibleIndices[i]
 						exit
 					)
 				)
-			) else if getSel() > 0 do get_view_params (getRealIndex (getSel()))
+			) else if getSel() > 0 do getViewParams (getRealIndex (getSel()))
 		)
 
-		on txt_view_name entered txt do view_update()
-		on txt_view_path entered txt do view_update()
-		on txt_view_file entered txt do view_update()
+		on txt_view_name entered txt do viewUpdate()
+		on txt_view_path entered txt do (
+			if isMultiEdit() then ( setMultiPath(); return false )
+			viewUpdate()
+		)
+		on txt_view_file entered txt do viewUpdate()
 
 		on drdwn_state selected index do (
-			-- Программная установка из get_view_params (loading_view=true) не должна
-			-- вызывать view_update: иначе при выделении вида список может перестроиться
-			-- (view_update → переименование → list_views) и мигать.
-			if loading_view then return false
-			view_update()
+			if isMultiEdit() then (
+				local state = if index > 1 then drdwn_state.items[index] else ""
+				for r in getMultiEditIdxs() do (batchRenderMgr.GetView r).sceneStateName = state
+				updateOverrideUI()
+				return false
+			)
+			viewUpdate()
 		)
 		on spn_start_frame changed val do (
-			if loading_view then return false
+			if isMultiEdit() then (
+				for r in getMultiEditIdxs() do (batchRenderMgr.GetView r).startFrame = val as integer
+				return false
+			)
 			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined do (
@@ -2500,7 +3147,10 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 		on spn_end_frame changed val do (
-			if loading_view then return false
+			if isMultiEdit() then (
+				for r in getMultiEditIdxs() do (batchRenderMgr.GetView r).endFrame = val as integer
+				return false
+			)
 			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined do (
@@ -2513,8 +3163,110 @@ macroScript Pankovea_BatchViewsManager
 			applyViewRes renderWidth renderHeight
 		)
 
+		on btn_copy_res pressed do (
+			-- Источник — АКТИВНЫЙ вид: загруженный в интерфейс
+			-- (его имя — в поле View name). Кн��пка недоступна без активного вида,
+			-- поэтому этот guard — лишь страховка.
+			local activeView = getActiveView()
+			if activeView == undefined or (isGroupView activeView) do return false
+			local b = getViewBase activeView
+			if b[1] <= 0 or b[2] <= 0 do return false
+			local scale = if g_globalScale == undefined then 1.0 else g_globalScale
+			-- В каком представлении работает копирование:
+			-- 'Base size' ON  — база (100%), OFF — текущий (масштабированный) размер.
+			local baseMode = chk_edit_base.checked and abs(scale - 1.0) > 0.001
+			-- Разрешение источника в выбранном представлении.
+			local srcW = b[1]
+			local srcH = b[2]
+			if not baseMode then (
+				local cur = resFromBase b[1] b[2]
+				srcW = cur[1]
+				srcH = cur[2]
+			)
+			-- При 'Preserve MegaPix' OFF ориентация закреплена: каждый вид получает
+			-- WxH источника, развёрнутый под его ориентацию (orientedCopyResForView).
+			-- Поэтому опираемся не на конкретные значения разрешений, а только на
+			-- пропорции: предупреждаем, если у какого-то из ОСТАЛЬНЫХ видов (активный
+			-- вид исключаем — сравнение с ним бессмысленно: его разрешение — источник)
+			-- пропорции изменятся после копирования.
+			local propChanged = #()
+			for i = 1 to batchRenderMgr.NumViews do (
+				local v = batchRenderMgr.GetView i
+				if v != undefined and v != activeView and not (isGroupView v) then (
+					local bb = getViewBase v
+					if bb[1] > 0 and bb[2] > 0 then (
+						local cur = if baseMode then #(bb[1], bb[2]) else resFromBase bb[1] bb[2]
+						local r = orientedCopyResForView v srcW srcH
+						if cur[1] * r[2] != r[1] * cur[2] then append propChanged #(v, cur, r)
+					)
+				)
+			)
+			-- Переспрашиваем только если у какого-то из ОСТАЛЬНЫХ видов изменятся
+			-- пропорции и не включён режим 'Preserve MegaPix' (при нём каждый вид
+			-- получает своё разрешение под свои пропорции — диалог не нужен).
+			-- Действие нельзя отменить; если пропорции не меняются — копируем без диалога.
+			if propChanged.count > 0 and not chk_preserve_mp.checked then (
+				local propChanged_str = ""
+				for p in propChanged do (
+					propChanged_str += "   " + (getCleanViewName p[1].name) + ": " + \
+						(ratioString p[2][1] p[2][2]) + " -> " + (ratioString p[3][1] p[3][2]) + "\n"
+				)
+				propChanged_str = substring propChanged_str 1 (propChanged_str.count - 1)
+				if not (queryBox (L10N.trMsg "copyResConfirm" args:#(propChanged_str)) title:(L10N.trMsg "titleBatchViews")) do return false
+			)
+			closeBatchWindow()
+			local count = 0
+			for i = 1 to batchRenderMgr.NumViews do (
+				local v = batchRenderMgr.GetView i
+				if v != undefined and not (isGroupView v) then (
+					local r
+					-- 'Preserve MegaPix' ON — сохранить суммарные мегапиксели,
+					-- пересчитав обе стороны под пропорции каждого вида.
+					if chk_preserve_mp.checked then (
+						local tb = getViewBase v
+						local ratio = if tb[1] > 0 and tb[2] > 0 then (tb[1] as float / tb[2]) else (srcW as float / srcH)
+						if ratio > 0 then (
+							local mp = srcW as float * srcH as float
+							local newW = (sqrt(mp * ratio)) as integer
+							local newH = (sqrt(mp / ratio)) as integer
+							local snapped = snapResolution newW newH
+							r = #(snapped[1], snapped[2])
+						) else r = #(srcW, srcH)
+					) else (
+						r = orientedCopyResForView v srcW srcH
+					)
+					-- Пересчитать результат в базу для setViewBase
+					local baseW = r[1]
+					local baseH = r[2]
+					if not baseMode and abs(scale - 1.0) > 0.001 then (
+						baseW = (r[1] as float / scale) as integer
+						baseH = (r[2] as float / scale) as integer
+						if baseW <= 0 or baseH <= 0 do continue
+					)
+					setViewBase v baseW baseH
+					count += 1
+				)
+			)
+			if count > 0 and g_roll_batch != undefined then (
+				g_roll_batch.listViews()
+				if g_roll_batch.getSel() > 0 do (
+					g_roll_batch.getViewParams (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
+				)
+			)
+		)
+
 		on chk_sync_views changed state do (
-			if loading_view then return false
+			-- Массово: флаг — свойство камеры, ставим его всем уникальным камерам
+			-- выделенных видов (без автоподбора размера — в мульти-режиме он неоднозначен).
+			if isMultiEdit() then (
+				local cams = #()
+				for r in getMultiEditIdxs() do (
+					local bv = batchRenderMgr.GetView r
+					if bv != undefined and isValidNode bv.camera and findItem cams bv.camera == 0 do append cams bv.camera
+				)
+				for cam in cams do setUserProp cam "sync_batch_views" state
+				return false
+			)
 			if getSel() == 0 do return false
 			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 			if bv == undefined or not (isValidNode bv.camera) do return false
@@ -2522,32 +3274,51 @@ macroScript Pankovea_BatchViewsManager
 			if state do (
 				local base = getViewBase bv
 				if base[1] > 0 and base[2] > 0 do syncViewsForCam bv.camera base (resFromBase base[1] base[2])
-				list_views()
+				listViews()
 			)
 		)
 
 		-- CAMERA SELECTION
 		on drdwn_cam selected index do (
-			if suppress_cam_dropdown do return false
-			if getSel() != 0 and index > 1 then (
+			if index <= 1 do return false
+			local cam_name = stripCamResSuffix drdwn_cam.items[index]
+			local cam = getNodeByName cam_name
+			if not (isValidNode cam) or not (isKindOf cam camera) do return false
+			-- Массово: назначить камеру ВСЕМ выделенным видам (диалог базы — один раз)
+			if isMultiEdit() then (
+				local idxs = getMultiEditIdxs()
+				for r in idxs do (batchRenderMgr.GetView r).camera = cam
+				if g_roll_cams != undefined do (
+					g_roll_cams.setActiveCam cam
+					g_roll_cams.syncCameraUI()
+				)
+				local res = getCamResFromViews cam
+				if res[1] > 0 and res[2] > 0 then (
+					if queryBox (L10N.trMsg "applyAsBase" args:#(res[1], res[2])) title:(L10N.trMsg "titleCameraBase") do (
+						closeBatchWindow()
+						for r in idxs do setViewBase (batchRenderMgr.GetView r) res[1] res[2]
+						listViews()
+						restoreSelectionByReal idxs
+					)
+				)
+				updateOverrideUI()
+				return false
+			)
+			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined then (
-					local cam_name = stripCamResSuffix drdwn_cam.items[index]
-					local cam = getNodeByName cam_name
-					if isValidNode cam and (isKindOf cam camera) then (
-						bv.camera = cam
-						if g_roll_cams != undefined do (
-							g_roll_cams.setActiveCam cam
-							g_roll_cams.syncCameraUI()
-						)
-						local res = getCamResFromViews cam
-						if res[1] > 0 and res[2] > 0 then (
-							if queryBox (L10N.trMsg "applyAsBase" args:#(res[1], res[2])) title:(L10N.trMsg "titleCameraBase") do (
-								close_batch_window()
-								setViewBase bv res[1] res[2]
-								list_views()
-								if getSel() > 0 do get_view_params (getRealIndex (getSel()))
-							)
+					bv.camera = cam
+					if g_roll_cams != undefined do (
+						g_roll_cams.setActiveCam cam
+						g_roll_cams.syncCameraUI()
+					)
+					local res = getCamResFromViews cam
+					if res[1] > 0 and res[2] > 0 then (
+						if queryBox (L10N.trMsg "applyAsBase" args:#(res[1], res[2])) title:(L10N.trMsg "titleCameraBase") do (
+							closeBatchWindow()
+							setViewBase bv res[1] res[2]
+							listViews()
+							if getSel() > 0 do getViewParams (getRealIndex (getSel()))
 						)
 					)
 				)
@@ -2555,6 +3326,28 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on btn_use_active_cam pressed do (
+			-- Массово: назначить активную камеру ВСЕМ выделенным видам
+			if isMultiEdit() then (
+				local cam = getActiveCamera()
+				if cam == undefined then (
+					for i in 1 to viewport.numViews where cam == undefined do (
+						local vc = viewport.getCamera index:i
+						if vc != undefined and isValidNode vc and (isKindOf vc camera) do cam = vc
+					)
+				)
+				if isValidNode cam and (isKindOf cam camera) then (
+					local idxs = getMultiEditIdxs()
+					closeBatchWindow()
+					for r in idxs do (batchRenderMgr.GetView r).camera = cam
+					if g_roll_cams != undefined do (
+						g_roll_cams.setActiveCam cam
+						g_roll_cams.syncCameraUI()
+					)
+					listViews()
+					restoreSelectionByReal idxs
+				)
+				return false
+			)
 			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined then (
@@ -2566,14 +3359,14 @@ macroScript Pankovea_BatchViewsManager
 						)
 					)
 					if isValidNode cam and (isKindOf cam camera) then (
-						close_batch_window()
+						closeBatchWindow()
 						bv.camera = cam
 						if g_roll_cams != undefined do (
 							g_roll_cams.active_cam = cam
-							g_roll_cams.change_active()
+							g_roll_cams.changeActive()
 							g_roll_cams.syncCameraUI()
 						)
-						list_views()
+						listViews()
 					)
 				)
 			)
@@ -2597,57 +3390,26 @@ macroScript Pankovea_BatchViewsManager
 				new_path = getBitmapSaveFileName()
 			)
 			if new_path != undefined then (
-				g_view_path = new_path
-				update_Path()
-				if g_active_view != undefined and g_view_path != undefined do (
-					close_batch_window()
-					g_active_view.outputFilename = g_view_path
+				if isMultiEdit() then (
+					-- Массово: применяется только папка, имена файлов видов сохраняются
+					setMultiPathFromPicked new_path
+				) else (
+					g_view_path = new_path
+					updatePath()
+					if g_active_view != undefined and g_view_path != undefined do (
+						closeBatchWindow()
+						g_active_view.outputFilename = g_view_path
+					)
 				)
 			)
 		)
 
 		on btn_render pressed do ( batchRenderMgr.render() )
 		on btn_net_render changed state do (
-			close_batch_window()
+			closeBatchWindow()
 			batchRenderMgr.netRender = state
 		)
 
-		-- Перелистывание видов: выбрать вид по UI-индексу (клампится к границам)
-		fn selectViewByUiIndex uiIdx = (
-			if g_visibleIndices.count == 0 do return false
-			if uiIdx < 1 then uiIdx = 1
-			if uiIdx > g_visibleIndices.count then uiIdx = g_visibleIndices.count
-			-- MultiExtended: SelectedIndex не снимает остальные выделения — чистим явно
-			lst_views.ClearSelected()
-			setSel uiIdx
-			lst_views.Invalidate()
-			local realIdx = getRealIndex uiIdx
-			if realIdx > 0 then (
-				local the_view = batchRenderMgr.GetView realIdx
-				if isGroupView the_view then (
-					txt_view_name.text = stripCollapsePrefix the_view.name
-				) else (
-					applyViewToScene the_view
-					g_active_view = get_view_params realIdx
-				)
-				lst_views_update_buttons()
-			)
-			true
-		)
-
-		-- Найти ближайший UI-индекс вида (НЕ группы) в направлении dir (-1/1) от startIdx.
-		-- 0 — если в этом направлении видов больше нет.
-		fn findViewUiIndex startIdx dir = (
-			local n = g_visibleIndices.count
-			local i = startIdx + dir
-			while i >= 1 and i <= n do (
-				local r = getRealIndex i
-				local v = if r > 0 then batchRenderMgr.GetView r else undefined
-				if v != undefined and not (isGroupView v) do return i
-				i += dir
-			)
-			0
-		)
 
 		on btn_prev_view pressed do (
 			local uiIdx = getSel()
@@ -2672,19 +3434,25 @@ macroScript Pankovea_BatchViewsManager
 			if isValidNode cam and (isKindOf cam camera) then select cam
 		)
 
-		-- SINGLE CLICK: группа — только выделение, вид — загрузка параметров
+		-- SINGLE CLICK: группа — только выделение, вид — загрузка параметров;
+		-- 2+ выделенных видов — режим массового редактирования.
 		on lst_views SelectedIndexChanged sender args do (
 			local index = getSel()
 			if index <= 0 do return false
+			if isMultiEdit() then (
+				g_active_view = undefined
+				updateViewsListButtons()
+				return false
+			)
 			local realIdx = getRealIndex index
 			if realIdx > 0 then (
 				local the_view = batchRenderMgr.GetView realIdx
 				if isGroupView the_view then (
 					txt_view_name.text = stripCollapsePrefix the_view.name
 				) else (
-					g_active_view = get_view_params realIdx
+					g_active_view = getViewParams realIdx
 				)
-				lst_views_update_buttons()
+				updateViewsListButtons()
 			)
 		)
 
@@ -2825,7 +3593,7 @@ macroScript Pankovea_BatchViewsManager
 			if realIdx <= 0 do return false
 			local the_view = batchRenderMgr.GetView realIdx
 			if the_view == undefined do return false
-			close_batch_window()
+			closeBatchWindow()
 			-- Windows шлёт MouseUp на каждый клик + ещё раз после MouseDoubleClick.
 			-- Гасим следующие MouseUp: действие двойного клика уже сделано здесь.
 			g_dblPending = true
@@ -2855,9 +3623,9 @@ macroScript Pankovea_BatchViewsManager
 						) else (
 							-- Применение вида не меняет содержимое списка (имя и галочка те же),
 							-- поэтому список не перестраиваем — иначе он лишний раз мигает.
-							close_batch_window()
+							closeBatchWindow()
 							applyViewToScene the_view
-							get_view_params idx
+							getViewParams idx
 						)
 					)
 				)
@@ -2868,100 +3636,266 @@ macroScript Pankovea_BatchViewsManager
 			messageBox (L10N.trMsg "batchViewsInfoMsg") title:(L10N.trMsg "titleBatchViews")
 		)
 
-		-- DELETE VIEW / GROUP
-		on btn_rem pressed do (
-			local uiSel = getSel()
-			if uiSel <= 0 do return false
-			local realIdx = getRealIndex uiSel
-			if realIdx <= 0 do return false
-			local the_view = batchRenderMgr.GetView realIdx
+		--( КОНТЕКСТНОЕ МЕНЮ УДАЛЕНИЯ: rollout-локали свитка
+		-- rcmenu rmc_del_group/rmc_del_view определены на уровне макроса (см. блок
+		-- перед rollout roll_batch); их обработчики обращаются к этим локальным переменным и
+		-- delApply через объект свитка: g_roll_batch.delApply, g_roll_batch.delGroupsCtx
+		-- (rollout-локальные переменные доступны снаружи как свойства rollout-объекта).
+		-- popUpMenu НЕ блокирует выполнение; пункта «Отмена» в меню нет — отмена это
+		-- клик вне меню (picked не сработает). Поэтому контекст сбрасывается и
+		-- пересобирается при КАЖДОМ нажатии btn_rem, а после применения — в delApply:
+		-- так исключается применение «протухшего» контекста от прежнего меню.
+		-- Контекст сбора удаления (заполняет btn_rem, читает delApply):
+		--
+		-- delGroupsCtx — записи выделенных групп (по одной на группу):
+		--   #(grpName, srcIdx, headerReal, flatRange):
+		--     grpName    — чистое имя группы (без префикса свёрнутости);
+		--     srcIdx     — индекс группы в splitIntoGroups (для построения flatRange);
+		--     headerReal — реальный индекс строки заголовка группы;
+		--     flatRange  — плоские индексы ВСЕХ строк группы (заголовок + виды),
+		--                  для варианта «удалить группу с содержимым».
+		-- delPlainsCtx — реальные индексы «плоских» строк: одиночные виды и
+		--   заголовки ПУСТЫХ групп (такие строки удаляются всегда, при любом выборе).
+		local delGroupsCtx = #()
+		local delPlainsCtx = #()
 
-			close_batch_window()
-
-			if isGroupView the_view then (
-				local allData = collectAllViewData()
-				local groups = splitIntoGroups allData
-				local srcIdx = findGroupForView groups realIdx
-				if srcIdx == 0 do return false
-				local grp = groups[srcIdx]
-				local grpName = stripCollapsePrefix grp[1].name
-				local hasViews = false
-				for vd in grp where not isGroupName vd.name do (hasViews = true; exit)
-				local result = confirmDeleteGroup grpName hasViews
-				if result == 0 do return false
-				if result == 1 then (
-					local toDelete = #()
-					local flatIdx = 0
-					for i = 1 to groups.count do (
-						for vd in groups[i] do (
-							flatIdx += 1
-							if i == srcIdx do append toDelete flatIdx
-						)
-					)
-					for i = toDelete.count to 1 by -1 do batchRenderMgr.DeleteView toDelete[i]
+		-- groupWithContent = true  — удалить группы целиком (заголовок + все виды внутри);
+		-- groupWithContent = false — удалить только строки заголовков групп.
+		-- «Плоские» строки (delPlainsCtx) удаляются в обоих случаях.
+		fn delApply groupWithContent:false = (
+			if delGroupsCtx.count == 0 and delPlainsCtx.count == 0 do return false
+			local toDelete = #()
+			for entry in delGroupsCtx do (
+				local r = entry[3]
+				local range = entry[4]
+				if groupWithContent then (
+					for idx in range do if findItem toDelete idx == 0 do append toDelete idx
 				) else (
-					batchRenderMgr.DeleteView realIdx
+					if findItem toDelete r == 0 do append toDelete r
 				)
-			) else (
-				if not (queryBox (L10N.trMsg "deleteView")) do return false
-				batchRenderMgr.DeleteView realIdx
+			)
+			for p in delPlainsCtx do if findItem toDelete p == 0 do append toDelete p
+			if toDelete.count > 0 then (
+				sort toDelete
+				for i = toDelete.count to 1 by -1 do batchRenderMgr.DeleteView toDelete[i]
+				g_batch_view = undefined
+				g_view_name = ""
+				g_active_view = undefined
+				setSel 0
+				listViews()
+				updateViewsListButtons()
+			)
+			delGroupsCtx = #()
+			delPlainsCtx = #()
+		)
+		--) Конец КОНТЕКСТНОЕ МЕНЮ УДАЛЕНИЯ (rollout-локали)
+
+		-- DELETE VIEW / GROUP (одно выделение или несколько)
+		on btn_rem pressed do (
+			-- Контекст собирается заново при каждом нажатии: сбрасываем накопленное,
+			-- т.к. отмена = клик вне меню (picked не срабатывает, delApply не вызывается).
+			delGroupsCtx = #()
+			delPlainsCtx = #()
+			local selReal = getSelectedRealIdxs()
+			if selReal.count == 0 do return false
+			closeBatchWindow()
+
+			-- Контекст удаления пишется в rollout-локали delGroupsCtx/delPlainsCtx;
+			-- их читает delApply при выборе пункта меню (см. rcmenu выше).
+			local allData = collectAllViewData()
+			local groups = splitIntoGroups allData
+			local addedGroups = #()
+			local hasGroups = false
+			for r in selReal do (
+				local the_view = batchRenderMgr.GetView r
+				if the_view != undefined then (
+					if isGroupView the_view then (
+						local srcIdx = findGroupForView groups r
+						if srcIdx == 0 do continue
+						if findItem addedGroups srcIdx > 0 do continue
+						append addedGroups srcIdx
+						local grp = groups[srcIdx]
+						local grpName = stripCollapsePrefix grp[1].name
+						local hasViews = false
+						for vd in grp where not (isGroupName vd.name) do (hasViews = true; exit)
+						if hasViews then (
+							-- Плоские индексы всего диапазона группы
+							local range = #()
+							local flatIdx = 0
+							for i = 1 to groups.count do (
+								for vd in groups[i] do (
+									flatIdx += 1
+									if i == srcIdx do append range flatIdx
+								)
+							)
+							append delGroupsCtx #(grpName, srcIdx, r, range)
+							hasGroups = true
+						) else (
+							-- Пустая группа — удаляем строку заголовка как простую строку
+							if findItem delPlainsCtx r == 0 do append delPlainsCtx r
+						)
+					) else (
+						if findItem delPlainsCtx r == 0 do append delPlainsCtx r
+					)
+				)
 			)
 
-			g_batch_view = undefined
-			g_view_name = ""
-			g_active_view = undefined
-			setSel 0
-			list_views()
-			lst_views_update_buttons()
+			if delGroupsCtx.count == 0 and delPlainsCtx.count == 0 do return false
+
+			-- popUpMenu без pos: меню появляется в текущей позиции мыши.
+			if hasGroups then (
+				popUpMenu rmc_del_group
+			) else (
+				popUpMenu rmc_del_view
+			)
 		)
 
-		-- DUPLICATE VIEW
+		-- DUPLICATE VIEWS / GROUPS (мультивыбор)
+		-- Копии вставляются ОДНИМ БЛОКОМ сразу после последнего выделенного источника
+		-- (группа копируется целиком: заголовок + все виды внутри, блоком, не вперемешку).
 		on btn_dup pressed do (
-			if getSel() != 0 then (
-				local realIdx = getRealIndex (getSel())
-				local srcView = batchRenderMgr.GetView realIdx
-				if srcView == undefined do return false
-				local viewName = srcView.name
-				local srcFile = srcView.outputFilename
-				batchRenderMgr.DuplicateView realIdx
-				-- Дубликат создаётся в конце списка
-				local dupView = batchRenderMgr.GetView batchRenderMgr.numViews
-				if dupView != undefined then (
-					-- Правильное имя дубликата: увеличить номер в чистом имени источника,
-					-- сохранив суффикс разрешения ("Cam 2 (66% of 1920x1280)" -> "Cam 3 (66% of 1920x1280)")
-					local dupName = duplicateViewName viewName dupView
-					dupView.name = dupName
-					-- Обновить имя файла вывода: заменить в нём чистое имя источника на новое
-					if srcFile != undefined and srcFile != "" then (
-						local path = getFilenamePath srcFile
-						local fname = getFilenameFile srcFile
-						local ftype = getFilenameType srcFile
-						local oldClean = getCleanViewName viewName
-						local newClean = getCleanViewName dupName
-						local p = findString fname oldClean
-						if p != undefined and oldClean != "" then (
-							fname = replace fname p oldClean.count newClean
-						) else (
-							fname = fname + " 02"
-						)
-						dupView.outputFilename = path + fname + ftype
-					)
-					move_view_index batchRenderMgr.numViews (realIdx + 1)
-					list_views()
-					-- Выделить созданный дубликат
-					local selSet = false
-					for i = 1 to g_visibleIndices.count do (
-						if (batchRenderMgr.GetView g_visibleIndices[i]).name == dupName do (
-							setSel i
-							g_active_view = get_view_params g_visibleIndices[i]
-							selSet = true
-							exit
-						)
-					)
-					if not selSet do setSel 0
-					lst_views_update_buttons()
+			local selReal = getSelectedRealIdxs()
+			if selReal.count == 0 do return false
+
+			closeBatchWindow()
+			local allData = collectAllViewData()
+			if allData.count == 0 do return false
+
+			-- Диапазоны источников в порядке выделения: группа = #(start,end), одиночный вид = #(r,r).
+			-- Если выбраны и заголовок группы, и её виды — группа считается один раз.
+			local ranges = #()
+			local covered = #()
+			for r in selReal do (
+				if findItem covered r > 0 do continue
+				if r < 1 or r > allData.count do continue
+				local v = batchRenderMgr.GetView r
+				if v == undefined do continue
+				if isGroupView v then (
+					local b = getGroupBounds r
+					append ranges b
+					for i = b[1] to b[2] do append covered i
+				) else (
+					append ranges #(r, r)
+					append covered r
 				)
 			)
+			if ranges.count == 0 do return false
+			qsort ranges (fn cmpRanges a b = a[1] - b[1])
+
+			-- Занятые базовые имена (оригиналы + уже созданные копии)
+			local takenBases = #()
+			local takenGroups = #()
+			for vd in allData do (
+				if isGroupName vd.name then (
+					local gs = stripCollapsePrefix vd.name
+					if findItem takenGroups gs == 0 do append takenGroups gs
+				) else (
+					local bn = getCleanViewName vd.name
+					if bn != "" and findItem takenBases bn == 0 do append takenBases bn
+				)
+			)
+
+			-- Построить копии (имена уникальны относительно оригиналов И других копий)
+			local copyData = #()
+			for rg in ranges do (
+				local hdr = allData[rg[1]]
+				if isGroupName hdr.name then (
+					-- ГРУППА: заголовок + все виды внутри
+					local srcPrefix = substring hdr.name 1 1
+					local hasPrefix = (srcPrefix == PROP_COLLAPSED or srcPrefix == PROP_EXPANDED)
+					local grpName = duplicateGroupName hdr.name
+					local grpStripped = stripCollapsePrefix grpName
+					while findItem takenGroups grpStripped > 0 do (
+						grpName = duplicateGroupName grpName
+						grpStripped = stripCollapsePrefix grpName
+					)
+					append takenGroups grpStripped
+					local newGrpFull = if hasPrefix then srcPrefix + grpStripped else grpStripped
+
+					local hdrCopy = copy hdr
+					hdrCopy.name = newGrpFull
+					append copyData hdrCopy
+					for i = (rg[1] + 1) to rg[2] do (
+						local vd = copy allData[i]
+						local oldName = vd.name
+						local newName = duplicateViewName oldName undefined
+						local newClean = getCleanViewName newName
+						while findItem takenBases newClean > 0 do newClean = bumpBaseName newClean
+						append takenBases newClean
+						-- Суффикс разрешения в новом имени (" (50% of 1920x1280)") сохранить
+						local oldClean = getCleanViewName oldName
+						local suffix = if oldClean.count < oldName.count then subString oldName (oldClean.count + 1) -1 else ""
+						vd.name = newClean + suffix
+						-- Обновить имя файла вывода (заменить чистое имя источника на новое)
+						if vd.outputFilename != undefined and vd.outputFilename != "" then (
+							local path = getFilenamePath vd.outputFilename
+							local fname = getFilenameFile vd.outputFilename
+							local ftype = getFilenameType vd.outputFilename
+							local p = findString fname oldClean
+							if p != undefined and oldClean != "" then (
+								vd.outputFilename = path + (replace fname p oldClean.count newClean) + ftype
+							)
+						)
+						append copyData vd
+					)
+				) else (
+					-- ОДИНОЧНЫЙ ВИД
+					local vd = copy hdr
+					local oldName = vd.name
+					local newName = duplicateViewName oldName undefined
+					local newClean = getCleanViewName newName
+					while findItem takenBases newClean > 0 do newClean = bumpBaseName newClean
+					append takenBases newClean
+					local oldClean = getCleanViewName oldName
+					local suffix = if oldClean.count < oldName.count then subString oldName (oldClean.count + 1) -1 else ""
+					vd.name = newClean + suffix
+					if vd.outputFilename != undefined and vd.outputFilename != "" then (
+						local path = getFilenamePath vd.outputFilename
+						local fname = getFilenameFile vd.outputFilename
+						local ftype = getFilenameType vd.outputFilename
+						local p = findString fname oldClean
+						if p != undefined and oldClean != "" then (
+							vd.outputFilename = path + (replace fname p oldClean.count newClean) + ftype
+						)
+					)
+					append copyData vd
+				)
+			)
+			if copyData.count == 0 do return false
+
+			-- Вставить ВСЕ копии одним блоком сразу после последнего источника
+			local insertAfter = ranges[ranges.count][2]
+			local newData = #()
+			for i = 1 to insertAfter do append newData allData[i]
+			for vd in copyData do append newData vd
+			for i = (insertAfter + 1) to allData.count do append newData allData[i]
+			rebuildBatchViews newData
+
+			-- Показать список и выделить ВСЕ созданные копии (блоком после последнего источника)
+			listViews()
+			lst_views.ClearSelected()
+			local newReal = #()
+			for i = (insertAfter + 1) to (insertAfter + copyData.count) do (
+				if i <= batchRenderMgr.numViews do append newReal i
+			)
+			local newUi = #()
+			for r in newReal do (
+				local ui = findItem g_visibleIndices r
+				if ui > 0 and findItem newUi ui == 0 do append newUi ui
+			)
+			if newUi.count > 0 then (
+				setSelectedUiIndices newUi
+				local firstReal = insertAfter + 1
+				local the_view = batchRenderMgr.GetView firstReal
+				if the_view != undefined and isGroupView the_view then (
+					txt_view_name.text = stripCollapsePrefix the_view.name
+				) else if the_view != undefined then (
+					g_active_view = getViewParams firstReal
+				)
+			) else (
+				setSel 0
+			)
+			updateViewsListButtons()
 		)
 
 		-- TOGGLE ENABLED (группа = все виды в ней, одиночный вид = один)
@@ -2970,7 +3904,7 @@ macroScript Pankovea_BatchViewsManager
 			if selReal.count == 0 do return false
 			local targets = collectToggleTargets()
 			if targets.count == 0 do return false
-			close_batch_window()
+			closeBatchWindow()
 			local anyOff = false
 			for r in targets do (
 				if not (batchRenderMgr.GetView r).enabled do (anyOff = true; exit)
@@ -2978,12 +3912,12 @@ macroScript Pankovea_BatchViewsManager
 			-- любая выключенная цель → включаем все; все включены → выключаем все
 			for r in targets do (batchRenderMgr.GetView r).enabled = anyOff
 			restoreSelectionByReal selReal
-			lst_views_update_buttons()
+			updateViewsListButtons()
 		)
 
 		-- TOGGLE ENABLED ALL
 		on btn_togleEnabledAll pressed do (
-			close_batch_window()
+			closeBatchWindow()
 			local num = batchRenderMgr.numViews
 			local enb = 0
 			local dsb = 0
@@ -2998,21 +3932,21 @@ macroScript Pankovea_BatchViewsManager
 				local the_view = batchRenderMgr.GetView i
 				if not (isGroupView the_view) do the_view.enabled = action
 			)
-			list_views()
+			listViews()
 		)
 
 		-- MOVE SELECTED UP (вид — свободно, в т.ч. в другую группу; заголовок — вся группа)
 		on btn_up pressed do (
 			local newReal = moveSelectedViews #up
 			if newReal.count == 0 do return false
-			list_views()
+			listViews()
 			local selUis = #()
 			for r in newReal do (
 				local ui = findItem g_visibleIndices r
 				if ui > 0 and findItem selUis ui == 0 do append selUis ui
 			)
 			if selUis.count > 0 do setSelectedUiIndices selUis
-			lst_views_update_buttons()
+			updateViewsListButtons()
 		)
 
 		-- ADD GROUP
@@ -3030,32 +3964,38 @@ macroScript Pankovea_BatchViewsManager
 
 			if getSel() > 0 then (
 				local realIdx = getRealIndex (getSel())
-				move_view_index batchRenderMgr.numViews realIdx
+				moveViewIndex batchRenderMgr.numViews realIdx
 			) else (
 				setSel batchRenderMgr.numViews
 			)
 
-			list_views()
+			listViews()
+			-- Выделить созданный заголовок (только его, сбросив мультивыбор)
+			lst_views.ClearSelected()
 			for i = 1 to g_visibleIndices.count do (
 				if (batchRenderMgr.GetView g_visibleIndices[i]).name == sep_name do (
 					setSel i; exit
 				)
 			)
-			lst_views_update_buttons()
+			updateViewsListButtons()
 		)
 
 		-- MOVE SELECTED DOWN (вид — свободно, в т.ч. в другую группу; заголовок — вся группа)
 		on btn_down pressed do (
 			local newReal = moveSelectedViews #down
 			if newReal.count == 0 do return false
-			list_views()
+			listViews()
 			local selUis = #()
 			for r in newReal do (
 				local ui = findItem g_visibleIndices r
 				if ui > 0 and findItem selUis ui == 0 do append selUis ui
 			)
 			if selUis.count > 0 do setSelectedUiIndices selUis
-			lst_views_update_buttons()
+			updateViewsListButtons()
+		)
+
+		on chk_preserve_mp changed state do (
+			updateCopyResBtn()
 		)
 
 		-- RENDER OUTPUT (настраивает выделенный batch view)
@@ -3072,7 +4012,17 @@ macroScript Pankovea_BatchViewsManager
 
 		-- Текстовые поля: пересчёт только по Enter (entered)
 		on txt_out_w entered val do (
-			if suppress_res_events then return false
+			-- Мульти-режим, разные базы: второе поле ещё "*" (высоты у видов различаются).
+			-- Если LOCK (сохранение пропорций) включён — применяем сразу: высота
+			-- пересчитывается под пропорции КАЖДОГО вида. Если выключен — применение
+			-- первой стороны неоднозначно, ждём ввод второго значения (тогда общие W/H
+			-- применятся через applyFieldRes -> applyViewRes).
+			if isMultiEdit() and txt_out_h.text == "*" then (
+				local w = val as integer
+				if w == undefined or w <= 0 do return false
+				if chk_ratio.checked do applyMultiFieldRes #w w
+				return false
+			)
 			if getSel() == 0 do return false
 			local w = txt_out_w.text as integer
 			if w == undefined or w <= 0 do return false
@@ -3089,7 +4039,17 @@ macroScript Pankovea_BatchViewsManager
 			applyFieldRes w h force:true
 		)
 		on txt_out_h entered val do (
-			if suppress_res_events then return false
+			-- Мульти-режим, разные базы: второе поле ещё "*" (ширины у видов различаются).
+			-- Если LOCK (сохранение пропорций) включён — применяем сразу: ширина
+			-- пересчитывается под пропорции КАЖДОГО вида. Если выключен — применение
+			-- первой стороны неоднозначно, ждём ввод второго значения (тогда общие W/H
+			-- применятся через applyFieldRes -> applyViewRes).
+			if isMultiEdit() and txt_out_w.text == "*" then (
+				local h = val as integer
+				if h == undefined or h <= 0 do return false
+				if chk_ratio.checked do applyMultiFieldRes #h h
+				return false
+			)
 			if getSel() == 0 do return false
 			local h = txt_out_h.text as integer
 			if h == undefined or h <= 0 do return false
@@ -3106,30 +4066,48 @@ macroScript Pankovea_BatchViewsManager
 			applyFieldRes w h force:true
 		)
 		on txt_out_ratio entered val do (
-			if suppress_res_events then return false
-			if getSel() == 0 do return false
 			if drdwn_re_presets.selection > 1 do return false
+			-- Мульти-режим, разные базы: применяем как btn_copy_res (предупреждение о пропорциях)
+			if isMultiEdit() and txt_out_w.text == "*" then (
+				local ratio = val as float
+				if ratio == undefined or ratio <= 0 do return false
+				applyMultiFieldRes #ratio ratio
+				return false
+			)
+			if getSel() == 0 do return false
 			local ratio = txt_out_ratio.text as float
 			if ratio == undefined or ratio <= 0 do return false
 			applyRatio ratio
 		)
 
 		on btn_swap pressed do (
+			-- Мульти-режим, разные базы: применяем как btn_copy_res (предупреждение о пропорциях)
+			if isMultiEdit() and txt_out_w.text == "*" then (
+				applyMultiFieldRes #swap 0
+				return false
+			)
 			local oldW = txt_out_w.text as integer
 			local oldH = txt_out_h.text as integer
 			local oldR = txt_out_ratio.text as float
-			suppress_res_events = true
+			if oldW == undefined or oldH == undefined or oldW <= 0 or oldH <= 0 do return false
 			txt_out_w.text = (oldH as integer) as string
 			txt_out_h.text = (oldW as integer) as string
 			txt_out_ratio.text = if oldR != undefined and oldR > 0 then (1.0 / oldR) as string else "1.0"
-			suppress_res_events = false
 			chk_ratio.checked = false
 			updateRatioUI()
-			if oldW != undefined and oldH != undefined and oldW > 0 and oldH > 0 do applyViewRes oldH oldW
+			applyViewRes oldH oldW
 		)
 
 		on drdwn_re_presets selected idx do (
-			if suppress_preset_events then return false
+			-- Мульти-режим, разные базы: применяем как btn_copy_res (предупреждение о пропорциях)
+			if isMultiEdit() and txt_out_w.text == "*" then (
+				if idx > 1 do (
+					local presetRatio = g_presetRatios[idx]
+					if presetRatio != undefined and presetRatio > 0 do applyMultiFieldRes #ratio presetRatio
+				)
+				updateRatioUI()
+				return false
+			)
 			if idx == 1 then (
 				chk_ratio.checked = false
 			) else (
@@ -3144,6 +4122,8 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on chk_edit_base changed status do (
+			-- В мульти-режиме галка — режим отображения: просто пересчитать общую базу
+			if isMultiEdit() do ( updateMultiUI(); return false )
 			if getSel() == 0 do return false
 			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 			if bv == undefined do return false
@@ -3153,22 +4133,48 @@ macroScript Pankovea_BatchViewsManager
 
 		-- OVERRIDE PRESET
 		on chk_override_preset changed state do (
-			if loading_view then return false
+			if isMultiEdit() then (
+				closeBatchWindow()
+				for r in getMultiEditIdxs() do (batchRenderMgr.GetView r).overridePreset = state
+				updateOverrideUI()
+				return false
+			)
 			if getSel() == 0 do ( updateOverrideUI(); return false )
 			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 			if bv == undefined do return false
-			close_batch_window()
+			closeBatchWindow()
 			bv.overridePreset = state
 			updateOverrideUI()
 		)
 
 		-- RENDER PRESET
 		on drdwn_render_preset selected idx do (
-			if loading_view then return false
+			-- Массово: применить пресет (или сброс) всем выделенным видам
+			if isMultiEdit() then (
+				local idxs = getMultiEditIdxs()
+				closeBatchWindow()
+				if idx == 1 then (
+					for r in idxs do (
+						local bv = batchRenderMgr.GetView r
+						bv.presetFile = ""
+						bv.overridePreset = true
+					)
+				) else (
+					local pf = renderPresetFileForName drdwn_render_preset.items[idx]
+					if pf == undefined do return false
+					for r in idxs do (
+						local bv = batchRenderMgr.GetView r
+						bv.presetFile = pf
+						bv.overridePreset = false
+					)
+				)
+				updateOverrideUI()
+				return false
+			)
 			if getSel() == 0 do return false
 			local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 			if bv == undefined or isGroupView bv do return false
-			close_batch_window()
+			closeBatchWindow()
 			if idx == 1 then (
 				-- Сброс: убрать render preset, вид использует свои настройки
 				bv.presetFile = ""
@@ -3193,12 +4199,10 @@ macroScript Pankovea_BatchViewsManager
 
 	--------------------------------------------------------------
 	--( ROLLOUT: GLOBAL
-	local roll_global = rollout roll_global "Global Batch Views Settings" (
+	rollout roll_global "Global Batch Views Settings" (
 		local roll_w = 250
 		--------------------------------
 		group "Sizes" (
-			button btn_copy_res "Copy current resolution to all views" width:(roll_w - 40) height:25 offset:[0,5] \
-				tooltip:"Set the current render resolution\nas the base for ALL batch views.\nKeeps each view's orientation:\nlandscape source is swapped\nfor portrait views and vice versa."
 			slider sld_global_res "Scale:  100%" range:[1, g_scaleValues.count, 1] type:#integer ticks:g_scaleValues.count width:(roll_w / 2 - 20) \
 				tooltip:"Global multiplier for ALL batch views.\nActual resolution = base in view name x scale."
 			button btn_apply_res "Apply" width:(roll_w / 2 - 20) height:25 align:#left offset:[roll_w / 2 - 20, -35] \
@@ -3277,9 +4281,9 @@ macroScript Pankovea_BatchViewsManager
 			updateScaleDisplay percent
 			applyGlobalScale()
 			if g_roll_batch != undefined then (
-				g_roll_batch.list_views()
+				g_roll_batch.listViews()
 				if g_roll_batch.getSel() > 0 do (
-					g_roll_batch.get_view_params (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
+					g_roll_batch.getViewParams (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
 				)
 			)
 		)
@@ -3287,7 +4291,7 @@ macroScript Pankovea_BatchViewsManager
 		-- "Запечь" текущий масштабированный размер как новую базу (100%) для всех видов
 		fn applyScaleAsNewBase = (
 			if abs(g_globalScale - 1.0) < 0.001 do return false
-			close_batch_window()
+			closeBatchWindow()
 			local count = 0
 			for i = 1 to batchRenderMgr.NumViews do (
 				local v = batchRenderMgr.GetView i
@@ -3310,9 +4314,9 @@ macroScript Pankovea_BatchViewsManager
 				g_roll_batch.chk_override_preset.checked = true
 				g_roll_batch.chk_edit_base.checked = false
 				g_roll_batch.updateOverrideUI()
-				g_roll_batch.list_views()
+				g_roll_batch.listViews()
 				if g_roll_batch.getSel() > 0 do (
-					g_roll_batch.get_view_params (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
+					g_roll_batch.getViewParams (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
 				)
 			)
 			count
@@ -3343,12 +4347,42 @@ macroScript Pankovea_BatchViewsManager
 		on btn_set_folder pressed do (
 			local folder = getSavePath caption:(L10N.trMsg "selectOutputFolder")
 			if folder == undefined do return false
+			-- Переспрашиваем только если текущие папки вывода различаются (кроме текущего вида;
+			-- при включённой галке в проверку входят и пути Render Elements): действие нельзя отменить.
+			local uniquePaths = #()
+			local selReal = if g_roll_batch != undefined and g_roll_batch.getSel() > 0 then g_roll_batch.getRealIndex (g_roll_batch.getSel()) else 0
+			for i = 1 to batchRenderMgr.NumViews do (
+				local v = batchRenderMgr.GetView i
+				if v != undefined and not (isGroupView v) and i != selReal then (
+					local p = if v.outputFilename != undefined then getFilenamePath v.outputFilename else ""
+					if p != "" and findItem uniquePaths p == 0 do append uniquePaths p
+				)
+			)
+			if chk_update_re.checked then (
+				try (
+					local rem = maxOps.GetCurRenderElementMgr()
+					local num = rem.NumRenderElements()
+					if num > 0 do (
+						for i = 0 to (num - 1) do (
+							local p = getFilenamePath (rem.GetRenderElementFilename i)
+							if p != "" and findItem uniquePaths p == 0 do append uniquePaths p
+						)
+					)
+				) catch ()
+			)
+			if uniquePaths.count > 1 then (
+				local uniquePaths_str = ""
+				for p in uniquePaths do uniquePaths_str += "   " + p + "\n"
+				uniquePaths_str = substring uniquePaths_str 1 (uniquePaths_str.count - 1)
+
+				if not (queryBox (L10N.trMsg "setFolderConfirm" args:#(uniquePaths_str)) title:(L10N.trMsg "titleBatchViews")) do return false
+			)
 			local count = setOutputFolderForAll folder
 			if chk_update_re.checked do setRePathsForAll folder
 			if count > 0 and g_roll_batch != undefined then (
-				g_roll_batch.list_views()
+				g_roll_batch.listViews()
 				if g_roll_batch.getSel() > 0 do (
-					g_roll_batch.get_view_params (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
+					g_roll_batch.getViewParams (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
 				)
 			)
 		)
@@ -3359,36 +4393,17 @@ macroScript Pankovea_BatchViewsManager
 			setRePathsForAll folder
 		)
 
-		on btn_copy_res pressed do (
-			if renderWidth <= 0 or renderHeight <= 0 do return false
-			close_batch_window()
-			local count = 0
-			for i = 1 to batchRenderMgr.NumViews do (
-				local v = batchRenderMgr.GetView i
-				if v != undefined and not (isGroupView v) then (
-					local r = orientedCopyResForView v renderWidth renderHeight
-					setViewBase v r[1] r[2]
-					count += 1
-				)
-			)
-			if count > 0 and g_roll_batch != undefined then (
-				g_roll_batch.list_views()
-				if g_roll_batch.getSel() > 0 do (
-					g_roll_batch.get_view_params (g_roll_batch.getRealIndex (g_roll_batch.getSel()))
-				)
-			)
-		)
-
 	)
+
 
 	--) Конец ROLLOUT: GLOBAL
 	--------------------------------------------------------------
 
 
 	--------------------------------------------------------------
-	--( ROLLOUT: MANAGE SCENE STATES
+	--( ROLLOUT: SCENE STATES
 
-	local roll_states = rollout roll_states "Manage Scene States" (
+	rollout roll_states "Scene States" (
 		local roll_w = 250
 		--------------------------------
 		button btn_states_info "?" width:20 height:18 align:#right offset:[10,0] \
@@ -3420,7 +4435,11 @@ macroScript Pankovea_BatchViewsManager
 
 		fn getStatesSel = ( lst_states.SelectedIndex + 1 )
 
-		fn setStatesSel idx = ( lst_states.SelectedIndex = if idx > 0 then idx - 1 else -1 )
+		fn setStatesSel idx = (
+			local cnt = lst_states.Items.Count
+			if cnt == 0 do return -1
+			lst_states.SelectedIndex = if idx > 0 then (amin idx cnt) - 1 else -1
+		)
 
 		fn initStatesListBox = (
 			lst_states.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").One
@@ -3541,7 +4560,7 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		-- Восстановить состояние сцены
-		fn state_retore = (
+		fn stateRestore = (
 			if getStatesSel() <= 0 do ( messageBox (L10N.trMsg "selectStateToApply") title:(L10N.trMsg "titleApplyState"); return false )
 			local name = lst_states.SelectedItem as string
 			try (
@@ -3573,7 +4592,7 @@ macroScript Pankovea_BatchViewsManager
 			local idx = lst_states.IndexFromPoint args.X args.Y
 			if idx < 0 do return false
 			lst_states.SelectedIndex = idx
-			state_retore()
+			stateRestore()
 		)
 
 		on btn_states_info pressed do (
@@ -3669,12 +4688,18 @@ macroScript Pankovea_BatchViewsManager
 	--------------------------------------------------------------
 	--( ROLLOUT: LANGUAGE & INFO
 
-	local roll_lang = rollout roll_lang "Language & Info" (
+	rollout roll_lang "Language & Info" (
 		local roll_w = 250
 		--------------------------------
 		group "Language" (
-			dropdownlist drp_lang items:#() width:(roll_w - 40) offset:[0,5] \
+			dropdownlist drp_lang items:#() width:(roll_w - 40) offset:[0,5] visible:false \
 				tooltip:"Switch interface language"
+			hyperLink hlnkLangEngine "Download language Engine" \
+				address:"https://github.com/Pankovea/Pankovea_MaxScriptsTools/tree/main/usermacros/#PankovScripts-L10N.ms" \
+				align:#left offset:[0,-33]
+			hyperLink hlnkLangRU "Download Russian Translate" \
+				address:"https://github.com/Pankovea/Pankovea_MaxScriptsTools/tree/main/usermacros/#PankovScripts-BatchViewsManager.ru.ms" \
+				align:#left offset:[0,-7]
 		)
 
 		group "About" (
@@ -3683,18 +4708,22 @@ macroScript Pankovea_BatchViewsManager
 				offset:[0,3]
 		)
 		--------------------------------
-		local updating_lang = false
-		--------------------------------
 
 		on roll_lang open do (
-			local langItems = #()
-			for code in L10N.codes do append langItems (L10N.langLabel code)
-			drp_lang.items = langItems
-			local langIdx = findItem L10N.codes L10N.lang
-			if langIdx == 0 then langIdx = 1
-			updating_lang = true
-			drp_lang.selection = langIdx
-			updating_lang = false
+			-- язык интерфейса: показываем выбор только если есть другие языки
+			if L10N.codes.count > 1 then (
+				drp_lang.visible = true
+				hlnkLangEngine.visible = false
+				hlnkLangRU.visible = false
+				drp_lang.items = for c in L10N.codes collect (L10N.langLabel c)
+				local langIdx = findItem L10N.codes L10N.lang
+				if langIdx == 0 then langIdx = 1
+				drp_lang.selection = langIdx
+			) else (
+				drp_lang.visible = false
+				hlnkLangRU.visible = true
+				hlnkLangEngine.visible = (classof L10N) == _L10N_Fallback
+			)
 			lbl_version.text = L10N.trMsg "version" + ": " + g_version
 		)
 
@@ -3702,7 +4731,7 @@ macroScript Pankovea_BatchViewsManager
 		on roll_lang rolledUp state do ( accordion roll_lang state )
 
 		on drp_lang selected idx do (
-			if updating_lang then return false
+			if classof L10N == _L10N_Fallback then return false
 			local code = L10N.codes[idx]
 			if code == undefined do return false
 			if code == L10N.lang do return false
@@ -3714,6 +4743,7 @@ macroScript Pankovea_BatchViewsManager
 			for r in #(g_roll_cams, g_roll_batch, g_roll_global, g_roll_states, g_roll_lang) do (
 				try ( L10N.applyRollout r ) catch ()
 			)
+			try ( g_roll_batch.updateCopyResBtn() ) catch ()
 			try ( g_floater.title = L10N.trMsg "appTitle" ) catch ()
 			try ( g_roll_global.updateScaleDisplay g_globalScale ) catch ()
 			try ( lbl_version.text = L10N.trMsg "version" + ": " + g_version ) catch ()
@@ -3763,7 +4793,6 @@ macroScript Pankovea_BatchViewsManager
 			try ( if snapStr != "" then g_snap = (snapStr as BooleanClass) ) catch ()
 			local ovStr = getINISetting iniPath "CamManager" "OnlyVisible"
 			try ( if ovStr != "" then g_only_visible = (ovStr as BooleanClass) ) catch ()
-			g_accordion_lock = true
 			addRollout g_roll_cams g_floater rolledup:(rolloutOpened != "Cams")
 			addRollout g_roll_batch g_floater rolledUp:(rolloutOpened != "Batch")
 			addRollout g_roll_global g_floater rolledUp:(rolloutOpened != "Global")
@@ -3774,7 +4803,6 @@ macroScript Pankovea_BatchViewsManager
 			g_roll_global.open = (rolloutOpened == "Global")
 			g_roll_states.open = (rolloutOpened == "States")
 			g_roll_lang.open   = (rolloutOpened == "Lang")
-			g_accordion_lock = false
 			g_last_opened_tab = rolloutOpened
 
 			L10N.applyRollout g_roll_cams
@@ -3782,6 +4810,7 @@ macroScript Pankovea_BatchViewsManager
 			L10N.applyRollout g_roll_global
 			L10N.applyRollout g_roll_states
 			L10N.applyRollout g_roll_lang
+			try ( g_roll_batch.updateCopyResBtn() ) catch ()
 
 			updateFloaterHeight()
 
