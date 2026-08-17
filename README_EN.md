@@ -205,7 +205,21 @@ Features:
 * Requires being in the appropriate selection mode to run.
 
 [back (contents)](#contents)
+## Extract Missing Maps
+[Version 2026.08.16](usermacros/%23#PankovScripts-ExtractMissingMaps.mcr)
 
+This is an analogue of Relink Bitmaps, but with a specific purpose.
+It can also find lost textures in the specified folder. But at the same time, it scans archives.
+And if there are files from the list of lost ones in the archive, it extracts them to the specified folder and reassigns the path in the maps.
+
+- You can search for all textures in the project (not just lost ones)
+- You can search for textures only in selected objects
+- You can modify the list by removing elements
+- It can be used as an Asset Collector
+
+**Need installed [7-zip](https://www.7-zip.org/)**
+
+[назад (содержание)](#содержание)
 ## Link Material
 [Version 2025.09.04](usermacros/%23PankovScripts-LinkMaterial.mcr)
 

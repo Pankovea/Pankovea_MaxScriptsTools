@@ -13,6 +13,7 @@ Pankovea утилиты для работы в 3dsmax с аритектурно�
 - [Corona Toggles](#corona-toggles)
 - [Crop To Atlas](#crop-to-atlas)
 - [Distribute](#distribute)
+- [Extract Missing Maps](#extract-missing-maps)
 - [Link Material](#link-material)
 - [Extract Instance](#extract-instance)
 - [Instance All](#instance-all)
@@ -198,6 +199,21 @@ Scene States:
 * Распределяет группированные объекты
 
 * для запуска необходимо находиться в нужном режиме выделения.
+
+[назад (содержание)](#содержание)
+## Extract Missing Maps
+[Версия 2026.08.16](usermacros/%23#PankovScripts-ExtractMissingMaps.mcr)
+
+Это аналог Relink Bitmaps, но с особенным назначением.
+Он так же может найти потерянные текстуры в указанной папке. Но заодно он просматривает архивы.
+И если есть в архиве файлы из списка потерянных, то извлекает из в указанную папку и переназначает путь в картах.
+
+- Можно искать все текстуры в проекте (не только потерянные)
+- Можно искать текстуры только выделенных объектов
+- Можно менять список путём удаления элеменов
+- Можно использовать как Asset Collector
+
+**Нужен установленный [7-zip](https://www.7-zip.org/)**
 
 [назад (содержание)](#содержание)
 ## Link material
