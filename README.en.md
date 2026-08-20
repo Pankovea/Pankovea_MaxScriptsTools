@@ -206,10 +206,10 @@ Features:
 
 [back (contents)](#contents)
 ## Extract Missing Maps
-[Version 2026.08.16](usermacros/%23#PankovScripts-ExtractMissingMaps.mcr)
+[Version 2026.08.16](usermacros/%23PankovScripts-ExtractMissingMaps.mcr)
 
 This is an analogue of Relink Bitmaps, but with a specific purpose.
-It can also find lost textures in the specified folder. But at the same time, it scans archives.
+It can also find lost textures in the specified folder. But at the same time, it scans archives (zip, 7z, rar).
 And if there are files from the list of lost ones in the archive, it extracts them to the specified folder and reassigns the path in the maps.
 
 - You can search for all textures in the project (not just lost ones)
