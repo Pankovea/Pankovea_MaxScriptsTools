@@ -46,7 +46,12 @@
 * LOCK (chk_ratio + пресеты drdwn_re_presets): при вводе одной стороны вторая
 * пересчитывается под пропорцию.
 * "Preserve MegaPix" (chk_preserve_mp): при смене ratio/копировании обе стороны
-* пересчитываются под пропорции с сохранением MP.
+* пересчитываются под пропорции с сохранением MP. При вводе ОДНОЙ стороны (W/H)
+* приоритет выше LOCK: вторая сторона = округлённые суммарные пиксели вида /
+* введённая сторона (данные вида, не текст полей — в поле уже новое значение).
+* "MPix" (txt_out_mp): показывает мегапиксели показанных WxH (updateMpixField);
+* ввод значения пересчитывает W/H под текущие пропорции. Событие галки Preserve
+* MegaPix меняет ТОЛЬКО активность этого поля. Гаснет также без Override/вида.
 *   applyFieldRes(w,h)  — ввод размеров (снэп + LOCK), force:true — всегда;
 *   applyRatio(r)       — ввод пропорции;
 *   applyViewRes(w,h)   — применение размера (без снэпа);
@@ -69,7 +74,7 @@
 *   applyMultiFieldRes(m,v) — РАЗНЫЕ базы (поля "*"): как btn_copy_res — каждый вид
 *                             получает своё целевое разрешение под свои пропорции;
 *                             предупреждение только при смене пропорций (и не включён
-*                             Preserve MegaPix), иначе молча. mode: #w/#h/#ratio/#swap.
+ *                             Preserve MegaPix), иначе молча. mode: #w/#h/#ratio/#mp/#swap.
 * Путь: txt_view_path/btn_pick_path → setMultiPath/setMultiPathFromPicked — массово
 * меняется только папка, имена файлов видов сохраняются.
 * Камера: drdwn_cam/btn_use_active_cam — назначается всем, диалог базы — один раз.
@@ -1876,11 +1881,13 @@ macroScript Pankovea_BatchViewsManager
 			checkButton chk_ratio "🔗" height:36 width:18 align:#left offset:[roll_w / 2 - 16, -42] 
 			button btn_swap "↕" height:36 width:18 align:#left offset:[-4, -42] \
 				tooltip:"Swap width and height values\nand invert the aspect ratio"
-			checkbox chk_snap "Use snap" checked:true align:#left across:2 \
+			edittext txt_out_mp "MegaPix" type:#float fieldwidth:50 align:#right across:2\
+				tooltip:"Total megapixels of the shown Width x Height.\nEnter a value — Width and Height are recalculated\nfor the current aspect ratio.\nDisabled while 'Preserve MegaPix' is checked."
+			checkbox chk_preserve_mp "Preserve MegaPix" align:#left offset:[3,0] \
+				tooltip:"When changing aspect ratio, keep total megapixels\nconstant by recalculating both dimensions.\nEntering one side (W or H): the other side keeps\nthe view's total pixels (rounded).\nSnaps to nearest standard resolution."
+			checkbox chk_snap "Use snap 16(8)px" checked:true align:#left across:2 \
 				tooltip:"Snap resolution to standard values.\n1. Standard resolution list (big MP tolerance, aspect protected).\n2. Grid multiples (W:32, H:16) + standard aspect.\nOff — values are used as-is."
-			checkbox chk_preserve_mp "Preserve MegaPix" align:#left \
-				tooltip:"When changing aspect ratio, keep total megapixels\nconstant by recalculating both dimensions.\nSnaps to nearest standard resolution."
-			checkbox chk_sync_views "Sync by Camera" align:#left \
+			checkbox chk_sync_views "Sync by Camera" align:#left offset:[3,0] \
 				tooltip:"On — update all batch views using this camera.\n'Base size' ON  — syncs the BASE size.\n'Base size' OFF — syncs the CURRENT (scaled) size."
 			button btn_copy_res "Copy active view res to all views" width:(roll_w - 35) height:25 offset:[0,6] \
 				tooltip:"Copy the current view's resolution to ALL batch views.\n\n'Preserve MegaPix' OFF — copies WxH as-is,\nswapping for portrait/landscape views.\n'Preserve MegaPix' ON — keeps total megapixels,\nrecalculating both dimensions for each view's proportions."
@@ -2072,6 +2079,20 @@ macroScript Pankovea_BatchViewsManager
 			idx
 		)
 
+		-- МегаПикс показанных WxH -> поле txt_out_mp ("*" / пусто при нечисловых
+		-- значениях). Вызывается из showResForBase и после ручных правок полей.
+		fn updateMpixField = (
+			local w = try (txt_out_w.text as integer) catch undefined
+			local h = try (txt_out_h.text as integer) catch undefined
+			if w != undefined and h != undefined and w > 0 and h > 0 then (
+				-- округление до 2 знаков вручную: formattedPrint("%.2f") в некоторых
+				-- сборках MAXScript возвращает строку формата как есть
+				local mp = ((w as float) * h) / 1000000.0
+				txt_out_mp.text = ((floor (mp * 100.0 + 0.5)) / 100.0) as string
+			) else
+				txt_out_mp.text = ""
+		)
+
 		-- Показать в полях Render output базовое или текущее разрешение
 		-- (зависит от галки chk_edit_base и глобального масштаба)
 		fn showResForBase baseW baseH = (
@@ -2095,6 +2116,7 @@ macroScript Pankovea_BatchViewsManager
 				if renderHeight > 0 then txt_out_ratio.text = (renderWidth as float / renderHeight) as string
 			)
 			syncPresetFromRatio (txt_out_ratio.text as float)
+			updateMpixField()
 		)
 
 		-- Контролы блока "Edit batch view": все, кроме управляющих списком.
@@ -2105,7 +2127,7 @@ macroScript Pankovea_BatchViewsManager
 			drdwn_cam, btn_use_active_cam,
 			drdwn_state, drdwn_render_preset,
 			chk_override_preset, chk_edit_base,
-			txt_out_w, txt_out_ratio, txt_out_h,
+			txt_out_w, txt_out_ratio, txt_out_h, txt_out_mp,
 			drdwn_re_presets, chk_ratio, btn_swap,
 			chk_snap, chk_preserve_mp, chk_sync_views,
 			btn_copy_res,
@@ -2138,6 +2160,9 @@ macroScript Pankovea_BatchViewsManager
 			txt_out_ratio,		-- общие базы: applyRatio -> applyViewRes; разные базы:
 								--		applyMultiFieldRes #ratio — как btn_copy_res: предупреждение
 								--		при смене пропорций, иначе молча.
+			txt_out_mp,			-- общие базы: пересчёт W/H под текущие пропорции через
+								--		applyFieldRes; разные базы: applyMultiFieldRes #mp —
+								--		каждому виду своё под ЕГО пропорции (как btn_copy_res).
 			drdwn_re_presets,	-- общие базы: через applyRatio; разные базы: applyMultiFieldRes #ratio
 			chk_ratio,			-- TOGGLE-режим (LOCK), к видам не применяется; updateRatioUI мульти-aware
 			btn_swap,			-- общие базы: через applyViewRes; разные базы: applyMultiFieldRes #swap
@@ -2168,6 +2193,7 @@ macroScript Pankovea_BatchViewsManager
 				chk_preserve_mp.enabled = g_multi_ovr_editable
 				txt_out_ratio.enabled = g_multi_ovr_editable and isFree
 				chk_ratio.enabled = g_multi_ovr_editable
+				txt_out_mp.enabled = g_multi_ovr_editable and not chk_preserve_mp.checked
 				return false
 			)
 			local hasActive = (getActiveView() != undefined)
@@ -2176,6 +2202,7 @@ macroScript Pankovea_BatchViewsManager
 			chk_preserve_mp.enabled = hasActive and ovr
 			txt_out_ratio.enabled = hasActive and ovr and isFree
 			chk_ratio.enabled = hasActive and ovr
+			txt_out_mp.enabled = hasActive and ovr and not chk_preserve_mp.checked
 		)
 
 		-- Текст кнопки копирования отражает режим Preserve MegaPix:
@@ -2283,6 +2310,7 @@ macroScript Pankovea_BatchViewsManager
 				txt_out_w.text = "*"
 				txt_out_h.text = "*"
 				txt_out_ratio.text = "*"
+				txt_out_mp.text = "*"
 			)
 
 			-- Sync by camera: по уникальным камерам выделенных видов
@@ -2299,13 +2327,17 @@ macroScript Pankovea_BatchViewsManager
 			)
 			chk_sync_views.checked = if sync == undefined then false else sync
 
-			-- Включение зависимых от Override контролов
+			-- Включение зависимых от Override контролов (btn_copy_res — одиночный,
+			-- уже погашен списком batch_single_controls)
 			txt_out_w.enabled = g_multi_ovr_editable
 			txt_out_h.enabled = g_multi_ovr_editable
+			txt_out_mp.enabled = g_multi_ovr_editable
 			btn_swap.enabled = g_multi_ovr_editable
 			drdwn_re_presets.enabled = g_multi_ovr_editable
 			spn_start_frame.enabled = g_multi_ovr_editable
 			spn_end_frame.enabled = g_multi_ovr_editable
+			chk_snap.enabled = g_multi_ovr_editable
+			chk_sync_views.enabled = g_multi_ovr_editable
 			chk_edit_base.enabled = g_multi_ovr_editable and abs(g_globalScale - 1.0) > 0.001
 			updateRatioUI()
 			true
@@ -2313,7 +2345,8 @@ macroScript Pankovea_BatchViewsManager
 
 		-- Активность контролов размера/кадров в зависимости от Override Preset.
 		-- Без активированного вида (загруженного в интерфейс) редактировать
-		-- нечего — весь блок "Edit batch view" отключен.
+		-- нечего — весь блок "Edit batch view" отключен. При Override ВЫКЛ гаснет
+		-- ВЕСЬ блок group "Resolution" (кроме самой галки) + кадры.
 		fn updateOverrideUI = (
 			if isMultiEdit() then (
 				updateMultiUI()
@@ -2327,10 +2360,14 @@ macroScript Pankovea_BatchViewsManager
 			chk_edit_base.enabled = canEditBase
 			txt_out_w.enabled = ovr
 			txt_out_h.enabled = ovr
+			txt_out_mp.enabled = ovr
 			btn_swap.enabled = ovr
 			drdwn_re_presets.enabled = ovr
 			spn_start_frame.enabled = ovr
 			spn_end_frame.enabled = ovr
+			chk_snap.enabled = ovr
+			chk_sync_views.enabled = ovr
+			btn_copy_res.enabled = ovr
 			updateRatioUI()
 		)
 
@@ -2890,7 +2927,7 @@ macroScript Pankovea_BatchViewsManager
 		-- стороны/пропорции ко всем выделенным видам тем же механизмом, что и btn_copy_res —
 		-- каждый вид получает своё целевое разрешение t; предупреждение показывается,
 		-- только если у какого-то вида меняются пропорции (и не включён Preserve MegaPix),
-		-- иначе применяем молча. mode: #w / #h / #ratio / #swap.
+			-- иначе применяем молча. mode: #w / #h / #ratio / #mp / #swap.
 		fn applyMultiFieldRes mode val = (
 			local idxs = getMultiEditIdxs()
 			if idxs.count < 2 do return false
@@ -2907,13 +2944,19 @@ macroScript Pankovea_BatchViewsManager
 				local t
 				case mode of (
 					#w: (
-						if chk_ratio.checked and cur[1] > 0 and cur[2] > 0 then (
+						if chk_preserve_mp.checked and cur[1] > 0 and cur[2] > 0 then (
+							-- Preserve MegaPix: высота из суммарных пикселей вида (округление)
+							t = #(val, (floor ((cur[1] as float) * cur[2] / val + 0.5)) as integer)
+						) else if chk_ratio.checked and cur[1] > 0 and cur[2] > 0 then (
 							-- LOCK: сохранить пропорции вида (пересчёт высоты)
 							t = #(val, floor(cur[2] as float * val / cur[1]))
 						) else t = #(val, cur[2])
 					)
 					#h: (
-						if chk_ratio.checked and cur[1] > 0 and cur[2] > 0 then (
+						if chk_preserve_mp.checked and cur[1] > 0 and cur[2] > 0 then (
+							-- Preserve MegaPix: ширина из суммарных пикселей вида (округление)
+							t = #((floor ((cur[1] as float) * cur[2] / val + 0.5)) as integer, val)
+						) else if chk_ratio.checked and cur[1] > 0 and cur[2] > 0 then (
 							-- LOCK: сохранить пропорции вида (пересчёт ширины)
 							t = #(floor(cur[1] as float * val / cur[2]), val)
 						) else t = #(cur[1], val)
@@ -2933,6 +2976,14 @@ macroScript Pankovea_BatchViewsManager
 							t = #(snapped[1], snapped[2])
 						)
 					)
+					#mp: (
+						-- ввод МегаПикс: пропорции вида сохраняются, обе стороны
+						-- пересчитываются под заданные мегапиксели (снэп к стандарту).
+						local mpPx = val * 1000000.0
+						local r = cur[1] as float / cur[2]
+						local snapped = snapResolution ((sqrt (mpPx * r)) as integer) ((sqrt (mpPx / r)) as integer)
+						t = #(snapped[1], snapped[2])
+					)
 					#swap: t = #(cur[2], cur[1])
 					default: t = cur
 				)
@@ -2940,7 +2991,9 @@ macroScript Pankovea_BatchViewsManager
 				-- LOCK (chk_ratio при #w/#h) сохраняет пропорции по построению — не предупреждаем;
 				-- иначе пропорции меняются, только если cur[1]*t[2] != t[1]*cur[2].
 				local ratioKept = false
-				if chk_ratio.checked and (mode == #w or mode == #h) then ratioKept = true
+				if mode == #swap or mode == #mp then ratioKept = true
+				else if not chk_preserve_mp.checked and chk_ratio.checked \
+					and (mode == #w or mode == #h) then ratioKept = true
 				else if cur[1] * t[2] == t[1] * cur[2] then ratioKept = true
 				if not ratioKept then append propChanged #(bv, cur, t)
 				append targets #(r, bv, t)
@@ -4035,6 +4088,10 @@ macroScript Pankovea_BatchViewsManager
 
 		on chk_preserve_mp changed state do (
 			updateCopyResBtn()
+			-- Событие галки меняет ТОЛЬКО ОДИН элемент — поле Мпикс
+			-- (та же логика, что в updateRatioUI, без каскадного вызова).
+			txt_out_mp.enabled = not state and chk_override_preset.checked and \
+				(if isMultiEdit() then g_multi_ovr_editable else getActiveView() != undefined)
 		)
 
 		-- RENDER OUTPUT (настраивает выделенный batch view)
@@ -4052,21 +4109,34 @@ macroScript Pankovea_BatchViewsManager
 		-- Текстовые поля: пересчёт только по Enter (entered)
 		on txt_out_w entered val do (
 			-- Мульти-режим, разные базы: второе поле ещё "*" (высоты у видов различаются).
-			-- Если LOCK (сохранение пропорций) включён — применяем сразу: высота
-			-- пересчитывается под пропорции КАЖДОГО вида. Если выключен — применение
-			-- первой стороны неоднозначно, ждём ввод второго значения (тогда общие W/H
-			-- применятся через applyFieldRes -> applyViewRes).
+			-- Если Preserve MegaPix или LOCK включён — применяем сразу: вторая сторона
+			-- пересчитывается для КАЖДОГО вида (из его пикселей / под его пропорции).
+			-- Если оба выключены — применение первой стороны неоднозначно, ждём ввод
+			-- второго значения (тогда общие W/H применятся через applyFieldRes -> applyViewRes).
 			if isMultiEdit() and txt_out_h.text == "*" then (
 				local w = val as integer
 				if w == undefined or w <= 0 do return false
-				if chk_ratio.checked do applyMultiFieldRes #w w
+				if chk_preserve_mp.checked or chk_ratio.checked do applyMultiFieldRes #w w
 				return false
 			)
 			if getSel() == 0 do return false
 			local w = txt_out_w.text as integer
 			if w == undefined or w <= 0 do return false
 			local h = txt_out_h.text as integer
-			if chk_ratio.checked then (
+			if chk_preserve_mp.checked then (
+				-- Preserve MegaPix: держим суммарные пиксели вида, H = пиксели / W
+				-- (округление, не floor). Источник — данные ВИДА: к моменту Enter
+				-- в поле уже НОВОЕ значение W. Считаем в том пространстве,
+				-- которое показывают поля (база при Base size и масштабе ≠ 100%).
+				local bb = try (getViewBase (getActiveView())) catch undefined
+				if bb != undefined and bb[1] > 0 and bb[2] > 0 then (
+					local scale = if g_globalScale == undefined then 1.0 else g_globalScale
+					local cur = if chk_edit_base.checked and abs(scale - 1.0) > 0.001 \
+						then bb else resFromBase bb[1] bb[2]
+					h = (floor ((cur[1] as float) * cur[2] / w + 0.5)) as integer
+					if h < 1 do h = 1
+				)
+			) else if chk_ratio.checked then (
 				local ratio = txt_out_ratio.text as float
 				if ratio != undefined and ratio > 0 then (
 					h = floor(w as float / ratio)
@@ -4079,21 +4149,32 @@ macroScript Pankovea_BatchViewsManager
 		)
 		on txt_out_h entered val do (
 			-- Мульти-режим, разные базы: второе поле ещё "*" (ширины у видов различаются).
-			-- Если LOCK (сохранение пропорций) включён — применяем сразу: ширина
-			-- пересчитывается под пропорции КАЖДОГО вида. Если выключен — применение
-			-- первой стороны неоднозначно, ждём ввод второго значения (тогда общие W/H
-			-- применятся через applyFieldRes -> applyViewRes).
+			-- Если Preserve MegaPix или LOCK включён — применяем сразу: вторая сторона
+			-- пересчитывается для КАЖДОГО вида. Если оба выключены — ждём ввод второго
+			-- значения (тогда общие W/H применятся через applyFieldRes -> applyViewRes).
 			if isMultiEdit() and txt_out_w.text == "*" then (
 				local h = val as integer
 				if h == undefined or h <= 0 do return false
-				if chk_ratio.checked do applyMultiFieldRes #h h
+				if chk_preserve_mp.checked or chk_ratio.checked do applyMultiFieldRes #h h
 				return false
 			)
 			if getSel() == 0 do return false
 			local h = txt_out_h.text as integer
 			if h == undefined or h <= 0 do return false
 			local w = txt_out_w.text as integer
-			if chk_ratio.checked then (
+			if chk_preserve_mp.checked then (
+				-- Preserve MegaPix: держим суммарные пиксели вида, W = пиксели / H
+				-- (округление, не floor). Источник — данные ВИДА (в поле уже новое H),
+				-- в пространстве полей (база при Base size и масштабе ≠ 100%).
+				local bb = try (getViewBase (getActiveView())) catch undefined
+				if bb != undefined and bb[1] > 0 and bb[2] > 0 then (
+					local scale = if g_globalScale == undefined then 1.0 else g_globalScale
+					local cur = if chk_edit_base.checked and abs(scale - 1.0) > 0.001 \
+						then bb else resFromBase bb[1] bb[2]
+					w = (floor ((cur[1] as float) * cur[2] / h + 0.5)) as integer
+					if w < 1 do w = 1
+				)
+			) else if chk_ratio.checked then (
 				local ratio = txt_out_ratio.text as float
 				if ratio != undefined and ratio > 0 then (
 					w = floor(h as float * ratio)
@@ -4118,6 +4199,26 @@ macroScript Pankovea_BatchViewsManager
 			if ratio == undefined or ratio <= 0 do return false
 			applyRatio ratio
 		)
+		on txt_out_mp entered val do (
+			local mp = val as float
+			if mp == undefined or mp <= 0 do return false
+			-- Мульти-режим, разные базы: каждому виду своё разрешение
+			-- под ЕГО пропорции (как btn_copy_res, без предупреждений —
+			-- пропорции сохраняются по построению).
+			if isMultiEdit() and txt_out_w.text == "*" then (
+				applyMultiFieldRes #mp mp
+				return false
+			)
+			local w = txt_out_w.text as integer
+			local h = txt_out_h.text as integer
+			if w == undefined or h == undefined or w <= 0 or h <= 0 do return false
+			-- Текущие пропорции полей: обе стороны под новые мегапиксели
+			local r = w as float / h
+			local snapped = snapResolution ((sqrt (mp * 1000000.0 * r)) as integer) \
+				((sqrt (mp * 1000000.0 / r)) as integer)
+			-- force:true: снэп может вернуть те же значения, хотя намерение — явный ввод
+			applyFieldRes snapped[1] snapped[2] force:true
+		)
 
 		on btn_swap pressed do (
 			-- Мульти-режим, разные базы: применяем как btn_copy_res (предупреждение о пропорциях)
@@ -4132,6 +4233,7 @@ macroScript Pankovea_BatchViewsManager
 			txt_out_w.text = (oldH as integer) as string
 			txt_out_h.text = (oldW as integer) as string
 			txt_out_ratio.text = if oldR != undefined and oldR > 0 then (1.0 / oldR) as string else "1.0"
+			updateMpixField()
 			chk_ratio.checked = false
 			updateRatioUI()
 			applyViewRes oldH oldW
