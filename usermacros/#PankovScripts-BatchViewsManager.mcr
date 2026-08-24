@@ -40,6 +40,9 @@
 *    — H = W / аспект, затем кратно g_gridH (16, допуск 8).
 * 4. Галка "Snap" (по умолчанию ВКЛ, сохраняется в INI): включает/выключает
 *    конвейер 2-3 целиком. Единая точка входа — snapResolution(w, h).
+*    Для целей с заданными мегапикселями (поле Мпикс, Preserve MegaPix) —
+*    snapResolutionKeepMP(w, h, mpPx): кандидат «точные пиксели × стандартная
+*    пропорция» соревнуется со стандартным списком/сеткой по близости к цели.
 *
 * ВВОД РАЗМЕРОВ (блок Render output в roll_batch)
 * =================================================
@@ -544,6 +547,25 @@ macroScript Pankovea_BatchViewsManager
 		local std = findClosestStandardResolution w h
 		if std[1] == w and std[2] == h then calculateSmartResolution w h else #(std[1], std[2], false)
 	) 
+
+	-- Снэп с приоритетом ЦЕЛЕВЫХ пикселей (поле Мпикс, Preserve MegaPix):
+	-- рядом с обычным конвейером строится кандидат «стандартная пропорция ×
+	-- точное число целевых пикселей»; побеждает тот, кто ближе к цели.
+	-- Так ввод 6 Мпикс при пропорции ~3:2 даёт ровно 3000x2000,
+	-- а не ближайший стандарт из списка (+0.3% пикселей).
+	fn snapResolutionKeepMP w h mpPx = (
+		if w == undefined or h == undefined or mpPx == undefined or mpPx <= 0 then
+			return #(w as integer, h as integer)
+		local base = snapResolution w h
+		if not g_snap then return #(base[1], base[2])
+		local stdAsp = findStandardAspect (w as float / h as float)
+		if stdAsp == undefined then return #(base[1], base[2])
+		local cw = (floor ((sqrt (mpPx * stdAsp)) + 0.5)) as integer
+		local ch = (floor ((sqrt (mpPx / stdAsp)) + 0.5)) as integer
+		local dBase = abs((base[1] as float * base[2]) - mpPx)
+		local dCand = abs((cw as float * ch) - mpPx)
+		if dCand < dBase then #(cw, ch) else #(base[1], base[2])
+	)
 	--) Конец УМНОЕ ОКРУГЛЕНИЕ
 	--------------------------------------------------------------
 
@@ -2923,8 +2945,9 @@ macroScript Pankovea_BatchViewsManager
 				local mp = w as float * h as float
 				local newW = (sqrt(mp * ratio)) as integer
 				local newH = (sqrt(mp / ratio)) as integer
-				-- Снэп: сначала список стандартных разрешений, затем сетка/пропорция
-				local snapped = snapResolution newW newH
+				-- Снэп с приоритетом целевых пикселей: сначала список стандартных
+				-- разрешений, затем сетка/пропорция; точное попадание в MP побеждает
+				local snapped = snapResolutionKeepMP newW newH mp
 				txt_out_w.text = (snapped[1] as integer) as string
 				txt_out_h.text = (snapped[2] as integer) as string
 				txt_out_ratio.text = ratio as string
@@ -2988,7 +3011,7 @@ macroScript Pankovea_BatchViewsManager
 							local mp = cur[1] as float * cur[2]
 							local newW = (sqrt(mp * val)) as integer
 							local newH = (sqrt(mp / val)) as integer
-							local snapped = snapResolution newW newH
+							local snapped = snapResolutionKeepMP newW newH mp
 							t = #(snapped[1], snapped[2])
 						) else (
 							local snapped = snapResolution cur[1] (cur[1] as float / val)
@@ -3000,7 +3023,8 @@ macroScript Pankovea_BatchViewsManager
 						-- пересчитываются под заданные мегапиксели (снэп к стандарту).
 						local mpPx = val * 1000000.0
 						local r = cur[1] as float / cur[2]
-						local snapped = snapResolution ((sqrt (mpPx * r)) as integer) ((sqrt (mpPx / r)) as integer)
+						local snapped = snapResolutionKeepMP ((sqrt (mpPx * r)) as integer) \
+							((sqrt (mpPx / r)) as integer) mpPx
 						t = #(snapped[1], snapped[2])
 					)
 					#swap: t = #(cur[2], cur[1])
@@ -3354,7 +3378,7 @@ macroScript Pankovea_BatchViewsManager
 							local mp = srcW as float * srcH as float
 							local newW = (sqrt(mp * ratio)) as integer
 							local newH = (sqrt(mp / ratio)) as integer
-							local snapped = snapResolution newW newH
+							local snapped = snapResolutionKeepMP newW newH mp
 							r = #(snapped[1], snapped[2])
 						) else r = #(srcW, srcH)
 					) else (
@@ -4149,6 +4173,7 @@ macroScript Pankovea_BatchViewsManager
 			local w = txt_out_w.text as integer
 			if w == undefined or w <= 0 do return false
 			local h = txt_out_h.text as integer
+			local tgt
 			if chk_preserve_mp.checked then (
 				-- Preserve MegaPix: держим суммарные пиксели вида, H = пиксели / W
 				-- (округление, не floor). Источник — данные ВИДА: к моменту Enter
@@ -4161,6 +4186,9 @@ macroScript Pankovea_BatchViewsManager
 						then bb else resFromBase bb[1] bb[2]
 					h = (floor ((cur[1] as float) * cur[2] / w + 0.5)) as integer
 					if h < 1 do h = 1
+					-- Снэп с защитой целевых пикселей (стандарт не должен
+					-- увести сумму от пикселей вида)
+					tgt = snapResolutionKeepMP w h ((cur[1] as float) * cur[2])
 				)
 			) else if chk_ratio.checked then (
 				local ratio = txt_out_ratio.text as float
@@ -4170,8 +4198,8 @@ macroScript Pankovea_BatchViewsManager
 				)
 			)
 			if h == undefined or h <= 0 do return false
-			-- Снэп: сначала список стандартных разрешений, затем сетка/пропорция
-			applyFieldRes w h force:true
+			if tgt != undefined then applyViewRes tgt[1] tgt[2]
+			else applyFieldRes w h force:true
 		)
 		on txt_out_h entered val do (
 			-- Мульти-режим, разные базы: второе поле ещё "*" (ширины у видов различаются).
@@ -4188,6 +4216,7 @@ macroScript Pankovea_BatchViewsManager
 			local h = txt_out_h.text as integer
 			if h == undefined or h <= 0 do return false
 			local w = txt_out_w.text as integer
+			local tgt
 			if chk_preserve_mp.checked then (
 				-- Preserve MegaPix: держим суммарные пиксели вида, W = пиксели / H
 				-- (округление, не floor). Источник — данные ВИДА (в поле уже новое H),
@@ -4199,6 +4228,9 @@ macroScript Pankovea_BatchViewsManager
 						then bb else resFromBase bb[1] bb[2]
 					w = (floor ((cur[1] as float) * cur[2] / h + 0.5)) as integer
 					if w < 1 do w = 1
+					-- Снэп с защитой целевых пикселей (стандарт не должен
+					-- увести сумму от пикселей вида)
+					tgt = snapResolutionKeepMP w h ((cur[1] as float) * cur[2])
 				)
 			) else if chk_ratio.checked then (
 				local ratio = txt_out_ratio.text as float
@@ -4208,8 +4240,8 @@ macroScript Pankovea_BatchViewsManager
 				)
 			)
 			if w == undefined or w <= 0 do return false
-			-- Снэп: сначала список стандартных разрешений, затем сетка/пропорция
-			applyFieldRes w h force:true
+			if tgt != undefined then applyViewRes tgt[1] tgt[2]
+			else applyFieldRes w h force:true
 		)
 		on txt_out_ratio entered val do (
 			if drdwn_re_presets.selection > 1 do return false
@@ -4240,10 +4272,12 @@ macroScript Pankovea_BatchViewsManager
 			if w == undefined or h == undefined or w <= 0 or h <= 0 do return false
 			-- Текущие пропорции полей: обе стороны под новые мегапиксели
 			local r = w as float / h
-			local snapped = snapResolution ((sqrt (mp * 1000000.0 * r)) as integer) \
-				((sqrt (mp * 1000000.0 / r)) as integer)
-			-- force:true: снэп может вернуть те же значения, хотя намерение — явный ввод
-			applyFieldRes snapped[1] snapped[2] force:true
+			local snapped = snapResolutionKeepMP ((sqrt (mp * 1000000.0 * r)) as integer) \
+				((sqrt (mp * 1000000.0 / r)) as integer) (mp * 1000000.0)
+			-- ВАЖНО: только applyViewRes! KeepMP уже выполнил снэп с учётом цели;
+			-- повторный прогон через applyFieldRes (обычный конвейер) увёл бы
+			-- точное попадание в мегапиксели назад на ближайший стандарт
+			applyViewRes snapped[1] snapped[2]
 		)
 
 		on btn_swap pressed do (
