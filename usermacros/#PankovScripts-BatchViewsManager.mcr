@@ -99,7 +99,10 @@
 *   findClosestStandardResolution() — прилипание к g_standardResolutions
 *   calculateSmartResolution()      — округление к сетке 32/16 и стандартному аспекту
 *   updateMultiUI/updateOverrideUI/updateRatioUI/updateCopyResBtn — состояние UI
-*   listViews()/restoreSelectionByReal() — список и восстановление выделения
+ *   listViews()/restoreSelectionByReal() — список и восстановление выделения
+ *   getViewportCam()       — активная камера: активный вьюпорт, иначе поиск по всем вьюпортам
+ *   followSelectionToCam() — при активации камеры: одна камера в выделении сцены —
+ *                            выделить новую; прочие выделения не трогаются
 *
 * КОПИРОВАНИЕ РАЗМЕРА (btn_copy_res)
 * ===================================
@@ -119,12 +122,21 @@
 *   ON  — база (как в полях при Base size);
 *   OFF — текущий (масштабированный) размер.
 *
-* ПЕРЕИМЕНОВАНИЕ КАМЕРЫ
-* =====================
-* renameCamera() — переименовать узел камеры, затем find/replace старого имени
-* в названиях видов этой камеры (только если старое имя найдено в названии).
-*
-* ГРУППЫ ВИДОВ
+ * ПЕРЕИМЕНОВАНИЕ КАМЕРЫ
+ * =====================
+ * renameCamera() — переименовать узел камеры, затем find/replace старого имени
+ * в названиях видов этой камеры (только если старое имя найдено в названии).
+ *
+ * REFRESH / СИНХРОНИЗАЦИЯ ВЫДЕЛЕНИЯ
+ * =================================
+ * Refresh (оба свитка): активная камера определяется поиском по вьюпортам
+ * (getViewportCam) и выделяется в списке камер; в batch выделяется первый
+ * вид этой камеры (selectFirstViewForCamera).
+ * Активация камеры (setActiveCam / applyViewToScene): если в выделении сцены
+ * ровно одна камера — выделение переносится на новую камеру
+ * (followSelectionToCam); при любом другом выделении ничего не меняется.
+ *
+ * ГРУППЫ ВИДОВ
 * ============
 * Разделители "----- Группа N -----". Перемещаются/удаляются как блок.
 * Сворачивание по двойному клику: ▶ свёрнута / ▼ развёрнута.
@@ -436,6 +448,27 @@ macroScript Pankovea_BatchViewsManager
 		qsort ls compareCamNames
 		ls
 	)
+
+	-- Активная камера сцены: камера активного вьюпорта (getActiveCamera),
+	-- иначе первая найденная камера среди всех вьюпортов.
+	fn getViewportCam = (
+		local cam = getActiveCamera()
+		if cam == undefined then (
+			for i in 1 to viewport.numViews where cam == undefined do (
+				local vc = viewport.getCamera index:i
+				if vc != undefined and isValidNode vc and (isKindOf vc camera) do cam = vc
+			)
+		)
+		cam
+	)
+
+	-- Следование за камерой при её активации: если в выделении сцены ровно
+	-- ОДНА камера — перенести выделение на только что активированную камеру.
+	-- Любое другое выделение (пусто, несколько объектов, не камера) не меняется.
+	fn followSelectionToCam cam = (
+		if cam != undefined and isValidNode cam and selection.count == 1 and \
+			(isKindOf selection[1] camera) and selection[1] != cam do select cam
+	)
 	--) Конец СПИСОК КАМЕР
 	--------------------------------------------------------------
 
@@ -573,6 +606,65 @@ macroScript Pankovea_BatchViewsManager
  			local smart = snapResolution rawW rawH
 			#(smart[1], smart[2])
 		)
+	)
+
+	-- Разобрать имя и хвостовой номер с разделителем: "Cam_2" -> #("Cam", 2),
+	-- "Cam 2" -> #("Cam", 2), "Cam" -> #("Cam", 0), "Camera001" -> #("Camera001", 0)
+	-- (номер без разделителя считается частью базы и не трогается).
+	-- Определены ДО setViewBase: MAXScript однопроходный, вызов функции до
+	-- её определения компилируется как неявный глобал и падает в рантайме
+	-- ("Type error: Call needs function or class, got: undefined").
+	fn parseTrailingNum name = (
+		if name == undefined or name == "" then return #("", 0)
+		local i = name.count
+		while i > 0 and (findstring "0123456789" name[i]) != undefined do i -= 1
+		if i == name.count then return #(name, 0)
+		if (findstring " _" name[i]) == undefined then return #(name, 0)
+		local numStr = subString name (i + 1) (name.count - i)
+		local prefix = subString name 1 (i - 1)
+		#(prefix, (numStr as integer))
+	)
+
+	-- Уникально ли БАЗОВОЕ имя (без суффикса разрешения) среди всех batch views (исключая excludeView)
+	fn isBaseNameUnique baseName excludeView = (
+		if baseName == undefined or baseName == "" then return false
+		for i = 1 to batchRenderMgr.NumViews do (
+			local v = batchRenderMgr.GetView i
+			if v != undefined and v != excludeView and (getCleanViewName v.name) == baseName then return false
+		)
+		true
+	)
+
+	-- Уникальное имя базы: baseName, baseName_2, baseName_3, ...
+	-- Если baseName уже содержит хвостовой номер с разделителем ("Cam_2") —
+	-- продолжить с него ("Cam_3"), а не копить суффиксы ("Cam_2_2_2").
+	fn getUniqueBaseName baseName excludeView = (
+		if baseName == undefined or baseName == "" then return "View"
+		local candidate = baseName
+		if isBaseNameUnique candidate excludeView then return candidate
+		local parsed = parseTrailingNum baseName
+		local base = parsed[1]
+		local counter = if parsed[2] > 0 then parsed[2] + 1 else 2
+		do (
+			candidate = base + "_" + (counter as string)
+			counter += 1
+		) while not (isBaseNameUnique candidate excludeView)
+		candidate
+	)
+
+	-- Безопасно установить имя виду с проверкой уникальности БАЗОВОГО имени
+	fn safeSetViewName the_view newName = (
+		if the_view == undefined then return false
+		if the_view.name == newName then return true
+		local data = parseViewName newName
+		local clean = getCleanViewName newName
+		local finalName = newName
+		if not (isBaseNameUnique clean the_view) then (
+			local base = getUniqueBaseName clean the_view
+			if data[2] > 0 and data[3] > 0 then finalName = viewNameFor base data[2] data[3] else finalName = base
+		)
+		the_view.name = finalName
+		true
 	)
 
 	-- Переименовать вид с новой базой + обновить width/height (с учётом масштаба)
@@ -760,67 +852,15 @@ macroScript Pankovea_BatchViewsManager
 
 	--------------------------------------------------------------
 	--( ХЕЛПЕРЫ ИМЁН BATCH VIEWS
-
-	-- Разобрать имя и хвостовой номер с разделителем: "Cam_2" -> #("Cam", 2),
-	-- "Cam 2" -> #("Cam", 2), "Cam" -> #("Cam", 0), "Camera001" -> #("Camera001", 0)
-	-- (номер без разделителя считается частью базы и не трогается).
-	fn parseTrailingNum name = (
-		if name == undefined or name == "" then return #("", 0)
-		local i = name.count
-		while i > 0 and (findstring "0123456789" name[i]) != undefined do i -= 1
-		if i == name.count then return #(name, 0)
-		if (findstring " _" name[i]) == undefined then return #(name, 0)
-		local numStr = subString name (i + 1) (name.count - i)
-		local prefix = subString name 1 (i - 1)
-		#(prefix, (numStr as integer))
-	)
-
-	-- Уникально ли БАЗОВОЕ имя (без суффикса разрешения) среди всех batch views (исключая excludeView)
-	fn isBaseNameUnique baseName excludeView = (
-		if baseName == undefined or baseName == "" then return false
-		for i = 1 to batchRenderMgr.NumViews do (
-			local v = batchRenderMgr.GetView i
-			if v != undefined and v != excludeView and (getCleanViewName v.name) == baseName then return false
-		)
-		true
-	)
-
-	-- Уникальное имя базы: baseName, baseName_2, baseName_3, ...
-	-- Если baseName уже содержит хвостовой номер с разделителем ("Cam_2") —
-	-- продолжить с него ("Cam_3"), а не копить суффиксы ("Cam_2_2_2").
-	fn getUniqueBaseName baseName excludeView = (
-		if baseName == undefined or baseName == "" then return "View"
-		local candidate = baseName
-		if isBaseNameUnique candidate excludeView then return candidate
-		local parsed = parseTrailingNum baseName
-		local base = parsed[1]
-		local counter = if parsed[2] > 0 then parsed[2] + 1 else 2
-		do (
-			candidate = base + "_" + (counter as string)
-			counter += 1
-		) while not (isBaseNameUnique candidate excludeView)
-		candidate
-	)
+	-- parseTrailingNum / isBaseNameUnique / getUniqueBaseName / safeSetViewName
+	-- определены РАНЬШЕ — в разделе "ИМЯ ВИДА И БАЗА РАЗРЕШЕНИЯ" перед setViewBase:
+	-- MAXScript однопроходный, вызов функции до её определения компилируется
+	-- как неявный глобал и падает в рантайме ("Call needs function or class").
 
 	-- При конфликте копий между собой: "Cam_2" -> "Cam_3", "Cam" -> "Cam_2"
 	fn bumpBaseName baseName = (
 		local parsed = parseTrailingNum baseName
 		if parsed[2] > 0 then parsed[1] + "_" + ((parsed[2] + 1) as string) else baseName + "_2"
-	)
-
-	-- Безопасно установить имя виду с проверкой уникальности БАЗОВОГО имени
-	fn safeSetViewName the_view newName = (
-		if the_view == undefined then return false
-		if the_view.name == newName then return true
-		local data = parseViewName newName
-		local clean = getCleanViewName newName
-		local finalName = newName
-		if not (isBaseNameUnique clean the_view) then (
-			local base = getUniqueBaseName clean the_view
-			if data[2] > 0 and data[3] > 0 then finalName = viewNameFor base data[2] data[3] else finalName = base
-		)
-		the_view.name = finalName
-		true
 	)
 
 	-- Имя для дубликата вида: уникальная база источника + суффикс разрешения
@@ -981,6 +1021,8 @@ macroScript Pankovea_BatchViewsManager
 		local cam = the_view.camera
 		if isValidNode cam and (isKindOf cam camera) then (
 			applyCamToViewport cam
+			-- Если в выделении одна камера — следовать за новой активированной
+			followSelectionToCam cam
 			-- Синхронизировать камеры: выбрать активированную камеру в списке (если она там есть)
 			if g_roll_cams != undefined do (
 				g_roll_cams.active_cam = cam
@@ -1569,6 +1611,8 @@ macroScript Pankovea_BatchViewsManager
 				if isValidNode cam AND (isKindOf cam camera) then (
 					applyCamToViewport cam
 					active_cam = cam
+					-- Если в выделении одна камера — следовать за новой активированной
+					followSelectionToCam cam
 					changeActive()
 					applyCamResToScene cam
 					syncCameraUI()
@@ -1622,6 +1666,9 @@ macroScript Pankovea_BatchViewsManager
 		on roll_Cams rolledUp state do ( accordion roll_Cams state )
 
 		on btn_refresh pressed do (
+			-- Активная камера — по вьюпортам: выделить её в списке
+			local vcam = getViewportCam()
+			if vcam != undefined do active_cam = vcam
 			relistCams()
 			changeActive()
 			syncCameraUI()
@@ -2530,7 +2577,7 @@ macroScript Pankovea_BatchViewsManager
 						lst_views.ClearSelected()
 						setSel uiIdx
 					)
-					getViewParams i
+					g_active_view = getViewParams i
 					return true
 				)
 			)
@@ -3107,7 +3154,11 @@ macroScript Pankovea_BatchViewsManager
 				g_roll_cams.changeActive()
 				g_roll_cams.syncCameraUI()
 			)
-			if prevView != undefined then (
+			-- Активная камера (поиск по вьюпортам): выделить первый её вид;
+			-- иначе вернуть прежнее выделение вида
+			local cam = getViewportCam()
+			if cam != undefined and (selectFirstViewForCamera cam) then ()
+			else if prevView != undefined then (
 				for i = 1 to g_visibleIndices.count do (
 					if batchRenderMgr.GetView g_visibleIndices[i] == prevView do (
 						setSel i
@@ -3328,13 +3379,7 @@ macroScript Pankovea_BatchViewsManager
 		on btn_use_active_cam pressed do (
 			-- Массово: назначить активную камеру ВСЕМ выделенным видам
 			if isMultiEdit() then (
-				local cam = getActiveCamera()
-				if cam == undefined then (
-					for i in 1 to viewport.numViews where cam == undefined do (
-						local vc = viewport.getCamera index:i
-						if vc != undefined and isValidNode vc and (isKindOf vc camera) do cam = vc
-					)
-				)
+				local cam = getViewportCam()
 				if isValidNode cam and (isKindOf cam camera) then (
 					local idxs = getMultiEditIdxs()
 					closeBatchWindow()
@@ -3351,13 +3396,7 @@ macroScript Pankovea_BatchViewsManager
 			if getSel() != 0 then (
 				local bv = batchRenderMgr.GetView (getRealIndex (getSel()))
 				if bv != undefined then (
-					local cam = getActiveCamera()
-					if cam == undefined then (
-						for i in 1 to viewport.numViews where cam == undefined do (
-							local vc = viewport.getCamera index:i
-							if vc != undefined and isValidNode vc and (isKindOf vc camera) do cam = vc
-						)
-					)
+					local cam = getViewportCam()
 					if isValidNode cam and (isKindOf cam camera) then (
 						closeBatchWindow()
 						bv.camera = cam
