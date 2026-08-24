@@ -43,6 +43,10 @@
 *
 * ВВОД РАЗМЕРОВ (блок Render output в roll_batch)
 * =================================================
+* СЦЕНА: если камера вида стоит в каком-либо вьюпорте, любое изменение его
+* разрешения сразу применяется к сцене (renderWidth/renderHeight) —
+* syncSceneResFromView(); критерий именно камера во вьюпорте, а не совпадение
+* со старым разрешением сцены.
 * LOCK (chk_ratio + пресеты drdwn_re_presets): при вводе одной стороны вторая
 * пересчитывается под пропорцию.
 * "Preserve MegaPix" (chk_preserve_mp): при смене ratio/копировании обе стороны
@@ -1047,19 +1051,41 @@ macroScript Pankovea_BatchViewsManager
 		redrawViews()
 	)
 
+	-- Камера стоит в одном из вьюпортов?
+	fn isCamInAnyViewport cam = (
+		if not (isValidNode cam) or not (isKindOf cam camera) then return false
+		local found = false
+		for i = 1 to viewport.numViews do (
+			if (viewport.getCamera index:i) == cam do ( found = true; exit )
+		)
+		found
+	)
+
+	-- Если камера вида стоит в каком-либо вьюпорте, применить его текущее
+	-- (масштабированное) разрешение к сцене немедленно — не дожидаясь повторной
+	-- активации вида. Вызывается после ЛЮБОГО изменения разрешения вида.
+	-- Если разрешение сцены уже совпадает — ничего не делает (без лишних redraw).
+	fn syncSceneResFromView the_view = (
+		if the_view == undefined then return false
+		if not (isCamInAnyViewport the_view.camera) do return false
+		local base = getViewBase the_view
+		if base[1] <= 0 or base[2] <= 0 do return false
+		local scaled = resFromBase base[1] base[2]
+		if scaled[1] == renderWidth and scaled[2] == renderHeight do return true
+		if renderSceneDialog.isOpen() then renderSceneDialog.close()
+		renderWidth = scaled[1]
+		renderHeight = scaled[2]
+		redrawViews()
+		true
+	)
+
 	-- Активирован ли вид в сцене: его камера стоит в каком-либо вьюпорте
 	-- И его текущее (масштабированное) разрешение совпадает с разрешением сцены
 	-- (renderWidth/renderHeight) — т.е. вид, выделенный в интерфейсе, совпадает
 	-- с тем, что сейчас в сцене.
 	fn isViewActivated the_view = (
 		if the_view == undefined then return false
-		local cam = the_view.camera
-		if not (isValidNode cam) or not (isKindOf cam camera) then return false
-		local camInViewport = false
-		for i = 1 to viewport.numViews do (
-			if (viewport.getCamera index:i) == cam do ( camInViewport = true; exit )
-		)
-		if not camInViewport then return false
+		if not (isCamInAnyViewport the_view.camera) then return false
 		local base = getViewBase the_view
 		if base[1] <= 0 or base[2] <= 0 then return false
 		local scaled = resFromBase base[1] base[2]
@@ -1099,6 +1125,8 @@ macroScript Pankovea_BatchViewsManager
 		for bv in (getViewsForCam cam) do (
 			if bv != undefined then (
 				setViewBase bv baseW baseH
+				-- Камера вида во вьюпорте — новое разрешение сразу в сцену
+				syncSceneResFromView bv
 				count += 1
 			)
 		)
@@ -2856,20 +2884,11 @@ macroScript Pankovea_BatchViewsManager
 			closeBatchWindow()
 			for r in idxs do (
 				local bv = batchRenderMgr.GetView r
-				-- Проверяем активность ДО изменения: после setViewBase разрешение вида
-				-- уже не совпадает со старым renderWidth/renderHeight.
-				local wasActive = singleMode and isViewActivated bv
 				setViewBase bv baseW baseH
 				if chk_sync_views.checked and isValidNode bv.camera do syncViewsForCam bv.camera #(baseW, baseH) #(w, h)
-				-- Если вид активирован в сцене — сразу применить новое разрешение к сцене
-				-- (как с состоянием сцены в viewUpdate: изменение параметров активного вида
-				-- сразу отражается в render output).
-				if wasActive do (
-					if renderSceneDialog.isOpen() then renderSceneDialog.close()
-					renderWidth = bv.width
-					renderHeight = bv.height
-					redrawViews()
-				)
+				-- Если камера вида стоит во вьюпорте — новое разрешение сразу в сцену
+				-- (критерий — камера, а не совпадение со старым renderWidth/Height)
+				syncSceneResFromView bv
 			)
 			restoreSelectionByReal idxs
 			if singleMode then (
@@ -3021,6 +3040,8 @@ macroScript Pankovea_BatchViewsManager
 					if baseW <= 0 or baseH <= 0 do continue
 				)
 				setViewBase item[2] baseW baseH
+				-- Камера вида во вьюпорте — новое разрешение сразу в сцену
+				syncSceneResFromView item[2]
 			)
 			listViews()
 			restoreSelectionByReal idxs
@@ -3348,6 +3369,8 @@ macroScript Pankovea_BatchViewsManager
 						if baseW <= 0 or baseH <= 0 do continue
 					)
 					setViewBase v baseW baseH
+					-- Камера вида во вьюпорте — новое разрешение сразу в сцену
+					syncSceneResFromView v
 					count += 1
 				)
 			)
@@ -3403,6 +3426,8 @@ macroScript Pankovea_BatchViewsManager
 						for r in idxs do setViewBase (batchRenderMgr.GetView r) res[1] res[2]
 						listViews()
 						restoreSelectionByReal idxs
+						-- Камера какого-либо вида во вьюпорте — разрешение сразу в сцену
+						for r in idxs do syncSceneResFromView (batchRenderMgr.GetView r)
 					)
 				)
 				updateOverrideUI()
@@ -3421,6 +3446,7 @@ macroScript Pankovea_BatchViewsManager
 						if queryBox (L10N.trMsg "applyAsBase" args:#(res[1], res[2])) title:(L10N.trMsg "titleCameraBase") do (
 							closeBatchWindow()
 							setViewBase bv res[1] res[2]
+							syncSceneResFromView bv
 							listViews()
 							if getSel() > 0 do getViewParams (getRealIndex (getSel()))
 						)
