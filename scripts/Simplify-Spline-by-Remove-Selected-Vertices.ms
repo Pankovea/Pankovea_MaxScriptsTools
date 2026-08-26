@@ -73,7 +73,7 @@ fn getSplinePoint points index isClosedSpline =
     )
 )
 
-fn findSupportPoints points isClosedSpline =
+fn findSupportPoints points isClosedSpline cornerAngleThreshold:30.0 straightRatioThreshold:4.0 straightAngleTol:5.0 =
 (
     local pointCount = points.count
     if pointCount < 3 then return #(1, pointCount)
@@ -97,6 +97,7 @@ fn findSupportPoints points isClosedSpline =
     local lastTorsionAngleSign = 0
     local planarDirectionAfterInflection = 0
     local torsionDirectionAfterInflection = 0
+    local prevTurnSmall = false -- поворот в предыдущей вершине был мал (локально прямое продолжение)
     
     local endIndex = if isClosedSpline then pointCount else (pointCount - 1)
     
@@ -146,6 +147,7 @@ fn findSupportPoints points isClosedSpline =
                         lastTorsionAngleSign = 0
                         planarDirectionAfterInflection = 0
                         torsionDirectionAfterInflection = 0
+                        prevTurnSmall = false
                         continue
                     )
                 )
@@ -160,8 +162,48 @@ fn findSupportPoints points isClosedSpline =
         if (length v1) < 0.0001 or (length v2) < 0.0001 then continue
         
         local planarAngle = computeSignedAngle v1 v2 lastPlaneNormal
+        local absPlanarAngle = abs planarAngle
+        local v1len = length v1
+        local v2len = length v2
         
-        if (abs planarAngle) < 2.0 then continue -- MIN_ANGLE_THRESHOLD
+        if absPlanarAngle < 2.0 then ( -- MIN_ANGLE_THRESHOLD
+            prevTurnSmall = true -- почти идеально прямо
+            continue
+        )
+        
+        -- ГРАНИЦА ПРЯМОГО УЧАСТКА И ПОВОРОТА: оба соседних отрезка локально прямые,
+        -- но длины сильно различаются. Без опорной точки длинная прямая попадает в фит
+        -- плавного поворота и не восстанавливается.
+        if prevTurnSmall and absPlanarAngle < straightAngleTol and \
+           (amax #(v1len, v2len)) >= straightRatioThreshold * (amin #(v1len, v2len)) then (
+            append supportPoints i
+            currentPlanarAngleSum = 0.0
+            currentTorsionAngleSum = 0.0
+            inflectionCount = 0
+            torsionInflectionCount = 0
+            lastPlanarAngleSign = 0
+            lastTorsionAngleSign = 0
+            planarDirectionAfterInflection = 0
+            torsionDirectionAfterInflection = 0
+            prevTurnSmall = true
+            continue
+        )
+        
+        -- ОДНОШАГОВЫЙ РЕЗКИЙ ПОВОРОТ (угол/излом): сама вершина обязана остаться опорной,
+        -- иначе упрощение сгладит угол (например 90 градусов). Накопительные счётчики сбрасываем.
+        if absPlanarAngle >= cornerAngleThreshold then (
+            append supportPoints i
+            currentPlanarAngleSum = 0.0
+            currentTorsionAngleSum = 0.0
+            inflectionCount = 0
+            torsionInflectionCount = 0
+            lastPlanarAngleSign = 0
+            lastTorsionAngleSign = 0
+            planarDirectionAfterInflection = 0
+            torsionDirectionAfterInflection = 0
+            prevTurnSmall = false
+            continue
+        )
         
         currentPlanarAngleSum += abs planarAngle
         
@@ -186,6 +228,7 @@ fn findSupportPoints points isClosedSpline =
                 lastTorsionAngleSign = 0
                 planarDirectionAfterInflection = 0
                 torsionDirectionAfterInflection = 0
+                prevTurnSmall = false
                 continue
             )
         )
@@ -210,6 +253,7 @@ fn findSupportPoints points isClosedSpline =
         
         lastPlanarAngleSign = planarAngleSign
         lastTorsionAngleSign = torsionAngleSign
+        prevTurnSmall = absPlanarAngle < straightAngleTol
     )
     
     -- Добавляем первую и последнюю точки
