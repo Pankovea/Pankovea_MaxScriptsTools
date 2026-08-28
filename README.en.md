@@ -23,7 +23,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 
 
 [scripts/](scripts/)
-- [Simplify Spline by Remove Selected Vertices](#simplify-spline-by-remove-selected-vertices)
+- [Simplify Spline](#simplify-spline)
 - [Save Clipboard Image To Active Folder](#save-clipboard-image-to-active-folder)
 
 ## Installation
@@ -48,21 +48,22 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - If necessary, create a new toolbar `New...` -> `Pankov_scripts`
 - On the left, select `group Main UI` -> `Category #PankovScripts` -> Drag the desired script to the panel
 
-## Simplify Spline by Remove Selected Vertices
+## Simplify Spline
 
-[Version 2025.08.03 - alpha](/scripts/Simplify-Spline-by-Remove-Selected-Vertices.ms)
+[Version 2026.08.28 - alpha](/scripts/#Simplify-Spline.ms)
 
-A script to simplify splines. Requires the base object to be Editable Spline or Line. It will not work as a modifier.
+A script for simplifying splines. The base object must be EditableSpline or Line. The EditSpline modifier will not work.
 
-* If vertices are selected, it removes groups of consecutive selected vertices while attempting to preserve the shape.
-* If splines are selected, the script automatically determines which vertices can be removed and removes them (this mode is experimental).
+If you select:
+* vertices, it removes a group of consecutive vertices and tries to preserve the shape.
+* segments, it automatically selects points for deletion within a group of adjacent segments, leaving its end points.
+* splines, it determines which vertices can be deleted.
+It also works at the object level, but only with the basic EditableSpline.
 
-Requires [Matrix.ms](/scripts/Matrix.ms) in the same scripts folder. Documentation for [Matrix](/docs/Matrix.ms.md).
-
-Select vertices to remove in the spline (not inside a modifier) and run run_simplifySpline(). Planning macro integration later.
-
-Does not process end vertices. You cannot remove the first or last vertex in a closed spline.
-There are also issues if vertices are corner points — in this implementation they must all have handles.
+You need to select objects or subobjects and run:
+1. run_rebuildArcs() -- Searches for circular arcs and rebuilds them. Usually for processing CAD source files.
+2. run_simplifySpline() -- Works with arbitrary curvature.
+(Sequential runs are possible)
 
 [back (contents)](#contents)
 
