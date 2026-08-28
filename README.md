@@ -21,6 +21,7 @@ Pankovea утилиты для работы в 3dsmax с аритектурно�
 - [Align Pivot PCA](#align-pivot-pca)
 - [Renumber Material #X and Map #X](#renumber-material-x-and-map-x)
 - [Paste Image Reference To Plane](#paste-image-reference-to-plane)
+- [Rebuild Extruded Mesh to Spline](#rebuild-extruded-mesh-to-spline)
 
 [scripts/](scripts/)
 - [Simplify Spline](#simplify-spline)
@@ -63,6 +64,28 @@ Pankovea утилиты для работы в 3dsmax с аритектурно�
 1. run_rebuildArcs() -- Ищет дуги окружностей и восстанавливает. Обычно для обработки CAD исхожников.
 2. run_simplifySpline() -- Работает с произвольно кривизной.
 (Возможен последовательный запуск)
+
+[назад (содержание)](#содержание)
+
+## Rebuild Extruded Mesh to Spline
+[Версия 2025.08.25 - alpha](usermacros/%23PankovScripts-Rebuild-Extruded-Mesh-to-Spline.mcr)
+
+Восстанавливает импортированные меши, которые изначально были сплайнами с выдавливанием, в исходное состояние:
+- строит сплайн по контуру крышки
+- Оптимизирует форму сплайна с помощью [Simplify Spline](#simplify-spline)
+- добавляет к нему выдавливание той же высоты.
+
+Как пользоваться:
+1. Выделите один или несколько мешей
+2. Запустите макрос `Rebuild Extruded Mesh to Spline`
+3. Готово: вместо каждого меша появится сплайн с выдавливанием
+
+Модификаторы клавиш:
+* обычный запуск — нижняя крышка, выдавливание вверх
+* Shift — верхняя крышка, выдавливание вниз
+* Ctrl — включить автоупрощение сплайна
+
+Исходный объект удаляется автоматически.
 
 [назад (содержание)](#содержание)
 ## Albedo Tuner

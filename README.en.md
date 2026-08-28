@@ -20,6 +20,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Align Pivot PCA](#align-pivot-pca)
 - [Renumber Material #X and Map #X](#renumber-material-x-and-map-x)
 - [Paste Image Reference To Plane](#paste-image-reference-to-plane)
+- [Rebuild Extruded Mesh to Spline](#rebuild-extruded-mesh-to-spline)
 
 
 [scripts/](scripts/)
@@ -64,6 +65,28 @@ You need to select objects or subobjects and run:
 1. run_rebuildArcs() -- Searches for circular arcs and rebuilds them. Usually for processing CAD source files.
 2. run_simplifySpline() -- Works with arbitrary curvature.
 (Sequential runs are possible)
+
+[back (contents)](#contents)
+
+## Rebuild Extruded Mesh to Spline
+[Version 2025.08.25 - alpha](usermacros/%23PankovScripts-Rebuild-Extruded-Mesh-to-Spline.mcr)
+
+Restores imported meshes that were originally splines with extrusion to their original state:
+- builds a spline along the lid contour
+- optimizes the spline shape using [Simplify Spline](#simplify-spline)
+- adds extrusion of the same height to it.
+
+How to use:
+1. Select one or more meshes.
+2. Run the macro Rebuild Extruded Mesh to Spline.
+3. Done: a spline with extrusion will appear instead of each mesh.
+
+Keyboard modifiers:
+* regular run — bottom cap, extrusion upward
+* Shift — top cap, extrusion downward
+* Ctrl — enable auto‑simplification of the spline
+
+The original object is deleted automatically.
 
 [back (contents)](#contents)
 
