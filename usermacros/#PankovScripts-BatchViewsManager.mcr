@@ -534,7 +534,13 @@ macroScript Pankovea_BatchViewsManager
 		local stdAspect = findStandardAspect currentAspect
 		local useAspect = if stdAspect != undefined then stdAspect else currentAspect
 		newH = (newW / useAspect) as integer
-		newH = tryRoundToMultiple newH g_gridH (g_gridTolerance / 2)
+		-- Кратность высоты НЕ должна ломать распознанную стандартную пропорцию
+		-- (иначе масштабированный размер "уезжает" в Free: было 2800x2100 -> 4:3,
+		-- становилось 928x704 -> Free). К сетке округляем только если отклонение
+		-- от стандарта остаётся в допуске.
+		local gh = tryRoundToMultiple newH g_gridH (g_gridTolerance / 2)
+		if gh != newH and (stdAspect == undefined or \
+			abs((newW as float / gh) - stdAspect) <= g_aspectTolerance) then newH = gh
 		#(newW, newH, stdAspect != undefined)
 	)
 
@@ -566,6 +572,85 @@ macroScript Pankovea_BatchViewsManager
 		local dCand = abs((cw as float * ch) - mpPx)
 		if dCand < dBase then #(cw, ch) else #(base[1], base[2])
 	)
+
+	--------------------------------------------------------------
+	--) ЕДИНЫЙ РАСЧЁТ РАЗРЕШЕНИЯ
+	--------------------------------------------------------------
+
+	-- Центральная семантика ввода: обработчики строят НАМЕРЕНИЕ (Dictionary),
+	-- resolveRes возвращает готовую пару WxH. Применять результат как есть,
+	-- НЕ добавляя собственных пересчётов и повторных снэпов.
+	--   #mode      — #wh | #width | #height | #ratio | #mp | #swap
+	--   #w,#h      — исходное состояние (пространство полей: база или масштаб)
+	--   #val,#val2 — значение ввода (#val2 только для #wh)
+	--   #ratio     — пропорция пресета/LOCK (для #width/#height/#ratio)
+	--   #mpPx      — целевые пиксели (для #mp)
+	--   #lock,#preserve — режимы (false по умолчанию)
+	--   #snap      — переопределение галки снэпа (по умолчанию g_snap)
+	fn resolveRes intent = (
+		local rawW = intent[#w]
+		local rawH = intent[#h]
+		if rawW == undefined or rawH == undefined then return #(0, 0)
+		local sw = rawW as integer
+		local sh = rawH as integer
+		if sw <= 0 or sh <= 0 then return #(0, 0)
+		local mode = intent[#mode]
+		if mode == undefined then mode = #wh
+		local lock = (intent[#lock] == true)
+		local preserve = (intent[#preserve] == true)
+		local snapOn = if intent[#snap] == undefined then g_snap else (intent[#snap] == true)
+		local srcRatio = sw as float / sh
+		local srcPx = (sw as float) * sh
+		local tw = sw
+		local th = sh
+		case mode of (
+			#wh: ( tw = intent[#val]; th = intent[#val2] )
+			#swap: ( tw = sh; th = sw )
+			#width: (
+				tw = intent[#val]
+				th = if preserve and srcPx > 0 then ((floor (srcPx / tw + 0.5)) as integer) else (
+					if lock and intent[#ratio] != undefined and intent[#ratio] > 0 \
+						then (floor (tw as float / intent[#ratio])) else th
+				)
+			)
+			#height: (
+				th = intent[#val]
+				tw = if preserve and srcPx > 0 then ((floor (srcPx / th + 0.5)) as integer) else (
+					if lock and intent[#ratio] != undefined and intent[#ratio] > 0 \
+						then (floor (th as float * intent[#ratio])) else tw
+				)
+			)
+			#ratio: (
+				local r = if intent[#ratio] != undefined then intent[#ratio] else srcRatio
+				if preserve and srcPx > 0 then (
+					tw = (floor ((sqrt (srcPx * r)) + 0.5)) as integer
+					th = (floor ((sqrt (srcPx / r)) + 0.5)) as integer
+				) else (
+					tw = sw
+					th = floor(sw as float / r)
+				)
+			)
+			#mp: (
+				local mpPx = intent[#mpPx]
+				if mpPx != undefined and mpPx > 0 and srcRatio > 0 then (
+					tw = (floor ((sqrt (mpPx * srcRatio)) + 0.5)) as integer
+					th = (floor ((sqrt (mpPx / srcRatio)) + 0.5)) as integer
+				)
+			)
+			default: ( )
+		)
+		if tw == undefined or th == undefined or tw <= 0 or th <= 0 do return #(sw, sh)
+		-- Swap — без снэпа: перестановка сторон должна быть точной (снэп мог бы
+		-- сменить разрешение, напр. 1872x2816 -> 2000x3000)
+		if not snapOn or mode == #swap do return #(tw as integer, th as integer)
+		-- ФАЗА СНЭПА — единственная во всём скрипте для путей ввода:
+		local res = if preserve or mode == #mp then \
+			snapResolutionKeepMP tw th (if mode == #mp then intent[#mpPx] else srcPx) \
+			else snapResolution tw th
+		#(res[1], res[2])
+	)
+	--) Конец ЕДИНЫЙ РАСЧЁТ РАЗРЕШЕНИЯ
+	--------------------------------------------------------------
 	--) Конец УМНОЕ ОКРУГЛЕНИЕ
 	--------------------------------------------------------------
 
@@ -1960,6 +2045,12 @@ macroScript Pankovea_BatchViewsManager
 		-- Клики: первый клик — выделение, повторный клик по уже выделенному → загрузка в сцену.
 		-- prev_sel — выделение на момент прошлого клика
 		local prev_sel = 0
+		-- Снапшот выделения на MouseDown (до применения клика). Owner-draw список
+		-- не перерисовывает строки сам — обычный клик после Ctrl-мультивыделения
+		-- снимает выделение с прочих строк молча; без снапшота их подсветка
+		-- «залипает» визуально. По снапшоту MouseUp инвалидирует потерявшие
+		-- выделение строки.
+		local g_selSnapshot = #()
 		-- Флаг: следующий MouseUp — хвост двойного клика (Windows шлёт MouseUp на каждый клик,
 		-- а MouseDoubleClick срабатывает между ними). По нему второй клик не делает второе действие.
 		local g_dblPending = false
@@ -2139,8 +2230,18 @@ macroScript Pankovea_BatchViewsManager
 				-- сборках MAXScript возвращает строку формата как есть
 				local mp = ((w as float) * h) / 1000000.0
 				txt_out_mp.text = ((floor (mp * 100.0 + 0.5)) / 100.0) as string
-			) else
+			) 			else
 				txt_out_mp.text = ""
+		)
+
+		-- Текущее состояние АКТИВНОГО вида в ПРОСТРАНСТВЕ ПОЛЕЙ (база при
+		-- Base size и масштабе ≠ 100%, иначе масштабированный размер).
+		-- Источник "старых" значений для resolveRes: поля уже содержат ввод.
+		fn getFieldSpaceSrc = (
+			local bb = try (getViewBase (getActiveView())) catch undefined
+			if bb == undefined or bb[1] <= 0 or bb[2] <= 0 do return undefined
+			local scale = if g_globalScale == undefined then 1.0 else g_globalScale
+			if chk_edit_base.checked and abs(scale - 1.0) > 0.001 then bb else resFromBase bb[1] bb[2]
 		)
 
 		-- Показать в полях Render output базовое или текущее разрешение
@@ -2936,32 +3037,20 @@ macroScript Pankovea_BatchViewsManager
 		-- иначе: сохранить ширину, пересчитать высоту.
 		fn applyRatio ratio = (
 			if ratio == undefined or ratio <= 0 do return false
-			local w = txt_out_w.text as integer
-			local h = txt_out_h.text as integer
-			if w == undefined or w <= 0 do w = 0
-			if h == undefined or h <= 0 do h = 0
-			-- Preserve MegaPix учитывается всегда при изменении Ratio
-			if chk_preserve_mp.checked and w > 0 and h > 0 then (
-				local mp = w as float * h as float
-				local newW = (sqrt(mp * ratio)) as integer
-				local newH = (sqrt(mp / ratio)) as integer
-				-- Снэп с приоритетом целевых пикселей: сначала список стандартных
-				-- разрешений, затем сетка/пропорция; точное попадание в MP побеждает
-				local snapped = snapResolutionKeepMP newW newH mp
-				txt_out_w.text = (snapped[1] as integer) as string
-				txt_out_h.text = (snapped[2] as integer) as string
-				txt_out_ratio.text = ratio as string
-				applyViewRes snapped[1] snapped[2]
-			) else (
-				local newH = if w > 0 then floor(w as float / ratio) else h
-				if newH > 0 then (
-					-- Снэп: сначала список стандартных разрешений, затем сетка/пропорция
-					local snapped = snapResolution w newH
-					txt_out_h.text = (snapped[2] as integer) as string
-					txt_out_ratio.text = ratio as string
-					applyViewRes snapped[1] snapped[2]
-				)
+			txt_out_ratio.text = ratio as string
+			-- Источник — состояние вида в пространстве полей; при недоступности — поля
+			local src = getFieldSpaceSrc()
+			if src == undefined then (
+				local fw = txt_out_w.text as integer
+				local fh = txt_out_h.text as integer
+				if fw == undefined or fh == undefined or fw <= 0 or fh <= 0 do return false
+				src = #(fw, fh)
 			)
+			-- Единый расчёт: новая пропорция (Preserve MegaPix учитывается внутри);
+			-- результат применяем как есть — снэп уже выполнен в фазе resolveRes
+			local t = resolveRes mode:#ratio w:src[1] h:src[2] val:ratio \
+				lock:chk_ratio.checked preserve:chk_preserve_mp.checked
+			applyViewRes t[1] t[2]
 			true
 		)
 
@@ -3598,6 +3687,13 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
+		-- Снапшот выделения ДО применения клика (WinForms меняет выделение на
+		-- MouseDown, поэтому к MouseUp/SelectedIndexChanged прежний набор уже
+		-- недоступен — сравнивать не с чем).
+		on lst_views MouseDown sender args do (
+			g_selSnapshot = getSelectedUiIndices()
+		)
+
 		-- Одиночный клик без Ctrl/Shift:
 		--   первый клик — только выделение (галочка не меняется);
 		--   повторный клик по выделенному элементу → загрузка вида в сцену (с задержкой через
@@ -3610,6 +3706,21 @@ macroScript Pankovea_BatchViewsManager
 		on lst_views MouseUp sender args do (
 			if (args.Button.ToString()) != "Left" do return false
 			local uiIdx = (lst_views.IndexFromPoint args.X args.Y) + 1
+
+			-- Строки из снапшота MouseDown, потерявшие выделение этим жестом
+			-- (типовой случай: обычный клик по одному виду после Ctrl-мультивыделения —
+			-- WinForms снял выделение с остальных ещё на MouseDown, но owner-draw
+			-- продолжал рисовать старую подсветку). До возвратов ниже: клик по пустой
+			-- области (uiIdx == 0) тоже снимает выделение. Хвостовой MouseUp двойного
+			-- клика здесь безвреден — его снапшот совпадает с текущим состоянием.
+			for si in g_selSnapshot do (
+				if si >= 1 and si <= lst_views.Items.Count and si != uiIdx \
+					and not (lst_views.GetSelected (si - 1)) do (
+					local r = lst_views.GetItemRectangle (si - 1)
+					lst_views.Invalidate r
+				)
+			)
+
 			if uiIdx <= 0 or uiIdx > g_visibleIndices.count do return false
 
 			-- Второй клик двойного нажатия: действие уже сделал первый клик (или MouseDoubleClick),
@@ -4152,8 +4263,15 @@ macroScript Pankovea_BatchViewsManager
 
 		on chk_snap changed state do (
 			g_snap = state
-			-- При включении — сразу применить снэп к текущим значениям
-			if state do applyFieldRes (txt_out_w.text as integer) (txt_out_h.text as integer)
+			-- При включении — пристрелять активный вид через единый расчёт
+			-- (#wh: пара как есть -> фаза снэпа)
+			if state do (
+				local src = getFieldSpaceSrc()
+				if src != undefined do (
+					local t = resolveRes mode:#wh w:src[1] h:src[2] val:src[1] val2:src[2]
+					applyViewRes t[1] t[2]
+				)
+			)
 		)
 
 		-- Текстовые поля: пересчёт только по Enter (entered)
@@ -4172,34 +4290,14 @@ macroScript Pankovea_BatchViewsManager
 			if getSel() == 0 do return false
 			local w = txt_out_w.text as integer
 			if w == undefined or w <= 0 do return false
-			local h = txt_out_h.text as integer
-			local tgt
-			if chk_preserve_mp.checked then (
-				-- Preserve MegaPix: держим суммарные пиксели вида, H = пиксели / W
-				-- (округление, не floor). Источник — данные ВИДА: к моменту Enter
-				-- в поле уже НОВОЕ значение W. Считаем в том пространстве,
-				-- которое показывают поля (база при Base size и масштабе ≠ 100%).
-				local bb = try (getViewBase (getActiveView())) catch undefined
-				if bb != undefined and bb[1] > 0 and bb[2] > 0 then (
-					local scale = if g_globalScale == undefined then 1.0 else g_globalScale
-					local cur = if chk_edit_base.checked and abs(scale - 1.0) > 0.001 \
-						then bb else resFromBase bb[1] bb[2]
-					h = (floor ((cur[1] as float) * cur[2] / w + 0.5)) as integer
-					if h < 1 do h = 1
-					-- Снэп с защитой целевых пикселей (стандарт не должен
-					-- увести сумму от пикселей вида)
-					tgt = snapResolutionKeepMP w h ((cur[1] as float) * cur[2])
-				)
-			) else if chk_ratio.checked then (
-				local ratio = txt_out_ratio.text as float
-				if ratio != undefined and ratio > 0 then (
-					h = floor(w as float / ratio)
-					if h < 1 do h = 1
-				)
-			)
-			if h == undefined or h <= 0 do return false
-			if tgt != undefined then applyViewRes tgt[1] tgt[2]
-			else applyFieldRes w h force:true
+			local src = getFieldSpaceSrc()
+			if src == undefined do return false
+			-- Единый расчёт: новая ширина + режимы; результат применяем как есть.
+			-- Источник — состояние вида (в поле уже НОВОЕ значение W).
+			local t = resolveRes mode:#width w:src[1] h:src[2] val:w \
+				ratio:(try (txt_out_ratio.text as float) catch undefined) \
+				lock:chk_ratio.checked preserve:chk_preserve_mp.checked
+			applyViewRes t[1] t[2]
 		)
 		on txt_out_h entered val do (
 			-- Мульти-режим, разные базы: второе поле ещё "*" (ширины у видов различаются).
@@ -4215,33 +4313,13 @@ macroScript Pankovea_BatchViewsManager
 			if getSel() == 0 do return false
 			local h = txt_out_h.text as integer
 			if h == undefined or h <= 0 do return false
-			local w = txt_out_w.text as integer
-			local tgt
-			if chk_preserve_mp.checked then (
-				-- Preserve MegaPix: держим суммарные пиксели вида, W = пиксели / H
-				-- (округление, не floor). Источник — данные ВИДА (в поле уже новое H),
-				-- в пространстве полей (база при Base size и масштабе ≠ 100%).
-				local bb = try (getViewBase (getActiveView())) catch undefined
-				if bb != undefined and bb[1] > 0 and bb[2] > 0 then (
-					local scale = if g_globalScale == undefined then 1.0 else g_globalScale
-					local cur = if chk_edit_base.checked and abs(scale - 1.0) > 0.001 \
-						then bb else resFromBase bb[1] bb[2]
-					w = (floor ((cur[1] as float) * cur[2] / h + 0.5)) as integer
-					if w < 1 do w = 1
-					-- Снэп с защитой целевых пикселей (стандарт не должен
-					-- увести сумму от пикселей вида)
-					tgt = snapResolutionKeepMP w h ((cur[1] as float) * cur[2])
-				)
-			) else if chk_ratio.checked then (
-				local ratio = txt_out_ratio.text as float
-				if ratio != undefined and ratio > 0 then (
-					w = floor(h as float * ratio)
-					if w < 1 do w = 1
-				)
-			)
-			if w == undefined or w <= 0 do return false
-			if tgt != undefined then applyViewRes tgt[1] tgt[2]
-			else applyFieldRes w h force:true
+			local src = getFieldSpaceSrc()
+			if src == undefined do return false
+			-- Единый расчёт: новая высота + режимы; результат применяем как есть
+			local t = resolveRes mode:#height w:src[1] h:src[2] val:h \
+				ratio:(try (txt_out_ratio.text as float) catch undefined) \
+				lock:chk_ratio.checked preserve:chk_preserve_mp.checked
+			applyViewRes t[1] t[2]
 		)
 		on txt_out_ratio entered val do (
 			if drdwn_re_presets.selection > 1 do return false
@@ -4267,17 +4345,13 @@ macroScript Pankovea_BatchViewsManager
 				applyMultiFieldRes #mp mp
 				return false
 			)
-			local w = txt_out_w.text as integer
-			local h = txt_out_h.text as integer
-			if w == undefined or h == undefined or w <= 0 or h <= 0 do return false
-			-- Текущие пропорции полей: обе стороны под новые мегапиксели
-			local r = w as float / h
-			local snapped = snapResolutionKeepMP ((sqrt (mp * 1000000.0 * r)) as integer) \
-				((sqrt (mp * 1000000.0 / r)) as integer) (mp * 1000000.0)
-			-- ВАЖНО: только applyViewRes! KeepMP уже выполнил снэп с учётом цели;
-			-- повторный прогон через applyFieldRes (обычный конвейер) увёл бы
-			-- точное попадание в мегапиксели назад на ближайший стандарт
-			applyViewRes snapped[1] snapped[2]
+			local src = getFieldSpaceSrc()
+			if src == undefined do return false
+			-- Единый расчёт: цель в мегапикселях, пропорции из состояния вида.
+			-- Фаза снэпа внутри resolveRes (KeepMP — точное попадание в цель);
+			-- применяем напрямую через applyViewRes, без повторного снэпа.
+			local t = resolveRes mode:#mp w:src[1] h:src[2] mpPx:(mp * 1000000.0)
+			applyViewRes t[1] t[2]
 		)
 
 		on btn_swap pressed do (
@@ -4288,15 +4362,15 @@ macroScript Pankovea_BatchViewsManager
 			)
 			local oldW = txt_out_w.text as integer
 			local oldH = txt_out_h.text as integer
-			local oldR = txt_out_ratio.text as float
 			if oldW == undefined or oldH == undefined or oldW <= 0 or oldH <= 0 do return false
-			txt_out_w.text = (oldH as integer) as string
-			txt_out_h.text = (oldW as integer) as string
-			txt_out_ratio.text = if oldR != undefined and oldR > 0 then (1.0 / oldR) as string else "1.0"
+			-- Единый расчёт: swap (стороны меняются местами, пропорция обратная);
+			-- снэп — в фазе resolveRes, результат применяем как есть
+			local t = resolveRes mode:#swap w:oldW h:oldH
+			txt_out_ratio.text = ((oldW as float) / oldH) as string
 			updateMpixField()
 			chk_ratio.checked = false
 			updateRatioUI()
-			applyViewRes oldH oldW
+			applyViewRes t[1] t[2]
 		)
 
 		on drdwn_re_presets selected idx do (
