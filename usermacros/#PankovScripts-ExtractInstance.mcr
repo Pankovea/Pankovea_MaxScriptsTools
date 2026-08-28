@@ -28,7 +28,7 @@ icon:#("pankov_instancseAll",2)
 	)
 	
 	on isenabled return (
-		if selection.count != 1 or selection[1].modifiers.count == 0 do return false
+		if selection.count != 1 or not isvalidnode selection[1] or selection[1].modifiers.count == 0 do return false
 		local base_refs = refs.dependentNodes selection[1].baseobject
 		if base_refs.count > 1 do (
 			for modif in selection[1].modifiers do (

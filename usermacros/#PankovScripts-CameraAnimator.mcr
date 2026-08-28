@@ -39,6 +39,7 @@ fn is_various_params arr_of_obj param = (
 
 on isenabled return (
 	(selection.count > 1) AND
+	(isvalidnode selection[1]) AND
 	(
 		(classof selection[1] == Freecamera) OR
 		(classof selection[1] == Targetcamera) OR
