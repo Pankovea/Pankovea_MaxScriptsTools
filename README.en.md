@@ -69,10 +69,10 @@ You need to select objects or subobjects and run:
 [back (contents)](#contents)
 
 ## Rebuild Extruded Mesh to Spline
-[Version 2025.08.25 - alpha](usermacros/%23PankovScripts-Rebuild-Extruded-Mesh-to-Spline.mcr)
+[Version 2025.08.25 - alpha](usermacros/%23PankovScripts-Rebuild-Mesh-to-Extruded-Spline.mcr)
 
 Restores imported meshes that were originally splines with extrusion to their original state:
-- builds a spline along the lid contour
+- builds a spline along the lid contour (or the wall facade — see Alt)
 - optimizes the spline shape using [Simplify Spline](#simplify-spline)
 - adds extrusion of the same height to it.
 
@@ -82,9 +82,13 @@ How to use:
 3. Done: a spline with extrusion will appear instead of each mesh.
 
 Keyboard modifiers:
-* regular run — bottom cap, extrusion upward
-* Shift — top cap, extrusion downward
+* regular run — slab: axis +Z, minimum base surface, extrusion upward
+* Shift — wall: horizontal extrusion axis, along the object's minimum extent;
+  the spline is built from the facade, openings (windows/doors) stay as holes
+* Alt — extrusion direction: maximum base surface, in the negative direction
+  (without Alt — minimum base surface, in the positive direction)
 * Ctrl — enable auto‑simplification of the spline
+* Shift + Alt + Ctrl — any combination works
 
 The original object is deleted automatically.
 
