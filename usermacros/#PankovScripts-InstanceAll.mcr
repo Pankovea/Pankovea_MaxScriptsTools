@@ -268,14 +268,17 @@ icon:#("pankov_instancseAll",1)
 				source.rotation = quat 0 0 0 1
 			local source_size = source.max - source.min
 			source.transform = store_source_tm
-			-- Сортируем размеры
-			local source_size_arr = #(source_size.x, source_size.y, source_size.z)
-			local sorted = sort (copy source_size_arr #noMap)
-			-- ищем индекс сортированных размеров в соответсующем порядке
-			local longAxis = finditem source_size_arr sorted[3]
-			local midAxis  = finditem source_size_arr sorted[2]
-			local shortAxis = finditem source_size_arr sorted[1]
-			return #(longAxis, midAxis, shortAxis)
+			-- Создаем массив пар: [размер, исходный_индекс]
+			local sizes = #( [source_size.x, 1], [source_size.y, 2], [source_size.z, 3] )
+			
+			-- Сортируем массив пар по первому элементу (размеру)
+			-- Если sort работает по возрастанию, то sorted[1] - минимальный, sorted[3] - максимальный
+			fn sort_point_2d a b = a[1] < b[1]
+			qsort sizes sort_point_2d
+			
+			-- Возвращаем индексы в порядке: Макс, Средний, Мин
+			-- sorted[3][1] — это индекс самого большого значения
+			return #(sizes[3][2], sizes[2][2], sizes[1][2])
 		)
 		
 		-- Функция выравнивания поворота исходного объекта по целевому используя длинные и короткие стороны
@@ -283,7 +286,7 @@ icon:#("pankov_instancseAll",1)
 		(
 			-- 1. Определяем порядок осей по размеру для каждого из объектов
 			local sInfo = getAxisIndices source
-			if tInfo == undefined do -- передаётся в случае если стары обхект был заменён и нужно выровнять по старой его форме.
+			if tInfo == undefined do -- передаётся в случае если старый объект был заменён и нужно выровнять по старой его форме.
 				tInfo = getAxisIndices target
 
 			-- 2. Собираем новые оси для source с исходным масштабом 
