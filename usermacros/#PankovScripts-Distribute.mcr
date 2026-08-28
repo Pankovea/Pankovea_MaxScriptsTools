@@ -30,7 +30,7 @@ Has been implemented in all subobjects EditableSpline, EditablePoly, EditableMes
 * To start, you must be in the desired selection mode.
 */
 
-macroScript Distibute_objects
+macroScript Distribute_objects
 category:"#PankovScripts"
 toolTip:"Distibute objects. Shift+ Distribute projected"
 icon:#("AutoGrid",2)
