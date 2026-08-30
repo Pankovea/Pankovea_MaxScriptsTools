@@ -54,30 +54,8 @@
 ВАЖНО: глобальные переменные объявлены на верхнем уровне, иначе ссылки внутри функций
 компилируются как неявные локальные (всегда undefined).
 
-== Настройки ==
-
---- Отладка ---
-global SS_DEBUG = false
-
---- Упрощение (Schneider) ---
-global SS_USE_SCHNEIDER = true
-global SS_TOLERANCE_PCT = 0.1
-global SS_SCHNEIDER_SHARP_ANGLE = 150
-
---- Сглаживание ---
-global SS_SMOOTH_ANGLE = 175.0
-global SS_SMOOTH_STRAIGHT_TOL = 5.0
-
---- Восстановление дуг ---
-global SS_ARC_PROTECTED = #()
-global SS_ARC_MIN_CHAIN_SEG = 4
-global SS_ARC_MIN_ARC_SEG = 1
-global SS_ARC_MAX_SEG_DEGREE = 125
-global SS_ARC_MIN_SEG_DEGREE = 25
-global SS_ARC_FULLCIRCLE_MAX_SEG_DEG = 45
-global SS_ARC_LEN_TOL_PCT = 25
-global SS_ARC_MAX_BACK_DEGREES = 150
 */
+-- == Настройки ==
 
 -- == Отладка ================================================================
 global SS_DEBUG = false
@@ -121,6 +99,13 @@ global SS_ARC_LEN_TOL_PCT = 25
 -- Максимальное отклонение точки от дуги (градусы): если максимальное "отступание"
 -- назад по углу больше — группа точек не считается дугой
 global SS_ARC_MAX_BACK_DEGREES = 150
+
+-- Максимальный средний шаг по углу для распознавания ПОЛНОЙ окружности (градусы).
+-- Окружность дискретизирована множеством мелких сегментов (шаг по углу мал,
+-- у типового кольца ~360/N). У правильного многоугольника (квадрат: 4 стороны,
+-- 90° на сторону) шаг велик — это не дуга, а геометрическая фигура, которую менять
+-- нельзя. Если avgStep > этого порога — полную окружность НЕ заменяем.
+global SS_ARC_MAX_STEP_DEG = 45
 
 -- Максимальное радиальное отклонение точки от окружности как доля радиуса.
 -- Точки, отклонившиеся сильнее, ИСКЛЮЧАЮТСЯ из замены дугой (не притягиваются и
@@ -430,6 +415,29 @@ fn nearestKnotAtArcLen cum totalLen closedS L nk = (
 	bestK
 )
 
+-- Кумулятивные длины сегментов: массив из nseg+1 значений, cum[i] = длина до узла i.
+-- Длина сегмента считается квадратурой Гаусса-Лежандря (8 точек) - точно для кубик.
+fn buildSplineCumLengths spline s_num = (
+	local nseg = splineSegCount spline s_num
+	local glT = #(-0.96028985649753620, -0.79666647741362670, -0.52546409566427920, -0.18343464249564980,
+				   0.18343464249564980,  0.52546409566427920,  0.79666647741362670,  0.96028985649753620)
+	local glW = #( 0.10122853629037624,  0.22238103445337450,  0.31370664587788730,  0.36268378337836198,
+				   0.36268378337836198,  0.31370664587788730,  0.22238103445337450,  0.10122853629037624)
+	local cum = #(0.0)
+	local acc = 0.0
+	for seg = 1 to nseg do (
+		local halfLen = 0.0
+		for k = 1 to 8 do (
+			local t = 0.5 * (glT[k] + 1.0)
+			halfLen += glW[k] * (length (evalSplineSegmentDeriv spline s_num seg t))
+		)
+		halfLen *= 0.5
+		acc += halfLen
+		append cum acc
+	)
+	cum
+)
+
 -- --------------------
 -- SCHNEIDER «fitCurves»: адаптивный выбор опорных вершин.
 -- Фитим кубик Безье к плотной (по длине дуги) выборке участка; если максимальное
@@ -599,29 +607,6 @@ fn evalSplineSegmentDeriv spline s_num seg t = (
 fn splineSegCount spline s_num = (
 	local nk = numknots spline s_num
 	if nk >= 2 and (isClosed spline s_num) then nk else nk - 1
-)
-
--- Кумулятивные длины сегментов: массив из nseg+1 значений, cum[i] = длина до узла i.
--- Длина сегмента считается квадратурой Гаусса-Лежандря (8 точек) - точно для кубик.
-fn buildSplineCumLengths spline s_num = (
-	local nseg = splineSegCount spline s_num
-	local glT = #(-0.96028985649753620, -0.79666647741362670, -0.52546409566427920, -0.18343464249564980,
-				   0.18343464249564980,  0.52546409566427920,  0.79666647741362670,  0.96028985649753620)
-	local glW = #( 0.10122853629037624,  0.22238103445337450,  0.31370664587788730,  0.36268378337836198,
-				   0.36268378337836198,  0.31370664587788730,  0.22238103445337450,  0.10122853629037624)
-	local cum = #(0.0)
-	local acc = 0.0
-	for seg = 1 to nseg do (
-		local halfLen = 0.0
-		for k = 1 to 8 do (
-			local t = 0.5 * (glT[k] + 1.0)
-			halfLen += glW[k] * (length (evalSplineSegmentDeriv spline s_num seg t))
-		)
-		halfLen *= 0.5
-		acc += halfLen
-		append cum acc
-	)
-	cum
 )
 
 -- Точка на сплайне на расстоянии l от начала (по таблице длин cum)
@@ -1964,6 +1949,9 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 					local isArc = true
 					if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
 					if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
+					-- Полное кольцо замкнутого может оказаться правильным многоугольником
+					-- (квадрат/треугольник) — шаг по углу велик, это не дуга.
+					if tailStartK == 1 and headEndK == knots and avgStep > SS_ARC_MAX_STEP_DEG do isArc = false
 					if isArc then (
 						local thetaFit = (if fullFit[4] >= 0 then 1.0 else -1.0) * (abs accAng)
 						if (abs thetaFit) >= minArcAng then (
@@ -2113,6 +2101,10 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 			local isArc = true
 			if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
 			if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
+			-- Полная окружность может оказаться правильным многоугольником
+			-- (квадрат/треугольник): 4 равные стороны = 90° на шаг по углу — это
+			-- НЕ дуга. Требуем достаточно мелкую угловую дискретизацию входных точек.
+			if a == 1 and bU == segsT and avgStep > SS_ARC_MAX_STEP_DEG do isArc = false
 			if SS_DEBUG and not isArc do
 				format "  [wrap reject] maxBack=%.1f avgStep=%.1f\n" maxBack avgStep
 			if SS_DEBUG do
@@ -2366,7 +2358,6 @@ fn run_rebuildArcs = (
 			if savedSubObjLevel == 2 then (
 				-- Режим сегментов: накапливаем сегменты ВСЕХ диапазонов и выделяем одним
 				-- setSegSelection на сплайн, чтобы диапазоны не затирали друг друга.
-				subObjectLevel = 2
 				local perSpline = #() -- #(#s_num, #segs)
 				for entry in savedSel do (
 					local s_num = entry[1]
@@ -2386,7 +2377,6 @@ fn run_rebuildArcs = (
 				)
 				for ps in perSpline do setSegSelection obj ps[1] ps[2]
 			) else (
-				subObjectLevel = 1
 				for entry in savedSel do (
 					local s_num = entry[1]
 					local positions = entry[2]
@@ -2406,7 +2396,6 @@ fn run_rebuildArcs = (
 					setKnotSelection obj s_num newSel
 				)
 			)
-			subObjectLevel = savedSubObjLevel
 		)
 	)
 
@@ -2624,7 +2613,6 @@ fn run_simplifySpline = (
 		-- все диапазоны по сплайнам и выделяем одним вызовом, чтобы диапазоны
 		-- не затирали друг друга.
 		local perSpline = #() -- #(#s_num, #items)
-		if savedSubObjLevel == 2 then subobjectlevel = 2 else subobjectlevel = 1
 		for rr in rangesToReselect do (
 			local items = ssReselectRange obj rr[1] rr[2] rr[3] mode:savedSubObjLevel
 			if items.count > 0 then (
