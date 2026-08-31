@@ -74,6 +74,7 @@ Customize -> Customize User Interface -> Toolbars -> #PankovScripts
     - для ВЕРТИКАЛЬНЫХ элементов (ось = мировая Z) при смене базы действует
       договор на выводе: локальная ось Z сплайна всегда направлена в ПОЛОЖИТЕЛЬНУЮ
       сторону (вверх), а направление вниз задаётся ОТРИЦАТЕЛЬНЫМ Extrude.
+      (см. ниже независимое сохранение Material ID крышек и торца).
 
 
 Управление:
@@ -85,6 +86,19 @@ Customize -> Customize User Interface -> Toolbars -> #PankovScripts
 - зажатый Ctrl                   - включить упрощение сплайна.
 
 Глобальные настройки REMS_* в начале файла
+
+Сохранение Material ID (REMS_preserveMatIDs=true): восстанавливаются MaterialID
+верхней крышки, нижней крышки и поверхности выдавливания исходного меша.
+Определение верха/низа - по ЛОКАЛЬНОЙ ОСИ Z сплайна (всегда, независимо от знака
+выдавливания; при отрицательном extrude верх - это база после разворота).
+   - если ID исходника совпадают с дефолтом Extrude (верх=1, низ=2, торец=3) -
+     ничего не добавлять, обычный Extrude;
+   - если все ID одинаковые - Extrude + модификатор MaterialID (materialID);
+   - иначе (свой набор) - вместо Extrude ставится Shell + UVWMap (plane 1 м,
+     размер переводится в системные единицы функцией REMS_mmToSys) + UVW Xform
+     (tile = 1 / размер в системных). Настройки Shell: overrideMatID/matID (торец),
+     overrideInnerMatID/matInnerID (нижняя), overrideOuterMatID/matOuterID (верхняя);
+     направления: outerAmount (вверх/+Z), innerAmount (вниз/-Z) по знаку extrude.
 
 Ориентация осей XY к минимальному bbox: для любой оси выдавливания профиль
 построения (локальные x,y) обрабатывается выпуклой оболочкой (Andrew's Monotone
@@ -120,7 +134,8 @@ bbox крышек базы; нижний контур по этой оси (пр
 исходный объект не модифицируется.
 
 Результат: SplineShape (трансформ без масштаба) + Extrude (mapcoords on,
-realWorldMapSize on). Материал заимствуется с исходного объекта.
+realWorldMapSize on) - или, при своём наборе Material ID, Shell + UVWMap + UVW Xform.
+Материал заимствуется с исходного объекта.
 
 Ограничения:
 - корректное автоматическое определение оси - для тел, у которых семья
@@ -193,6 +208,14 @@ global REMS_minBBoxAxisSnapTol = 2.0
 -- ~32 вершинами и гуще; малоугольные правильные многоугольники попадают под
 -- прилипание к мировой оси (детерминизм) без явного пропуска.
 global REMS_minBBoxSymTol = 0.03
+
+-- Сохранение Material ID исходного меша при выдавливании:
+-- true - восстановить MaterialID верхней/нижней крышки и торца (см. ниже);
+-- если ID исходника совпадают с дефолтом Extrude (верх=1, низ=2, торец=3) -
+-- ничего не добавлять; все одинаковые - добавляется модификатор MaterialID;
+-- иной набор - вместо Extrude ставится Shell + UVWMap + UVW Xform.
+-- false - всегда обычный Extrude (как раньше).
+global REMS_preserveMatIDs = true
 	
 /* --------------------
 --
@@ -1005,6 +1028,47 @@ fn REMS_snapProfileAxis longA tol = (
     else longA
 )
 
+-- Перевод МИЛЛИМЕТРОВ в текущие СИСТЕМНЫЕ единицы 3ds Max.
+-- Например REMS_mmToSys 1000 (1 м): в мм -> 1000, в дюймах -> 40.81, в м -> 1.0.
+-- Используется для размера UVWMap (plane 1 м) и расчёта UVW Xform tile (1/значение).
+fn REMS_mmToSys mm = (
+    local v = undefined
+    try ( v = units.decodeValue ((mm as string) + "mm") ) catch ( v = undefined )
+    if v == undefined then (
+        -- fallback по units.SystemType (SystemScale в #Generic игнорируем)
+        local k = case units.SystemType of (
+            #Micrometers: 1000.0
+            #Millimeters: 1.0
+            #Centimeters: 0.1
+            #Meters: 0.001
+            #Kilometers: 0.000001
+            #Inches: (1.0 / 25.4)
+            #Feet: (1.0 / 304.8)
+            #Miles: (1.0 / 1609344.0)
+            default: 1.0
+        )
+        v = mm * k
+    )
+    v
+)
+
+-- Доминирующий (самый частый) MaterialID по набору граней faceBits полигона p.
+-- Для пустого набора возвращает undefined.
+fn REMS_collectGroupMatID p faceBits = (
+    if faceBits == undefined or faceBits.numberSet == 0 do return undefined
+    local freq = #()
+    local foundID = undefined
+    for f in faceBits do (
+        local id = polyop.getFaceMatID p f
+        local has = false
+        for ff = 1 to freq.count do if freq[ff][1] == id do ( freq[ff][2] += 1; has = true; exit )
+        if not has do append freq #(id, 1)
+    )
+    local best = 0
+    for ff in freq do if ff[2] > best do ( best = ff[2]; foundID = ff[1] )
+    foundID
+)
+
 -- Создает SplineShape в локальной системе сплайна (для Z-режима локальная
 -- система совпадает с мировой, tmFacade единичная). Трансформация узла
 -- tmFacade отображает локальные точки в мировые координаты.
@@ -1601,16 +1665,122 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
                 )
             )
         )
-        -- Extrude добавляем защищенно: сбой опции не должен отменять модификатор
-        try (
-            local ex = Extrude()
-            ex.amount = extrudeAmount
-            ex.mapcoords = true
-            ex.realWorldMapSize = true
-            addModifier ss ex
-            for mo in ss.modifiers where (classOf mo) == Extrude do exAdded = true
-        ) catch (
-            format "REMS: ошибка Extrude '%': %\n" ssName (getCurrentException())
+        -- СОХРАНЕНИЕ MATERIAL ID ИСХОДНИКА (если REMS_preserveMatIDs=true):
+        -- верхняя/нижняя крышка и торец. Верх определяется по +лок. Z
+        -- (tmFacade.row3) - ВСЕГДА, независимо от знака extrudeAmount: при
+        -- отрицательном выдавливании верх - это и есть база после разворота.
+        local miTop = undefined
+        local miBottom = undefined
+        local miSide = undefined
+        if REMS_preserveMatIDs do (
+            miSide = REMS_collectGroupMatID p sideBits
+            if loopsP.count > 0 and capBits.numberSet > 0 do (
+                -- разделить все крышки на две торцевые группы по знаку проекции
+                -- их центроидов на локальную ось Z (относительно средней)
+                local zAx = tmFacade.row3
+                local projSum = 0.0
+                local cnt = 0
+                local proj = #()
+                for f in capBits do (
+                    local d = dot (polyop.getFaceCenter p f) zAx
+                    append proj #(f, d)
+                    projSum += d
+                    cnt += 1
+                )
+                if cnt > 0 do (
+                    local midV = projSum / cnt
+                    local topBits = #{}; topBits.count = capBits.count
+                    local botBits = #{}; botBits.count = capBits.count
+                    for pr in proj do (
+                        if pr[2] >= midV then topBits[pr[1]] = true
+                        else botBits[pr[1]] = true
+                    )
+                    miTop = REMS_collectGroupMatID p topBits
+                    miBottom = REMS_collectGroupMatID p botBits
+                )
+            )
+        )
+        -- Выбор стека: дефолт Extrude / Extrude+MaterialID / Shell+UVWMap+UVWXform
+        --  - MatID исходника == дефолт Extrude (верх=1, низ=2, торец=3): ничего
+        --    не добавляем, обычный Extrude;
+        --  - все MatID одинаковые: Extrude + модификатор MaterialID(force);
+        --  - иной набор: вместо Extrude - Shell + UVWMap (plane 1 м) + UVW Xform,
+        --    чтобы воспроизвести свой набор ID на крышках и торце.
+        local useCustomStack = false
+        local useMatIDOverride = false
+        if REMS_preserveMatIDs and miTop != undefined and miBottom != undefined and miSide != undefined then (
+            if miTop == 1 and miBottom == 2 and miSide == 3 then (
+                if REMS_debug do format "  MatID совпадает с дефолтом Extrude (1/2/3) - Extrude без доп.\n"
+            ) else if miTop == miBottom and miBottom == miSide then (
+                format "REMS: '%': MatID одинаковые (%) - Extrude + MaterialID\n" ssName miTop
+                useMatIDOverride = true
+            ) else (
+                format "REMS: '%': свой набор MatID (верх=% низ=% торец=%) - Shell+UVWMap+UVW Xform\n" ssName miTop miBottom miSide
+                useCustomStack = true
+            )
+        )
+        if useCustomStack then (
+            -- SHELL путь: порядок модификаторов UVWMap -> Shell -> UVW Xform
+            local stackOk = true
+            try (
+                local planeSize = REMS_mmToSys 1000
+                local uv = UVWMap()
+                uv.maptype = 0
+                uv.length = planeSize
+                uv.width = planeSize
+                uv.height = planeSize
+                addModifier ss uv
+                local sh = Shell()
+                if extrudeAmount >= 0 then (
+                    sh.outerAmount = extrudeAmount
+                    sh.innerAmount = 0.0
+                ) else (
+                    sh.innerAmount = -extrudeAmount
+                    sh.outerAmount = 0.0
+                )
+                sh.overrideMatID       = true
+                sh.matID       = miSide
+                sh.overrideInnerMatID = true
+                sh.matInnerID  = miBottom
+                sh.overrideOuterMatID = true
+                sh.matOuterID  = miTop
+                addModifier ss sh
+                local ux = UVW_Xform()
+                local tile = 1.0 / (REMS_mmToSys 1000)
+                ux.U_Tile = tile
+                ux.V_Tile = tile
+                ux.W_Tile = tile
+                ux.U_Flip = false
+                ux.V_Flip = false
+                ux.W_Flip = false
+                addModifier ss ux
+                exAdded = true
+            ) catch (
+                stackOk = false
+                format "REMS: ошибка Shell пути '%': %\n" ssName (getCurrentException())
+            )
+            if not stackOk do format "REMS: '%': Shell НЕ ДОБАВЛЕН\n" ssName
+        ) else (
+            -- EXTRUDE путь (дефолт или + MaterialID для одинаковых ID)
+            try (
+                local ex = Extrude()
+                ex.amount = extrudeAmount
+                ex.mapcoords = true
+                ex.realWorldMapSize = true
+                addModifier ss ex
+                for mo in ss.modifiers where (classOf mo) == Extrude do exAdded = true
+            ) catch (
+                format "REMS: ошибка Extrude '%': %\n" ssName (getCurrentException())
+            )
+            if useMatIDOverride and exAdded then (
+                try (
+                    local mi = MaterialID()
+                    mi.materialID = miTop
+                    addModifier ss mi
+                ) catch (
+                    format "REMS: ошибка MaterialID '%': %\n" ssName (getCurrentException())
+                )
+            )
         )
         if not exAdded do format "REMS: '%': Extrude НЕ ДОБАВЛЕН\n" ssName
         try (ss.renderable = false) catch ()
