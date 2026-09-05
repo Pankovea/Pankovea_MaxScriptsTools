@@ -273,7 +273,7 @@ macroScript Pankovea_BatchViewsManager
 	local g_roll_global
 	local g_roll_states
 	local g_roll_lang
-	local g_version = "1.0.0 (2026-08-09)"
+	local g_version = "1.0.1 (2026-09-05)"
 	local g_repoUrl = "https://github.com/Pankovea"
 	local g_last_opened_tab = "Cams"
 
@@ -335,6 +335,11 @@ macroScript Pankovea_BatchViewsManager
 	-- пресеты пропорций для dropdown (1 = Free, не фиксирует пропорции)
 	local g_presetRatios = #(0.0, 1.0, 3.0/2.0, 4.0/3.0, 16.0/10.0, 16.0/9.0, 2.0, 21.0/9.0, sqrt(2.0))
 	local g_presetNames = #("Free", "1:1", "3:2", "4:3", "16:10", "16:9", "2:1", "21:9", "A series")
+	-- Допуск для ПОДСВЕТКИ близкого пресета в выпадающем списке (не притягиваем
+	-- разрешение, только показываем «≈ этому пресету»). Меньше разности соседних
+	-- пресетов 3:2(1.5)—16:10(1.6)=0.1 (строго < 0.05), чтобы соседние пресеты
+	-- не путались. 0.04 ≈ 2.3% — покрывает 1.75→16:9 (0.0278) и т.п.
+	local g_presetTolerance = 0.04
 
 	-- контекстное меню удаления: rcmenu rmc_del_group/rmc_del_view определены на
 	-- уровне макроса (блок перед rollout roll_batch); их обработчики обращаются
@@ -577,51 +582,45 @@ macroScript Pankovea_BatchViewsManager
 	--) ЕДИНЫЙ РАСЧЁТ РАЗРЕШЕНИЯ
 	--------------------------------------------------------------
 
-	-- Центральная семантика ввода: обработчики строят НАМЕРЕНИЕ (Dictionary),
+	-- Центральная семантика ввода: обработчики строят НАМЕРЕНИЕ (именованные аргументы),
 	-- resolveRes возвращает готовую пару WxH. Применять результат как есть,
 	-- НЕ добавляя собственных пересчётов и повторных снэпов.
-	--   #mode      — #wh | #width | #height | #ratio | #mp | #swap
-	--   #w,#h      — исходное состояние (пространство полей: база или масштаб)
-	--   #val,#val2 — значение ввода (#val2 только для #wh)
-	--   #ratio     — пропорция пресета/LOCK (для #width/#height/#ratio)
-	--   #mpPx      — целевые пиксели (для #mp)
-	--   #lock,#preserve — режимы (false по умолчанию)
-	--   #snap      — переопределение галки снэпа (по умолчанию g_snap)
-	fn resolveRes intent = (
-		local rawW = intent[#w]
-		local rawH = intent[#h]
-		if rawW == undefined or rawH == undefined then return #(0, 0)
-		local sw = rawW as integer
-		local sh = rawH as integer
+	--   mode      — #wh | #width | #height | #ratio | #mp | #swap
+	--   w,h       — исходное состояние (пространство полей: база или масштаб)
+	--   val,val2  — значение ввода (val2 только для #wh)
+	--   ratio     — пропорция пресета/LOCK (для #width/#height/#ratio)
+	--   mpPx      — целевые пиксели (для #mp)
+	--   lock,preserve — режимы (false по умолчанию)
+	--   snap      — переопределение галки снэпа (undefined = g_snap)
+	fn resolveRes mode:#wh w:0 h:0 val:0 val2:0 ratio:undefined mpPx:0.0 lock:false preserve:false snap:undefined = (
+		if w == undefined or h == undefined then return #(0, 0)
+		local sw = w as integer
+		local sh = h as integer
 		if sw <= 0 or sh <= 0 then return #(0, 0)
-		local mode = intent[#mode]
-		if mode == undefined then mode = #wh
-		local lock = (intent[#lock] == true)
-		local preserve = (intent[#preserve] == true)
-		local snapOn = if intent[#snap] == undefined then g_snap else (intent[#snap] == true)
+		local lockSnap = if snap == undefined then g_snap else (snap == true)
 		local srcRatio = sw as float / sh
 		local srcPx = (sw as float) * sh
 		local tw = sw
 		local th = sh
 		case mode of (
-			#wh: ( tw = intent[#val]; th = intent[#val2] )
+			#wh: ( tw = val as integer; th = val2 as integer )
 			#swap: ( tw = sh; th = sw )
 			#width: (
-				tw = intent[#val]
+				tw = val as integer
 				th = if preserve and srcPx > 0 then ((floor (srcPx / tw + 0.5)) as integer) else (
-					if lock and intent[#ratio] != undefined and intent[#ratio] > 0 \
-						then (floor (tw as float / intent[#ratio])) else th
+					if lock and ratio != undefined and ratio > 0 \
+						then (floor (tw as float / ratio)) else th
 				)
 			)
 			#height: (
-				th = intent[#val]
+				th = val as integer
 				tw = if preserve and srcPx > 0 then ((floor (srcPx / th + 0.5)) as integer) else (
-					if lock and intent[#ratio] != undefined and intent[#ratio] > 0 \
-						then (floor (th as float * intent[#ratio])) else tw
+					if lock and ratio != undefined and ratio > 0 \
+						then (floor (th as float * ratio)) else tw
 				)
 			)
 			#ratio: (
-				local r = if intent[#ratio] != undefined then intent[#ratio] else srcRatio
+				local r = if ratio != undefined then ratio else srcRatio
 				if preserve and srcPx > 0 then (
 					tw = (floor ((sqrt (srcPx * r)) + 0.5)) as integer
 					th = (floor ((sqrt (srcPx / r)) + 0.5)) as integer
@@ -631,8 +630,7 @@ macroScript Pankovea_BatchViewsManager
 				)
 			)
 			#mp: (
-				local mpPx = intent[#mpPx]
-				if mpPx != undefined and mpPx > 0 and srcRatio > 0 then (
+				if mpPx > 0 and srcRatio > 0 then (
 					tw = (floor ((sqrt (mpPx * srcRatio)) + 0.5)) as integer
 					th = (floor ((sqrt (mpPx / srcRatio)) + 0.5)) as integer
 				)
@@ -642,10 +640,10 @@ macroScript Pankovea_BatchViewsManager
 		if tw == undefined or th == undefined or tw <= 0 or th <= 0 do return #(sw, sh)
 		-- Swap — без снэпа: перестановка сторон должна быть точной (снэп мог бы
 		-- сменить разрешение, напр. 1872x2816 -> 2000x3000)
-		if not snapOn or mode == #swap do return #(tw as integer, th as integer)
+		if not lockSnap or mode == #swap do return #(tw as integer, th as integer)
 		-- ФАЗА СНЭПА — единственная во всём скрипте для путей ввода:
 		local res = if preserve or mode == #mp then \
-			snapResolutionKeepMP tw th (if mode == #mp then intent[#mpPx] else srcPx) \
+			snapResolutionKeepMP tw th (if mode == #mp then mpPx else srcPx) \
 			else snapResolution tw th
 		#(res[1], res[2])
 	)
@@ -2201,9 +2199,11 @@ macroScript Pankovea_BatchViewsManager
 			if drdwnIdx != 0 and drdwn_cam.selection != drdwnIdx do drdwn_cam.selection = drdwnIdx
 		)
 
-		-- Синхронизировать пресет с текущим ratio (Free если нет совпадения).
+		-- Синхронизировать пресет с текущим ratio (Free если нет близкого совпадения).
 		-- Для вертикального кадра (h > w) ratio нормализуется к пейзажному.
-		-- LOCK включается при совпадении с пресетом, иначе выключается.
+		-- Отображаемый пресет — ПОДСКАЗКА: показывает, к какой стандартной пропорции
+		-- близка текущая, но НЕ меняет разрешение и НЕ включает LOCK. LOCK включается
+		-- только явным выбором пресета пользователем (on drdwn_re_presets selected).
 		fn syncPresetFromRatio ratio = (
 			local idx = 1
 			if ratio != undefined and ratio > 0 then (
@@ -2212,11 +2212,10 @@ macroScript Pankovea_BatchViewsManager
 				local h = txt_out_h.text as integer
 				if h != undefined and w != undefined and h > w then cmp = 1.0 / ratio
 				for i = 2 to g_presetRatios.count do (
-					if abs(g_presetRatios[i] - cmp) < 0.01 then (idx = i; exit)
+					if abs(g_presetRatios[i] - cmp) < g_presetTolerance then (idx = i; exit)
 				)
 			)
 			drdwn_re_presets.selection = idx
-			chk_ratio.checked = (idx > 1)
 			idx
 		)
 
@@ -2340,7 +2339,9 @@ macroScript Pankovea_BatchViewsManager
 		-- Активность Ratio и чек-бокса Preserve MegaPix (всегда доступен при Override)
 		fn updateRatioUI = (
 			if isMultiEdit() then (
-				local isFree = (drdwn_re_presets.selection <= 1)
+				-- Свободный ввод пропорции доступен, когда лок выключен (пресет при
+				-- не-locked близкой пропорции — лишь подсказка, поле не блокируем).
+				local isFree = not chk_ratio.checked
 				chk_preserve_mp.enabled = g_multi_ovr_editable
 				txt_out_ratio.enabled = g_multi_ovr_editable and isFree
 				chk_ratio.enabled = g_multi_ovr_editable
@@ -2349,7 +2350,7 @@ macroScript Pankovea_BatchViewsManager
 			)
 			local hasActive = (getActiveView() != undefined)
 			local ovr = chk_override_preset.checked
-			local isFree = (drdwn_re_presets.selection <= 1)
+			local isFree = not chk_ratio.checked
 			chk_preserve_mp.enabled = hasActive and ovr
 			txt_out_ratio.enabled = hasActive and ovr and isFree
 			chk_ratio.enabled = hasActive and ovr
@@ -3048,7 +3049,7 @@ macroScript Pankovea_BatchViewsManager
 			)
 			-- Единый расчёт: новая пропорция (Preserve MegaPix учитывается внутри);
 			-- результат применяем как есть — снэп уже выполнен в фазе resolveRes
-			local t = resolveRes mode:#ratio w:src[1] h:src[2] val:ratio \
+			local t = resolveRes mode:#ratio w:src[1] h:src[2] ratio:ratio \
 				lock:chk_ratio.checked preserve:chk_preserve_mp.checked
 			applyViewRes t[1] t[2]
 			true
@@ -4322,7 +4323,9 @@ macroScript Pankovea_BatchViewsManager
 			applyViewRes t[1] t[2]
 		)
 		on txt_out_ratio entered val do (
-			if drdwn_re_presets.selection > 1 do return false
+			-- Пресет в дропдауне — только подсказка о близкой пропорции: он НЕ
+			-- блокирует свободный ввод. Блокирует только сам LOCK (chk_ratio).
+			if chk_ratio.checked and drdwn_re_presets.selection > 1 do return false
 			-- Мульти-режим, разные базы: применяем как btn_copy_res (предупреждение о пропорциях)
 			if isMultiEdit() and txt_out_w.text == "*" then (
 				local ratio = val as float
