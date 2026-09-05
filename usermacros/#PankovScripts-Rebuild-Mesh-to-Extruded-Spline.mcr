@@ -179,10 +179,10 @@ global REMS_capDepthFrac = 0.15
 -- НЕПЛОСКАЯ база (захвачены уступы/полки, профиль имеет разброс по локальному Z):
 -- true - корректировать толщину выдавливания на глубину крышки: Extrude удлиняет
 -- каждую вершину на extrudeAmount, тело занимает [минZ, максZ+extrudeAmount], а
--- толщина мереется от ЦЕНТРА bbox крышки, поэтому из неё вычитается ПОЛОВИНА
--- разброса Z профиля - итоговый bbox совпадает с ИСХОДНЫМ ГАБАРИТНЫМ КОНТЕЙНЕРОМ
--- объекта; false - оставлять толщину как есть (тело длиннее на пол-глубины)
-global REMS_subtractCapDepthFromThickness = true
+-- толщина мереется от края bbox крышки, поэтому из неё вычитается
+-- разброс Z профиля - итоговый bbox совпадает с ИСХОДНЫМ ГАБАРИТНЫМ КОНТЕЙНЕРОМ
+-- объекта; false - оставлять толщину как есть (тело длиннее на глубину крышки)
+global REMS_subtractCapDepthFromThickness = false
 
 -- Ориентация осей XY профиля к МИНИМАЛЬНОМУ ограничивающему прямоугольнику
 -- (для всех осей выдавливания): строится выпуклая оболочка профильных точек
@@ -216,6 +216,33 @@ global REMS_minBBoxSymTol = 0.03
 -- иной набор - вместо Extrude ставится Shell + UVWMap + UVW Xform.
 -- false - всегда обычный Extrude (как раньше).
 global REMS_preserveMatIDs = true
+
+-- Формат ошибки: заголовок + ОГРАНИЧЕННЫЙ стек (N фреймов с локальными
+-- переменными) через переиспользуемый модуль scripts\ErrorDump.ms, чтобы при
+-- пакетной обработке десятков объектов не вываливать полный стек. Модуль
+-- ищется автоматически по scripts\ (fileIn "ErrorDump.ms"). Если загрузить
+-- не удалось (classOf FmtError != MAXScriptFunction) — FALLBACK: краткий
+-- диагноз (текст ошибки + файл/строка/смещение источника).
+-- frame/caller - краткие метки текущего фрейма и вызывающего для заголовка.
+fn REMS_excInfo frame caller = (
+    local header = "в " + frame + (if caller == "" then "" else (" (вызван из " + caller + ")")) + ":"
+    try ( fileIn "ErrorDump.ms" ) catch ()
+    if classOf FmtError == MAXScriptFunction then (
+        try ( return header + "\n" + (FmtError stackLevels:2) ) catch (
+			return (getCurrentExceptionStackTrace())
+		)
+    )
+    -- FALLBACK: модуль недоступен — краткий диагноз без полного стека.
+    local msg = header + " " + (getCurrentException() as string)
+    try (
+        local f = getErrorSourceFileName()
+        if f != undefined do (
+            msg += ("\n   источник: " + (f as string) + " строка " + ((getErrorSourceFileLine()) as string) \
+                + " смещение " + ((getErrorSourceFileOffset()) as string))
+        )
+    ) catch ()
+    msg
+)
 	
 /* --------------------
 --
@@ -779,17 +806,68 @@ fn REMS_capBBoxCenter m sel = (
     if mn == undefined then [0,0,0] else (mn + mx) * 0.5
 )
 
+-- Объединение состыкованных КОЛЛИНЕАРНЫХ «диффов» (рёбер периметра с ровно
+-- одним концом в базе) в ЦЕПОЧКИ синтетических рёбер. Дифф = #(точка в базе,
+-- внешняя точка вне базы, вектор наружу). Два диффа СОСТЫКОВАНЫ, если у них
+-- есть ОБЩАЯ вершина (вершины отождествляются по координатам snapshot-меша);
+-- если при этом они КОЛЛИНЕАРНЫ (параллельны и лежат на одной прямой) - это
+-- звенья ОДНОГО ребра выдавки (например вертикаль стены, разбитая на сегменты
+-- разной длины: 668, 3266, 4683...), и их ДЛИНА СУММИРУЕТСЯ в единую линию.
+-- Несовместимые (перпендикулярные к цепочке) стыки в цепочку НЕ сливаются.
+-- Возвращает список цепочек #(#(направление, суммарная длина, число звеньев)).
+fn REMS_buildCollinearChains diffs = (
+    local chains = #()
+    local n = diffs.count
+    local used = for i = 1 to n collect false
+    for i = 1 to n where not used[i] do (
+        used[i] = true
+        local comp = #(i)
+        local vecSum = normalize diffs[i][3]
+        local grow = true
+        while grow do (
+            grow = false
+            for j = 1 to n where not used[j] do (
+                local djDir = normalize (diffs[j][3])
+                if (abs (dot vecSum djDir)) < 0.999 do continue
+                local link = false
+                for k in comp do (
+                    if (distance diffs[j][1] diffs[k][1]) < 1e-4 or \
+                       (distance diffs[j][2] diffs[k][1]) < 1e-4 or \
+                       (distance diffs[j][1] diffs[k][2]) < 1e-4 or \
+                       (distance diffs[j][2] diffs[k][2]) < 1e-4 do (link = true; exit)
+                )
+                if link do (
+                    used[j] = true
+                    append comp j
+                    vecSum = normalize (vecSum * comp.count + djDir)
+                    grow = true
+                )
+            )
+        )
+        local acc = [0,0,0]
+        local clen = 0.0
+        for k in comp do (
+            acc += normalize diffs[k][3]
+            clen += length diffs[k][3]
+        )
+        local cdir = normalize acc
+        if (length cdir) > 1e-9 do append chains #(cdir, clen, comp.count)
+    )
+    chains
+)
+
 -- Точное направление и длина рёбер выдавливания: РЁБРА ПОЛИГОНОВ, у которых
 -- РОВНО ОДИН конец лежит в базовой крышке, - рёбра ПЕРИМЕТРА профиля, ведущие
 -- наружу (к противоположной крышке/скошенной стороне) вдоль оси экструзии.
 -- В EditPoly рёбра - только границы полигонов (диагонали трианглирования
 -- убраны конвертером), поэтому Direction не сбивается фрагментами поверхности.
--- Результат фильтруется медианой по длине и по согласованности НАПРАВЛЕНИЙ
--- (~16°): на круглой/скользкой базе пара рёбер периметра может оказаться
--- тангентами сопряжений, но чаще это ОБРАЗУЮЩИЕ наклонной оси (например колонна
--- наклонена на 12° - её ось дают эти два ребра), поэтому достаточно >=2
--- СОГЛАСОВАННЫХ рёбер.
--- Возвращает #(направление, число СОГЛАСОВАННЫХ рёбер, средняя длина).
+-- Состыкованные коллинеарные диффы сливаются в ЦЕПОЧКИ (REMS_buildCollinearChains)
+-- единой суммарной длины: вертикаль стены, разбитая на звенья, = одно ребро.
+-- МЕДИАНА по длине не нужна: диффы и так фильтруются ПАРАЛЛЕЛЬНОСТЬЮ к уже
+-- известному направлению dir, а для обращения наклонённой оси (колонна 12°)
+-- достаточно >=2 СОГЛАСОВАННЫХ цепочек. Переиспользуется группировка граней
+-- (capSel приходит аргументом baseSel) для отбора вершин базовой крышки.
+-- Возвращает #(направление, число СОГЛАСОВАННЫХ цепочек, средняя длина цепочки).
 fn REMS_extrudeDirFromCaps m baseSel dir tol = (
     local res = #(dir, 0, 0.0)
     local baseVerts = #{}
@@ -803,38 +881,45 @@ fn REMS_extrudeDirFromCaps m baseSel dir tol = (
         local inA = (findItem basePts pA) > 0
         local inB = (findItem basePts pB) > 0
         if inA != inB then (
-            local dv = if inA then (pB - pA) else (pA - pB)
-            if (length dv) > tol do append diffs dv
+            local pBase = if inA then pA else pB
+            local pTip  = if inA then pB else pA
+            local dv = pTip - pBase
+            if (length dv) > tol do append diffs #(pBase, pTip, dv)
         )
     )
-    if diffs.count >= 3 then (
-        local lens = for d in diffs collect (length d)
-        sort lens
-        local med = lens[(lens.count + 1) / 2]
-        local lim = (amax #(med, tol) * 1.5) + tol
-        local vs = for d in diffs where (length d) <= lim collect d
-        if vs.count == 0 do vs = diffs
-        local acc = [0,0,0]
-        local accLen = 0.0
-        for d in vs do (
-            acc += normalize d
-            accLen += length d
+    if REMS_debug do (
+        format "    [extrudeDirFromCaps] вершин базы=% диффов(рёбер с 1 концом в базе)=% dir=[%,%,%] tol=%\n" \
+            basePts.count diffs.count dir.x dir.y dir.z tol
+        if diffs.count > 0 do (
+            local lensS = for d in diffs collect (length d[3])
+            format "    [extrudeDirFromCaps] длины диффов: %\n" lensS
         )
-        local nd = normalize acc
-        if (length nd) > 1e-9 do (
-            local vs2 = for d in vs where (abs (dot (normalize d) nd)) >= 0.96 collect d
-            if vs2.count >= 2 do (
-                local acc2 = [0,0,0]
-                local accLen2 = 0.0
-                for d in vs2 do (
-                    acc2 += normalize d
-                    accLen2 += length d
-                )
-                local nd2 = normalize acc2
-                if (dot nd2 dir) < 0 do nd2 = -nd2
-                res = #(nd2, vs2.count, accLen2 / vs2.count)
+    )
+    if diffs.count >= 2 then (
+        local chains = REMS_buildCollinearChains diffs
+        if REMS_debug do format "    [extrudeDirFromCaps] диффов=% цепочек=% (состыкованных коллинеарных)\n" \
+            diffs.count chains.count
+        -- отбор цепочек по ПАРАЛЛЕЛЬНОСТИ к известному направлению dir
+        -- (вместо медианы по длине): согласованных = цепочка, чьё направление
+        -- совпадает с dir в пределах ~16° (0.96 косинуса)
+        local sel = for c in chains where (abs (dot c[1] dir)) >= 0.96 collect c
+        if REMS_debug do (
+            format "    [extrudeDirFromCaps] dir=[%,%,%] согласованных цепочек=% (из %)\n" \
+                dir.x dir.y dir.z sel.count chains.count
+        )
+        if sel.count >= 2 do (
+            local acc = [0,0,0]
+            local accLen = 0.0
+            for c in sel do (
+                acc += normalize c[1]
+                accLen += c[2]
             )
+            local nd = normalize acc
+            if (dot nd dir) < 0 do nd = -nd
+            res = #(nd, sel.count, accLen / sel.count)
         )
+    ) else (
+        if REMS_debug do format "    [extrudeDirFromCaps] диффов < 2 - направление по рёбрам не распознано\n"
     )
     res
 )
@@ -871,7 +956,7 @@ fn REMS_rayThickness m pos d tol = (
         format "REMS: ошибка луча RayMeshGridIntersect: %\n" (getCurrentException())
     )
     rm.free()
-    try (delete tmp) catch ()
+    try (delete tmp) catch (format "REMS: %\n" (REMS_excInfo "REMS_rayThickness" "REMS_processObject"))
     res
 )
 
@@ -1153,7 +1238,7 @@ fn REMS_autoSimplify ss loopsP tmFacade:(matrix3 1) = (
         ) catch (
             simpOk = false
             local nm = "<узел удалён>"
-            try (nm = ss.name) catch ()
+            try (nm = ss.name) catch (format "REMS: %\n" (REMS_excInfo "REMS_autoSimplify" "имя узла недоступно"))
             format "REMS: попытка %: ошибка при упрощении '%': %\n" attempt nm (getCurrentException())
         )
         if not (isValidNode ss) then (
@@ -1196,7 +1281,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
         local cp = mesh mesh:m
         cp.ishidden = true
         m = snapshotAsMesh cp
-        try (delete cp) catch ()
+        try (delete cp) catch (format "REMS: %\n" (REMS_excInfo "REMS_autoSimplify" "REMS_processObject"))
     )
     local p = convertToPoly (mesh mesh:m)
     p.ishidden = true
@@ -1353,10 +1438,10 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
                         -- длина рёбер (если есть) остаётся запасом для толщины
                         if r[2] > 0 and extrudeRef == 0.0 do extrudeRef = r[3]
                     )
-                    -- ФОЛБЭК по центроидам крайних крышек: если ни рёбра, ни нормаль
+                    -- ФОЛБЭК по ЦЕНТРАМ BBOX крайних крышек: если ни рёбра, ни нормаль
                     -- базовой крышки не дали наклона оси (база горизонтальна, а
                     -- образующие на выбранном конце не распознаны), ось берётся
-                    -- по ЦЕНТРОИДАМ базы и максимально удалённого вдоль +dir торца:
+                    -- по ЦЕНТРАМ BBOX базы и максимально удалённого вдоль +dir торца:
                     -- для прямых призматических тел это и есть направление
                     -- выдавливания. Иначе вниз/вверх уходило бы ровно по мировой
                     -- оси (баг: Alt=true на наклонённом объекте).
@@ -1369,16 +1454,20 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
                             if ie2[2] > farT do ( farT = ie2[2]; farIsl = ib2 )
                         )
                         if farIsl != undefined and (farT - tBase) > (diag * 0.01) do (
-                            local ccF = REMS_islandCentroid p farIsl
+                            -- центр BBOX крышки (а не центроид граней): завязываемся
+                            -- только на КРАЙНИЕ точки крышки, игнорируя её внутренности
+                            -- (проёмы/скосы/конструктивные элементы могли бы сместить
+                            -- центроид и наклонить ось у вертикальной стены).
+                            local ccF = REMS_capBBoxCenter p farIsl
                             local ax2 = normalize (ccF - ccB)
                             if (length ax2) > 1e-6 do (
                                 if (dot ax2 dir) < 0 do ax2 = -ax2
                                 if (dot ax2 dir) < 0.999999 do (
                                     local dir0 = dir
                                     dir = ax2
-                                    axisNote = "центроиды крайних крышек"
+                                    axisNote = "центры bbox крайних крышек"
                                     if REMS_debug do (
-                                        format "  уточнение оси (центроиды крайних крышек): [%,%,%] -> [%,%,%]\n" \
+                                        format "  уточнение оси (центры bbox крайних крышек): [%,%,%] -> [%,%,%]\n" \
                                             dir0.x dir0.y dir0.z dir.x dir.y dir.z
                                     )
                                 )
@@ -1611,7 +1700,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
         local grpHead = undefined
         if isGroupMember obj do grpHead = obj.parent
         if grpHead == undefined do (
-            try (if obj.parent != undefined and isGroupHead obj.parent do grpHead = obj.parent) catch ()
+            try (if obj.parent != undefined and isGroupHead obj.parent do grpHead = obj.parent) catch (format "REMS: %\n" (REMS_excInfo "REMS_processObject" "определение группы-родителя"))
         )
         if grpHead != undefined then (
             try (
@@ -1672,31 +1761,38 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
         local miTop = undefined
         local miBottom = undefined
         local miSide = undefined
+        -- механизм Material ID запускается ТОЛЬКО когда к объекту применён
+        -- MultiMaterial (только тогда грани имеют осмысленный набор ID);
+        -- сплошной/единый материал набора ID не даёт - обычный Extrude.
+        local matIsMulti = false
+        try ( if (classOf obj.material) == MultiMaterial do matIsMulti = true ) catch (format "REMS: %\n" (REMS_excInfo "REMS_processObject" "чтение материала"))
         if REMS_preserveMatIDs do (
-            miSide = REMS_collectGroupMatID p sideBits
-            if loopsP.count > 0 and capBits.numberSet > 0 do (
-                -- разделить все крышки на две торцевые группы по знаку проекции
-                -- их центроидов на локальную ось Z (относительно средней)
-                local zAx = tmFacade.row3
-                local projSum = 0.0
-                local cnt = 0
-                local proj = #()
-                for f in capBits do (
-                    local d = dot (polyop.getFaceCenter p f) zAx
-                    append proj #(f, d)
-                    projSum += d
-                    cnt += 1
-                )
-                if cnt > 0 do (
-                    local midV = projSum / cnt
-                    local topBits = #{}; topBits.count = capBits.count
-                    local botBits = #{}; botBits.count = capBits.count
-                    for pr in proj do (
-                        if pr[2] >= midV then topBits[pr[1]] = true
-                        else botBits[pr[1]] = true
+            if matIsMulti then (
+                miSide = REMS_collectGroupMatID p sideBits
+                if loopsP.count > 0 and capBits.numberSet > 0 do (
+                    -- разделить все крышки на две торцевые группы по знаку проекции
+                    -- их центроидов на локальную ось Z (относительно средней)
+                    local zAx = tmFacade.row3
+                    local projSum = 0.0
+                    local cnt = 0
+                    local proj = #()
+                    for f in capBits do (
+                        local d = dot (polyop.getFaceCenter p f) zAx
+                        append proj #(f, d)
+                        projSum += d
+                        cnt += 1
                     )
-                    miTop = REMS_collectGroupMatID p topBits
-                    miBottom = REMS_collectGroupMatID p botBits
+                    if cnt > 0 do (
+                        local midV = projSum / cnt
+                        local topBits = #{}; topBits.count = capBits.count
+                        local botBits = #{}; botBits.count = capBits.count
+                        for pr in proj do (
+                            if pr[2] >= midV then topBits[pr[1]] = true
+                            else botBits[pr[1]] = true
+                        )
+                        miTop = REMS_collectGroupMatID p topBits
+                        miBottom = REMS_collectGroupMatID p botBits
+                    )
                 )
             )
         )
@@ -1708,7 +1804,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
         --    чтобы воспроизвести свой набор ID на крышках и торце.
         local useCustomStack = false
         local useMatIDOverride = false
-        if REMS_preserveMatIDs and miTop != undefined and miBottom != undefined and miSide != undefined then (
+        if REMS_preserveMatIDs and matIsMulti and miTop != undefined and miBottom != undefined and miSide != undefined then (
             if miTop == 1 and miBottom == 2 and miSide == 3 then (
                 if REMS_debug do format "  MatID совпадает с дефолтом Extrude (1/2/3) - Extrude без доп.\n"
             ) else if miTop == miBottom and miBottom == miSide then (
@@ -1720,7 +1816,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
             )
         )
         if useCustomStack then (
-            -- SHELL путь: порядок модификаторов UVWMap -> Shell -> UVW Xform
+            -- Shell modifier: порядок модификаторов UVWMap -> Shell -> UVW Xform
             local stackOk = true
             try (
                 local planeSize = REMS_mmToSys 1000
@@ -1761,7 +1857,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
             )
             if not stackOk do format "REMS: '%': Shell НЕ ДОБАВЛЕН\n" ssName
         ) else (
-            -- EXTRUDE путь (дефолт или + MaterialID для одинаковых ID)
+            -- Extrude modifier: (дефолт или + MaterialID для одинаковых ID)
             try (
                 local ex = Extrude()
                 ex.amount = extrudeAmount
@@ -1774,7 +1870,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
             )
             if useMatIDOverride and exAdded then (
                 try (
-                    local mi = MaterialID()
+                    local mi = materialModifier()
                     mi.materialID = miTop
                     addModifier ss mi
                 ) catch (
@@ -1783,8 +1879,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
             )
         )
         if not exAdded do format "REMS: '%': Extrude НЕ ДОБАВЛЕН\n" ssName
-        try (ss.renderable = false) catch ()
-        try (ss.material = obj.material) catch ()
+        try (ss.material = obj.material) catch (format "REMS: %\n" (REMS_excInfo "REMS_processObject" "назначение материала"))
         local knotsAfter = 0
         for s = 1 to numSplines ss do knotsAfter += numKnots ss s
         append created ss
@@ -1816,7 +1911,7 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
         )
     )
     -- временный полигон-конвертер удаляется в любом случае (в т.ч. при пропуске)
-    try (delete p) catch ()
+    try (delete p) catch (format "REMS: %\n" (REMS_excInfo "REMS_processObject" "main"))
     created
 )
 
@@ -1831,7 +1926,10 @@ fn run_rebuildExtrudedMeshToSpline = (
     local picked = #()
     for o in selection do (
         append picked o
-        try (if o.isGroupHead do join picked o.children) catch ()
+        -- isGroupHead/isGroupMember - ГЛОБАЛЬНЫЕ функции (безопасны для любой
+        -- геометрии); свойство o.isGroupHead на обычном объекте бросает
+        -- "Unknown property" для узлов вне групп
+        try (if (isGroupMember o) and (isGroupHead o) do join picked o.children) catch (format "REMS: %\n" (REMS_excInfo "main" "разворачивание группы"))
     )
     local geoObjs = #()
     for o in picked where (superClassOf o) == GeometryClass do
@@ -1862,7 +1960,7 @@ fn run_rebuildExtrudedMeshToSpline = (
 					newOnes = REMS_processObject o useMaxSide:useMaxSide doSimplify:useSimple wall:useWallHint
 				/*) catch (
                     local nm = "<удалён>"
-                    try (nm = o.name) catch ()
+                    try (nm = o.name) catch (format "REMS: %\n" (REMS_excInfo "main" "чтение имени узла"))
                     format "REMS: ошибка обработки '%': %\n" nm (getCurrentException())
                 )*/
                 join created newOnes
