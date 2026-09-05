@@ -7,7 +7,9 @@
 UI:
   Rollout "Modifiers" — список: модификаторы сверху (порядок стека, верхний первым),
       baseobject ПОСЛЕДНИМ внизу; переключатель On (вкл/выкл модификатора),
-      кнопка Delete.
+      кнопка Delete. Состояние enabled показывается В НАЧАЛЕ строки списка:
+      "👁️" — все вкл, "👁️‍🗨️" — все выкл, "∅" — смешанное (часть объектов
+      вкл, часть выкл).
   Rollout "Properties" — динамический свиток контролов выбранного элемента
       (генерируется rolloutCreator'ом на лету, пересоздаётся при смене выбора).
   Rollout "About" — инфо (сворачивается при выборе элемента, всегда последний).
@@ -15,17 +17,32 @@ UI:
 Поведение:
   - Запуск безусловный: макрос всегда активен (без on isEnabled) и открывает окно
     при любом выделении. Состояние показывается прямо в интерфейсе:
-    "No selection." / "Select 2+ non-instance objects." / "No common modifiers...".
+    "No selection." / "Single Selection" / "No Match".
   - Различающиеся значения — контрол в неактивном (enabled:false) состоянии
     с кнопкой «Сделать общим» ("Unify" у float/boolean/color, "Make" у point3).
     Контекстное меню: Maximum / Average / Median / Minimum / Most common.
     После применения значение выравнивается, контрол активируется, кнопка скрывается.
-  - Положение и размер окна сохраняются в INI (секция "ModPropsLister" в max.ini)
-    и восстанавливаются при открытии.
+  - Базовый объект: при одинаковом классе базы у выделенных показывается пункт
+    "Base: <Класс>" со свойствами базового объекта. Если общих модификаторов нет,
+    а базовые объекты ИДЕНТИЧНЫ (инстансы обменивают один baseObject) — всё равно
+    показываем свойства базы (все контролы активны, значения у всех одинаковые).
+  - Положение окна сохраняется в INI (секция "ModPropsLister" в max.ini)
+    и восстанавливается при открытии.
   - Автовысота окна: сумма высот открытых свитков, не больше размера экрана.
   - Автообновление: при изменении выделения / добавлении / удалении модификаторов
     интерфейс пересобирается через колбэки. При снятии выделения интерфейс
     очищается (старые данные не показываются), высота окна пересчитывается.
+  - При смене выделения автоматически выделяется первый элемент списка
+    (верхний модификатор стека) — его свойства открываются сразу для редактирования.
+  - Объекты класса Dummy (заголовки групп, болванки) НИКОГДА не участвуют в анализе.
+  - Фильтр по типу (галочки Geometry / Shapes / Light / Camera / Helpers под
+    списком) работает ТОЛЬКО с внутренними массивами анализа — сценное
+    выделение не меняется. Позволяет исключить «лишние» объекты и всё равно
+    редактировать общие свойства; состояние фильтра сохраняется в INI.
+  - Выключенные модификаторы НЕ исключаются из списка: мод без поддерживаемых
+    свойств (например, выключенный) всё равно остаётся в списке (раньше мог
+    молча пропадать). При СМЕШАННОМ состоянии (часть вкл, часть выкл) клик по
+    глазу не переключает вслепую, а открывает popupmenu Enable / Disable.
 
 Поддерживаемые типы свойств: float, integer, boolean, color, point3.
 
@@ -45,6 +62,10 @@ UI:
    #(key, modIdx, propNameStr, prefix), поиск через ORM_lookupFind.
    Хеш-доступ arr["key"]=... к глобальному #() в MAXScript НЕ работает
    ("array index must be positive number") — не менять на hash.
+   ИНДЕКС 0 И ЗА ПРЕДЕЛЫ: g_orm_listItems[0] бросает "array index must be
+   positive number, got: 0", лишний индекс даёт undefined (в части версий 0 ->
+   OK). Поэтому ВСЕ чтения g_orm_selInfo / g_orm_listItems[..] guard'ятся
+   classOf == Array И idx >= 1 ДО индексации — иначе runtime error.
 
 3. codeStr БЕЗ @...@. Вложенные @ ломают парсинг ("Call needs function or
    class"). Имена/значения подставляются конкатенацией строк.
@@ -60,14 +81,27 @@ UI:
 
 6. ЖИВОЕ СОСТОЯНИЕ enabled. Кнопку On читаем с живого объекта
    (ORM_getLiveEnabled), а НЕ из кэшированного modDataList[..].enabled.
+   Смешанное состояние (часть вкл, часть выкл) определяется через
+   ORM_getEnabledStates (per-object) + ORM_isMixedEnabled: тогда клик по
+   глазу открывает popupmenu rmc_toggle (Enable / Disable), пункты которого
+   сами применяют выбор через ORM_toggleSelected. Мод без поддерживаемых
+   свойств в список ВКЛЮЧАЕТСЯ (props.count == 0 не отбрасывает) — иначе
+   выключенный мод мог молча пропасть из списка. Иконка глаза: 9 — открытый,
+   10 — закрытый, 11 — смешанный (ORM_setToggleUI подменяет images по mixedState).
+   Отдельного колбэка на смену enabled в Max нет (только pre/postModifierAdded|Deleted),
+   поэтому после toggle строки списка пересобираются явно (ORM_refreshList).
 
 7. CALLBACKS.
    Все колбэки идут через ORM_cbRefresh с флагом g_orm_refreshing (защита от
    бесконечной рекурсии). Регистрация с id:#ModPropsLister (removeScripts перед
-   добавлением — иначе дубли). При ошибке внутри колбэка стек печатается через
-   ErrorDump.ms (scripts\ErrorDump.ms, подключается fileIn "ErrorDump.ms",
-   форматтер FmtError stackLevels:N), и колбэки САМОУДАЛЯЮТСЯ
-   (ORM_unregisterCallbacks), чтобы битый колбэк не спамил ошибками вечно.
+   добавлением — иначе дубли). Обработчики: #selectionSetChanged,
+   #postModifierAdded, #postModifierDeleted (#modStackChanged НЕ существует).
+   При ошибке внутри колбэка стек печатается через ErrorDump.ms
+   (scripts\ErrorDump.ms, fileIn "ErrorDump.ms", FmtError stackLevels:N),
+   после чего колбэки ПЕРЕРЕГИСТРИРУЮТСЯ: разовый сбой не должен убивать
+   автообновление навсегда (отдельной кнопки Refresh нет).
+   #selectionSetChanged регистрируется как "ORM_cbRefresh autoSel:true" —
+   при смене выделения список авто-выделяет первый элемент (верхний стек).
 
 8. АВТОВЫСОТА ОКНА. newRolloutFloater создаётся с lockHeight:false lockWidth:true
    (иначе размер .size игнорируется). Высота = заголовки + сумма высот открытых
@@ -78,9 +112,11 @@ UI:
 9. СВОРАЧИВАНИЕ About. g_orm_rollAbout.open = false. Функции cw_closeRollout
    НЕ существует — молча проглатывалась catch'ем.
 
-10. ИНИЦИАЛИЗАЦИЯ ОКНА. Позиция/размер читаются getINISetting из секции
-    "ModPropsLister", парсятся execute() и передаются в newRolloutFloater.
-    Сохранение — setINISetting в обработчике on <rollout> close.
+10. ИНИЦИАЛИЗАЦИЯ ОКНА. Позиция читается getINISetting из секции
+    "ModPropsLister", парсится execute() и передаётся в newRolloutFloater.
+    РАЗМЕР НЕ СОХРАНЯЕТСЯ: это расчётная величина (автовысота), при создании
+    floater'а используется фиксированная стартовая высота. Сохранение —
+    setINISetting в обработчике on <rollout> close.
 
 11. ОЧИСТКА ПРИ СНЯТИИ ВЫДЕЛЕНИЯ. При <2 валидных объектов ORM_refreshUI
     вызывает ORM_clearUI() (старые данные не показываем) + ORM_updateFloaterHeight().
@@ -89,19 +125,35 @@ UI:
 12. УСТАРЕВШИЕ СВОЙСТВА. edgeChamferType / edgeChamferQuadIntersections (Edit Poly)
     отфильтрованы в ORM_collectSupportedProps, иначе 3ds Max пишет предупреждения
     в Listener.
+
+======================================================================
+ИЗВЕСТНЫЕ ОГРАНИЧЕНИЯ (невозможно исправить штатно):
+=====================================================================
+A. ДИАПАЗОНЫ СПИННЕРОВ НЕ ЧИТАЮТСЯ. Минимальные/максимальные значения
+   контролов модификатора заданы в ParamBlock2 плагина и НЕ экспозятся
+   через MAXScript. setProperty пишет значение «как есть» — ошибку не даёт,
+   но если значение вне UI-диапазона (например, отрицательные inner/outer
+   у Shell), спиннер UI просто не отображает его. getProperty вернёт
+   то же «кривое» значение, поэтому эвристика «установил-прочитал» тоже
+   не работает для плагинов, не клипающих при скриптовой записи.
 */
 
 macroScript ModPropsLister
 	category:"#PankovScripts"
 	ButtonText:"ModProps Lister"
 	tooltip:"ModProps Lister\n\nMulti-editor for parameters\nof selected non-instance objects.\n\nCompares common properties\nof the base object and modifiers.\n\nDiffering values can be\nunified via the Unify button."
-	icon:#("brush_preset_manager", 1)
+	icon:#("ModProps", 1)
 	autoUndoEnabled:false
 (
 local APP_TITLE = "ModProps Lister"
-local VERSION = "1.0.0 (2026-09-05)"
+local VERSION = "1.0.1 (2026-09-05)"
 
 local lbl_ver_caption = APP_TITLE + " " + VERSION
+
+-- Иконки (12 кадров) в usericons\ModProps_24i.bmp:
+--   1 — приложение, 2-8 — типы нодов, 9 — открытый глаз, 10 — закрытый,
+--   11 — смешанный, 12 — удаление
+local icon_path = (getDir #usericons) + "\\ModProps_16i.bmp"
 
 
 -- ======================================================================
@@ -156,13 +208,17 @@ global g_orm_propLookup     = #()
 global g_orm_selInfo        = #()
 -- Соответствие строк listbox -> #("base"|"mod", modDataIdx)
 global g_orm_listItems      = #()
+-- Фильтр по типам: #(geometry, shape, light, camera, helper)
+global g_orm_typeFilter     = #(true, true, true, true, true)
+-- Защита от рекурсии при синхронизации галочек фильтра
+global g_orm_syncFilter     = false
 -- Контекст кнопки «Сделать общим» (lookupKey), читается из rcmenu
 global g_orm_ctxKey         = ""
--- Признак того, что rollout свойств уже построен для текущего выбора (пп. 4)
+-- Признак того, что rollout свойств уже построен для текущего выбора (см. архитектура п. 4)
 global g_orm_lastSelKey     = ""
--- Зарегистрированы ли callbacks (пп. 3)
+-- Зарегистрированы ли callbacks (см. архитектура п. 3)
 global g_orm_callbacksOn    = false
--- Защита от рекурсии колбэков (пп. 3)
+-- Защита от рекурсии колбэков (см. архитектура п. 3)
 global g_orm_refreshing     = false
 
 
@@ -194,6 +250,8 @@ global ORM_getLiveEnabled
 global ORM_onListSelect
 global ORM_toggleSelected
 global ORM_setToggleUI
+global ORM_setFilterUI
+global ORM_onFilterChanged
 global ORM_onMakeCommon
 global ORM_applyCommon
 global ORM_enableAfterCommon
@@ -233,9 +291,11 @@ fn ORM_getPropType val =
 fn ORM_getTopmostPerClass obj =
 (
 	local result = #()
-	for i = 1 to obj.modifiers.count do
+	local mods = obj.modifiers
+	if mods == undefined do return result
+	for i = 1 to mods.count do
 	(
-		local m = obj.modifiers[i]
+		local m = mods[i]
 		local c = classOf m
 		local found = false
 		for item in result do
@@ -249,8 +309,10 @@ fn ORM_getTopmostPerClass obj =
 fn ORM_countLowerDuplicates obj targetClass topmostIdx =
 (
 	local cnt = 0
-	for i = (topmostIdx + 1) to obj.modifiers.count do
-		if classOf obj.modifiers[i] == targetClass do cnt += 1
+	local mods = obj.modifiers
+	if mods == undefined do return cnt
+	for i = (topmostIdx + 1) to mods.count do
+		if classOf mods[i] == targetClass do cnt += 1
 	cnt
 )
 
@@ -282,14 +344,28 @@ fn ORM_collectSupportedProps obj modOrBase =
 	props
 )
 
+-- Разрешает ли фильтр по типам объектов (галочки под списком) участие в анализе
+fn ORM_matchesFilter obj =
+(
+	local sc = superClassOf obj
+	if sc == GeometryClass then return g_orm_typeFilter[1]
+	if sc == Shape        then return g_orm_typeFilter[2]
+	if sc == Light        then return g_orm_typeFilter[3]
+	if sc == Camera       then return g_orm_typeFilter[4]
+	-- Прочие суперклассы (Helpers и спец.) — категория "Helpers"
+	g_orm_typeFilter[5]
+)
+
 fn ORM_analyzeSelection sel =
 (
 	local uniqueObjs = #()
 	for obj in sel do
 	(
 		if not (isValidNode obj) do continue
-		local sc = superClassOf obj
-		if sc != GeometryClass and sc != Shape do continue
+		-- Dummy (заголовки групп, вспомогательные болванки) не участвуют никогда
+		if classOf obj == Dummy do continue
+		-- Фильтр по типу позволяет отсечь лишнее из выделения (см. архитектура п. 2)
+		if not (ORM_matchesFilter obj) do continue
 		local isTrueInstance = false
 		for u in uniqueObjs do
 		(
@@ -300,12 +376,18 @@ fn ORM_analyzeSelection sel =
 		if not isTrueInstance do append uniqueObjs obj
 	)
 
-	if uniqueObjs.count < 2 do return false
+	if uniqueObjs.count < 1 do return undefined
+
+	local singleGroup = (uniqueObjs.count == 1)
 
 	local normalizedStacks = #()
 	for obj in uniqueObjs do
 		append normalizedStacks (ORM_getTopmostPerClass obj)
 
+	local modDataList = #()
+
+	if not singleGroup do
+	(
 	local allClasses = #()
 	for stack in normalizedStacks do
 		for item in stack do
@@ -331,7 +413,6 @@ fn ORM_analyzeSelection sel =
 		if isCommon do append commonClasses c
 	)
 
-	local modDataList = #()
 	for c in commonClasses do
 	(
 		local topmostMod = undefined
@@ -342,7 +423,8 @@ fn ORM_analyzeSelection sel =
 
 		local lowerCount = ORM_countLowerDuplicates uniqueObjs[1] c topmostIdx
 		local props = ORM_collectSupportedProps uniqueObjs[1] topmostMod
-		if props.count == 0 do continue
+		-- Мод без поддерживаемых свойств НЕ выкидываем: он должен остаться в списке
+		-- (например, выключенный мод, у которого свойства не собираются — см. архитектура п. 2)
 
 		for pi = 1 to props.count do
 		(
@@ -374,33 +456,47 @@ fn ORM_analyzeSelection sel =
 			lowerCount:lowerCount \
 			enabled:en)
 	)
+	)
 
 	local baseObjData = undefined
-	local firstBaseClass = classOf uniqueObjs[1].baseObject
-	local allSameBaseClass = true
-	for ui = 2 to uniqueObjs.count do
-		if classOf uniqueObjs[ui].baseObject != firstBaseClass \
-			do ( allSameBaseClass = false; exit )
 
-	if allSameBaseClass do
+	if singleGroup then
 	(
+		-- Идентичные базовые объекты (инстансы) или одна уникальная геометрия:
+		-- общих модификаторов нет, показываем свойства БАЗОВОГО объекта.
+		-- Значения одинаковые у всех по определению, поэтому все контролы активны.
 		local props = ORM_collectSupportedProps uniqueObjs[1] uniqueObjs[1].baseObject
 		if props.count > 0 do
+			baseObjData = ORM_BaseObjData objClass:(classOf uniqueObjs[1].baseObject) props:props
+	)
+	else
+	(
+		local firstBaseClass = classOf uniqueObjs[1].baseObject
+		local allSameBaseClass = true
+		for ui = 2 to uniqueObjs.count do
+			if classOf uniqueObjs[ui].baseObject != firstBaseClass \
+				do ( allSameBaseClass = false; exit )
+
+		if allSameBaseClass do
 		(
-			for pi = 1 to props.count do
+			local props = ORM_collectSupportedProps uniqueObjs[1] uniqueObjs[1].baseObject
+			if props.count > 0 do
 			(
-				local allSame = true
-				for ui = 2 to uniqueObjs.count do
+				for pi = 1 to props.count do
 				(
-					local otherVal = undefined
-					try ( otherVal = getProperty uniqueObjs[ui].baseObject props[pi].name ) catch ()
-					if otherVal == undefined \
-						or props[pi].value != otherVal \
-						do ( allSame = false; exit )
+					local allSame = true
+					for ui = 2 to uniqueObjs.count do
+					(
+						local otherVal = undefined
+						try ( otherVal = getProperty uniqueObjs[ui].baseObject props[pi].name ) catch ()
+						if otherVal == undefined \
+							or props[pi].value != otherVal \
+							do ( allSame = false; exit )
+					)
+					props[pi].allSame = allSame
 				)
-				props[pi].allSame = allSame
+				baseObjData = ORM_BaseObjData objClass:firstBaseClass props:props
 			)
-			baseObjData = ORM_BaseObjData objClass:firstBaseClass props:props
 		)
 	)
 
@@ -418,7 +514,7 @@ fn ORM_analyzeSelection sel =
 
 -- Находит target (baseObject или верхний модификатор нужного класса) на объекте
 --   modIdx: 0 = базовый объект; 1..N = индекс в g_orm_modClasses (класс модификатора)
---   Класс-ориентированный поиск устойчив к изменению порядка модификаторов (пп. 3)
+--   Класс-ориентированный поиск устойчив к изменению порядка модификаторов (см. архитектура п. 3)
 fn ORM_resolveTarget obj modIdx =
 (
 	if modIdx == 0 then return obj.baseObject
@@ -430,7 +526,7 @@ fn ORM_resolveTarget obj modIdx =
 	undefined
 )
 
--- Все запомненные объекты ещё существуют? (пп. 3)
+-- Все запомненные объекты ещё существуют? (см. архитектура п. 3)
 fn ORM_validTargets =
 (
 	for obj in g_orm_uniqueObjs do
@@ -438,7 +534,7 @@ fn ORM_validTargets =
 	true
 )
 
--- Текущее состояние enable верхнего модификатора данного модификатора на первом объекте (живое, пп. 3)
+-- Текущее состояние enable верхнего модификатора данного модификатора на первом объекте (живое, см. архитектура п. 3)
 fn ORM_getLiveEnabled modIdx =
 (
 	local obj = g_orm_uniqueObjs[1]
@@ -446,6 +542,34 @@ fn ORM_getLiveEnabled modIdx =
 	local t = ORM_resolveTarget obj modIdx
 	if t == undefined or not (isProperty t "enabled") do return false
 	try ( t.enabled ) catch ( false )
+)
+
+-- Состояния enabled класса модификатора на ВСЕХ объектах (для mixed-детекции)
+fn ORM_getEnabledStates modIdx =
+(
+	local states = #()
+	if g_orm_uniqueObjs == undefined do return states
+	for obj in g_orm_uniqueObjs do
+	(
+		if not (isValidNode obj) do continue
+		local t = ORM_resolveTarget obj modIdx
+		if t == undefined or not (isProperty t "enabled") do continue
+		append states (try ( t.enabled ) catch ( false ))
+	)
+	states
+)
+
+-- Смешанное ли состояние enabled (часть объектов вкл, часть выкл)
+fn ORM_isMixedEnabled modIdx =
+(
+	if classOf modIdx != Integer or modIdx < 1 do return false
+	if g_orm_result == undefined do return false
+	if modIdx > g_orm_result.modDataList.count do return false
+	local sts = ORM_getEnabledStates modIdx
+	if sts.count < 2 do return false
+	local f = sts[1]
+	for e in sts do if e != f do return true
+	false
 )
 
 fn ORM_applyProperty modIdx propNameStr value =
@@ -459,6 +583,63 @@ fn ORM_applyProperty modIdx propNameStr value =
 		if target != undefined do
 			try ( setProperty target propNameStr value ) catch ()
 	)
+)
+
+-- Построение строк списка: модификаторы сверху (порядок стека), baseobject ПОСЛЕДНИМ внизу.
+-- В начале строки — символ состояния enabled (👁️ / 👁️‍🗨️ / ∅; см. архитектура п. 1/2).
+-- Единая точка: используется и при полном refresh (ORM_refreshUI), и при открытии окна (ORM_showUI).
+fn ORM_buildListItems result =
+(
+	local listItems = #()
+	g_orm_listItems = #()
+	if result == undefined do return listItems
+	g_orm_uniqueObjs = result.uniqueObjs
+	for mi2 = 1 to result.modDataList.count do
+	(
+		local md = result.modDataList[mi2]
+		local eyeMark = ""
+		local sts = ORM_getEnabledStates mi2
+		local refEn = undefined
+		local isMixed = false
+		local allOff = true
+		for e in sts do
+		(
+			if refEn == undefined do refEn = e
+			if e != refEn do isMixed = true
+			if e do allOff = false
+		)
+		if sts.count > 0 do
+			eyeMark = (if isMixed then "∅" else (if allOff then "👁️‍🗨️" else "👁️")) + " "
+		local label = eyeMark + md.displayName
+		if md.lowerCount > 0 do
+			label += "  (x" + (md.lowerCount + 1) as string + ")"
+		append listItems label
+		append g_orm_listItems #("mod", mi2)
+	)
+	if result.baseObjData != undefined and result.baseObjData.props.count > 0 do
+	(
+		append listItems ("Base: " + (result.baseObjData.objClass as string))
+		append g_orm_listItems #("base", 0)
+	)
+	if listItems.count == 0 do
+	(
+		listItems = #("No Match")
+		g_orm_listItems = #()
+	)
+	listItems
+)
+
+-- Пересборка ТОЛЬКО строк списка (метки enabled в начале), выделение сохраняется.
+-- Отдельного колбэка на смену enabled в Max НЕТ (только pre/postModifierAdded|Deleted),
+-- поэтому после ORM_toggleModifier обновляемся явно.
+fn ORM_refreshList =
+(
+	if g_orm_rollMods == undefined or g_orm_result == undefined do return false
+	local selIdx = g_orm_rollMods.lst_mods.selection
+	g_orm_rollMods.lst_mods.items = ORM_buildListItems g_orm_result
+	if selIdx >= 1 and selIdx <= g_orm_rollMods.lst_mods.items.count do
+		g_orm_rollMods.lst_mods.selection = selIdx
+	true
 )
 
 fn ORM_deleteModifier modClass =
@@ -744,6 +925,19 @@ rcmenu rmc_common (
 	on cc_mode picked do ORM_applyCommon g_orm_ctxKey #mode
 )
 
+-- Контекстное меню кнопки On/Off при СМЕШАННОМ состоянии модификатора
+-- (часть объектов вкл, часть выкл): клик по глазу не переключает вслепую,
+-- а спрашивает, что применить. Вызывается из обработчика кнопки в rollout_mods.
+global rmc_toggle
+
+rcmenu rmc_toggle (
+	menuItem tm_enable "Enable"
+	menuItem tm_disable "Disable"
+
+	on tm_enable  picked do ORM_toggleSelected true
+	on tm_disable picked do ORM_toggleSelected false
+)
+
 
 -- ======================================================================
 -- UI: ВЫБОР ЭЛЕМЕНТА СПИСКА / REBUILD
@@ -752,29 +946,81 @@ rcmenu rmc_common (
 -- Синхронизация кнопки On: состояние (checked) + иконка (caption).
 -- Вызывается везде, где меняется checked, чтобы интерфейс не расходился
 -- с реальным состоянием модификатора.
-fn ORM_setToggleUI state =
+fn ORM_setToggleUI state mixedState:false =
 (
 	if g_orm_rollMods == undefined do return false
-	g_orm_rollMods.btn_toggle.checked = state
-	g_orm_rollMods.btn_toggle.caption = if state then "👁️" else "👁️‍🗨️"
+	local bt = g_orm_rollMods.btn_toggle
+	-- Иконка глаза: 9 (открытый, вкл) / 10 (закрытый, выкл) / 11 (смешанный).
+	-- При mixedState меняем images всех состояний на кадр смешанного глаза.
+	try (
+		bt.images = if mixedState then \
+			#(icon_path, undefined, 12, 11, 11, 11, 11, true) \
+		else \
+			#(icon_path, undefined, 12, 10, 9, 9, 9, true)
+	) catch ()
+	bt.checked = state
+	bt.caption = if state then "👁️" else "👁️‍🗨️"
+	true
+)
+
+-- Фильтр по типам (галочки под списком). Синхронизация UI <-> глобальное состояние.
+fn ORM_setFilterUI =
+(
+	if g_orm_rollMods == undefined do return false
+	if classOf g_orm_typeFilter != Array or g_orm_typeFilter.count != 5 do
+		g_orm_typeFilter = #(true, true, true, true, true)
+	g_orm_syncFilter = true
+	try
+	(
+		g_orm_rollMods.chk_geom.checked   = g_orm_typeFilter[1]
+		g_orm_rollMods.chk_shape.checked  = g_orm_typeFilter[2]
+		g_orm_rollMods.chk_light.checked  = g_orm_typeFilter[3]
+		g_orm_rollMods.chk_camera.checked = g_orm_typeFilter[4]
+		g_orm_rollMods.chk_helper.checked = g_orm_typeFilter[5]
+	)
+	catch ()
+	g_orm_syncFilter = false
+	true
+)
+
+-- При изменении фильтра пересчитываем анализ текущего выделения
+-- (работаем только с внутренними массивами, сценное выделение НЕ трогаем)
+fn ORM_onFilterChanged =
+(
+	if g_orm_syncFilter do return false
+	g_orm_typeFilter = #(
+		g_orm_rollMods.chk_geom.checked,
+		g_orm_rollMods.chk_shape.checked,
+		g_orm_rollMods.chk_light.checked,
+		g_orm_rollMods.chk_camera.checked,
+		g_orm_rollMods.chk_helper.checked
+	)
+	ORM_saveFloaterState()
+	ORM_refreshUI autoSel:true
 	true
 )
 
 fn ORM_onListSelect idx =
 (
+	-- guard ДО индексации: listbox может прислать idx=0 (сброс при смене items),
+	-- а g_orm_listItems[0] бросает "array index must be positive number" (см. архитектура п. 2)
+	if classOf idx != Integer or idx < 1 do return false
 	local info = g_orm_listItems[idx]
-	if info == undefined do return false
+	if classOf info != Array do return false
 	g_orm_selInfo = info
 	ORM_rebuildPropsRollout()
-	-- Кнопка On активна ТОЛЬКО для модификатора, для baseobject — неактивна (пп. 2)
+	-- Кнопки On и Delete активны ТОЛЬКО для модификатора,
+	-- для baseobject — неактивны (см. архитектура п. 2): базу нельзя ни выключить, ни удалить
 	if info[1] == "mod" and info[2] <= g_orm_result.modDataList.count then
 	(
 		g_orm_rollMods.btn_toggle.enabled = true
-		ORM_setToggleUI (ORM_getLiveEnabled info[2])
+		g_orm_rollMods.btn_delete.enabled = true
+		ORM_setToggleUI (ORM_getLiveEnabled info[2]) mixedState:(ORM_isMixedEnabled info[2])
 	)
 	else
 	(
 		g_orm_rollMods.btn_toggle.enabled = false
+		g_orm_rollMods.btn_delete.enabled = false
 		ORM_setToggleUI false
 	)
 	true
@@ -783,33 +1029,34 @@ fn ORM_onListSelect idx =
 -- Вкл/выкл выбранного модификатора (кнопка On/Off)
 fn ORM_toggleSelected st =
 (
-	if g_orm_selInfo.count == 0 do return false
+	if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do return false
 	if g_orm_selInfo[1] != "mod" do return false
 	if not (ORM_validTargets()) do ( ORM_refreshUI(); return false )
 	local modDataIdx = g_orm_selInfo[2]
 	if modDataIdx < 1 or modDataIdx > g_orm_result.modDataList.count do return false
 	local cls = g_orm_result.modDataList[modDataIdx].modClass
 	ORM_toggleModifier cls st
-	-- Синхронизируем toggle с реальным состоянием
-	ORM_setToggleUI (ORM_getLiveEnabled modDataIdx)
+	-- Колбэка на смену enabled в Max нет — пересобираем метки списка явно
+	ORM_refreshList()
 	true
 )
 
--- Очистка интерфейса: старые данные не показываем, когда выделение снято (пп. 8)
-fn ORM_clearUI =
+-- Очистка интерфейса: старые данные не показываем, когда выделение снято (см. архитектура п. 8)
+fn ORM_clearUI msg:"No selection." =
 (
 	local changed = false
 	if g_orm_rollMods != undefined do
 	(
 		local oldItems = g_orm_rollMods.lst_mods.items
-		if oldItems.count != 1 or (oldItems.count == 1 and oldItems[1] != "No selection.") do
+		if oldItems.count != 1 or (oldItems.count == 1 and oldItems[1] != msg) do
 		(
-			g_orm_rollMods.lst_mods.items = #("No selection.")
+			g_orm_rollMods.lst_mods.items = #(msg)
 			changed = true
 		)
 		g_orm_rollMods.lst_mods.selection = 0
 		ORM_setToggleUI false
 		g_orm_rollMods.btn_toggle.enabled = false
+		g_orm_rollMods.btn_delete.enabled = false
 	)
 	g_orm_listItems = #()
 	g_orm_selInfo = #()
@@ -826,11 +1073,11 @@ fn ORM_clearUI =
 	changed
 )
 
--- Обновление интерфейса на месте (без перезапуска макроса, пп. 2)
--- Если выделение снято/недостаточно — чистим интерфейс (старые данные не показываем, пп. 8)
-fn ORM_refreshUI quiet:false =
+-- Обновление интерфейса на месте (без перезапуска макроса, см. архитектура п. 2)
+-- Если выделение снято/недостаточно — чистим интерфейс (старые данные не показываем, см. архитектура п. 8)
+fn ORM_refreshUI quiet:false autoSel:false =
 (
-	-- Безопасность для callbacks: если floater уже закрыт — не трогаем UI (пп. 3)
+	-- Безопасность для callbacks: если floater уже закрыт — не трогаем UI (см. архитектура п. 3)
 	if g_orm_floater == undefined or g_orm_rollMods == undefined do return false
 
 	-- Запоминаем выбранный элемент, чтобы сохранить контекст при автозамёте
@@ -840,17 +1087,18 @@ fn ORM_refreshUI quiet:false =
 	local validCount = 0
 	for o in sel do if isValidNode o do validCount += 1
 
-	-- Выделение снято или недостаточно объектов: очищаем интерфейс
+	-- Выделение снято или один объект: очищаем интерфейс с соответствующим сообщением
 	if validCount < 2 do
 	(
-		if ORM_clearUI() do ORM_updateFloaterHeight()
+		local msg = if validCount < 1 then "No selection." else "Single Selection"
+		if ORM_clearUI msg:msg do ORM_updateFloaterHeight()
 		return true
 	)
 
 	local result = ORM_analyzeSelection sel
 	if result == undefined do
 	(
-		if ORM_clearUI() do ORM_updateFloaterHeight()
+		if ORM_clearUI msg:"No Match" do ORM_updateFloaterHeight()
 		return true
 	)
 
@@ -859,35 +1107,15 @@ fn ORM_refreshUI quiet:false =
 	g_orm_modClasses = for m in result.modDataList collect m.modClass
 	g_orm_selInfo = #()
 
-	-- Пересобираем строки списка (модификаторы сверху, baseobject последним внизу)
-	local listItems = #()
-	g_orm_listItems = #()
-
-	for mi2 = 1 to result.modDataList.count do
-	(
-		local md = result.modDataList[mi2]
-		local label = md.displayName
-		if md.lowerCount > 0 do
-			label += "  (x" + (md.lowerCount + 1) as string + ")"
-		append listItems label
-		append g_orm_listItems #("mod", mi2)
-	)
-	if result.baseObjData != undefined and result.baseObjData.props.count > 0 do
-	(
-		append listItems ("Base: " + (result.baseObjData.objClass as string))
-		append g_orm_listItems #("base", 0)
-	)
-	if listItems.count == 0 do
-	(
-		listItems = #("No common modifiers or base properties found.")
-		g_orm_listItems = #()
-	)
+	-- Строки списка (символ enabled в начале; см. архитектура п. 1/2)
+	local listItems = ORM_buildListItems result
 
 	-- Обновляем listbox без пересоздания floater
 	g_orm_rollMods.lst_mods.items = listItems
 	g_orm_rollMods.lst_mods.selection = 0
 	ORM_setToggleUI false
 	g_orm_rollMods.btn_toggle.enabled = false
+	g_orm_rollMods.btn_delete.enabled = false
 
 	-- Убираем rollout свойств из floaterа, если он был (removeRollout, а не только destroyDialog)
 	if g_orm_rlProps != undefined and g_orm_floater != undefined do
@@ -898,8 +1126,17 @@ fn ORM_refreshUI quiet:false =
 	)
 	g_orm_lastSelKey = ""
 
-	-- Восстанавливаем прежний выбор, если он ещё валиден в новых данных
-	if wasSel.count > 0 do
+	-- При изменении выделения сразу выделяем первый элемент списка:
+	-- это верхний модификатор стека, его свойства открываются сразу (см. архитектура п. 2)
+	if autoSel then
+	(
+		if g_orm_listItems.count > 0 do
+		(
+			g_orm_rollMods.lst_mods.selection = 1
+			ORM_onListSelect 1
+		)
+	)
+	else if classOf wasSel == Array and wasSel.count > 0 do
 	(
 		for i = 1 to g_orm_listItems.count do
 			if g_orm_listItems[i][1] == wasSel[1] and g_orm_listItems[i][2] == wasSel[2] do
@@ -922,40 +1159,47 @@ fn ORM_rebuildNow =
 	ORM_refreshUI()
 )
 
--- Обёртка для колбэков с защитой от рекурсии (пп. 3)
+-- Обёртка для колбэков с защитой от рекурсии (см. архитектура п. 3)
 -- Колбэки срабатывают очень часто; повторный вход (например, потому что сам
 -- refresh меняет выбор/стек, что вновь вызывает колбэк) обрываем на месте.
--- При ошибке: печатаем стек через ErrorDump.ms и УДАЛЯЕМ себя из списка
--- колбэков, чтобы битый колбэк не висел и не спамил ошибками бесконечно.
-fn ORM_cbRefresh =
+-- При ошибке печатаем стек через ErrorDump.ms и ПЕРЕРЕГИСТРИРУЕМ колбэки,
+-- чтобы разовый сбой не убивал автообновление навсегда (кнопки Refresh нет).
+fn ORM_cbRefresh autoSel:false =
 (
 	if g_orm_refreshing do return false
 	g_orm_refreshing = true
 	try
 	(
-		ORM_refreshUI quiet:true
+		ORM_refreshUI quiet:true autoSel:autoSel
 	)
 	catch
 	(
 		try ( fileIn "ErrorDump.ms" ) catch ()
 		if classOf FmtError == MAXScriptFunction then
-			print ("ModPropsLister: callback error (callbacks unregistered):\n" + (FmtError stackLevels:4))
+			print ("ModPropsLister: callback error:\n" + (FmtError stackLevels:4))
 		else
-			print ("ModPropsLister: callback error (callbacks unregistered): " + (getCurrentException() as string))
-		ORM_unregisterCallbacks()
+			print ("ModPropsLister: callback error: " + (getCurrentException() as string))
+		try ( callbacks.removeScripts id:#ModPropsLister ) catch ()
+		try
+		(
+			callbacks.addScript #selectionSetChanged       "ORM_cbRefresh autoSel:true" id:#ModPropsLister
+			callbacks.addScript #postModifierAdded         "ORM_cbRefresh()" id:#ModPropsLister
+			callbacks.addScript #postModifierDeleted       "ORM_cbRefresh()" id:#ModPropsLister
+		)
+		catch ()
 	)
 	g_orm_refreshing = false
 	true
 )
 
--- Автозамёты: пересборка при изменении выделения или стека модификаторов (пп. 3)
+-- Автозамёты: пересборка при изменении выделения или стека модификаторов (см. архитектура п. 3)
 -- Функции вызываются global (доступны из контекста callback). id гарантирует отсутствие дублей.
 fn ORM_registerCallbacks =
 (
 	try ( callbacks.removeScripts id:#ModPropsLister ) catch ()
-	callbacks.addScript #selectionSetChanged "ORM_cbRefresh()" id:#ModPropsLister
-	callbacks.addScript #postModifierAdded      "ORM_cbRefresh()" id:#ModPropsLister
-	callbacks.addScript #postModifierDeleted    "ORM_cbRefresh()" id:#ModPropsLister
+	callbacks.addScript #selectionSetChanged       "ORM_cbRefresh autoSel:true" id:#ModPropsLister
+	callbacks.addScript #postModifierAdded         "ORM_cbRefresh()" id:#ModPropsLister
+	callbacks.addScript #postModifierDeleted       "ORM_cbRefresh()" id:#ModPropsLister
 	g_orm_callbacksOn = true
 )
 
@@ -997,7 +1241,7 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 	if propInfo.ptype == #float or propInfo.ptype == #integer then
 	(
 		local initVal = if propInfo.value != undefined then propInfo.value else 0.0
-		-- диапазон: зависит от величины значения (пп. 6)
+		-- диапазон: зависит от величины значения (см. архитектура п. 6)
 		local mag = abs (initVal as float)
 		if mag < 100 do mag = 100
 		local rangeMin = -mag * 50
@@ -1023,8 +1267,10 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 	(
 		local initVal = if propInfo.value != undefined then propInfo.value else false
 		local acrossStr = if differing then " across:2" else ""
+		-- иницилизация checkbox — декларационный ключ checked: (state: игнорируется,
+		-- из-за этого галочка не ставилась даже при true)
 		rc.addControl #checkbox ctrlName pNameStr paramStr:(
-			"state:" + initVal as string + " align:#left" + disStr + acrossStr
+			"checked:" + initVal as string + " align:#left" + disStr + acrossStr
 		)
 		height += 22
 		if differing do
@@ -1085,7 +1331,10 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 -- Создаёт/пересоздаёт динамический rollout со свойствами выбранного элемента
 fn ORM_rebuildPropsRollout =
 (
-	-- Только пересоздавать, если выбранная запись реально поменялась (пп. 4)
+	-- guard по типу: g_orm_selInfo может оказаться НЕ массивом (OK), см. архитектура п. 2
+	if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do return false
+
+	-- Только пересоздавать, если выбранная запись реально поменялась (см. архитектура п. 4)
 	local curKey = (g_orm_selInfo[1] as string) + "_" + (g_orm_selInfo[2] as string)
 	if curKey == g_orm_lastSelKey and g_orm_rlProps != undefined do
 		return true
@@ -1145,7 +1394,7 @@ fn ORM_rebuildPropsRollout =
 
 	g_orm_rlProps = rc.end()
 
-	-- Переставляем свиток так, чтобы About оставался ПОСЛЕДНИМ (пп. 4)
+	-- Переставляем свиток так, чтобы About оставался ПОСЛЕДНИМ (см. архитектура п. 4)
 	local hasAbout = (findItem g_orm_floater.rollouts g_orm_rollAbout) != 0
 	if hasAbout do removeRollout g_orm_rollAbout g_orm_floater
 
@@ -1153,13 +1402,13 @@ fn ORM_rebuildPropsRollout =
 
 	if hasAbout do addRollout g_orm_rollAbout g_orm_floater
 
-	-- Сворачиваем About при выборе элемента (пп. 2)
+	-- Сворачиваем About при выборе элемента (см. архитектура п. 2)
 	try ( g_orm_rollAbout.open = false ) catch ()
 
 	-- Автовысота под новый набор свитков
 	ORM_updateFloaterHeight()
 
-	-- Запоминаем, для какого выбора построен rollout, чтобы не дублировать (пп. 4)
+	-- Запоминаем, для какого выбора построен rollout, чтобы не дублировать (см. архитектура п. 4)
 	g_orm_lastSelKey = (g_orm_selInfo[1] as string) + "_" + (g_orm_selInfo[2] as string)
 
 	true
@@ -1169,25 +1418,42 @@ fn ORM_rebuildPropsRollout =
 -- ======================================================================
 -- UI: ROLLOUT "MODIFIERS" (статический)
 -- ======================================================================
-
 rollout rollout_mods "Modifiers"
 (
 	listbox lst_mods "" height:8 width:180 align:#left --across:2
-	
-	checkbutton btn_toggle "👁‍🗨️" align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-8*15]
-	button btn_delete "" width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,60]
+
+	checkbutton btn_toggle "️" images:#(icon_path, undefined, 12, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-8*15]
+	button btn_delete "" images:#(icon_path, undefined, 12, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,60]
+
+	label lbl_filter "Inclade:" align:#left offset:[-5,4] across:7
+	checkbutton chk_geom    "" images:#(icon_path, undefined, 12, 2, 2, 2, 2,true) tooltip:"Geometry"
+	checkbutton chk_shape   "" images:#(icon_path, undefined, 12, 3, 3, 3, 3,true) tooltip:"Shapes"
+	checkbutton chk_light   "" images:#(icon_path, undefined, 12, 4, 4, 4, 4,true) tooltip:"Light"
+	checkbutton chk_camera  "" images:#(icon_path, undefined, 12, 5, 5, 5, 5,true) tooltip:"Camera"
+	checkbutton chk_helper  "" images:#(icon_path, undefined, 12, 6, 6, 6, 6,true) tooltip:"Helpers"
 
 	on lst_mods selected idx do
 		ORM_onListSelect idx
 
-	on btn_toggle changed st do (
-		ORM_toggleSelected st
-		btn_toggle.caption = if st then "👁️" else "👁‍🗨️"
+	on btn_toggle changed st do
+	(
+		-- Смешанное состояние (часть модов вкл, часть выкл):
+		-- спрашиваем пользователя через popupmenu, а не переключаем вслепую (см. архитектура п. 2)
+		local modIdx = 0
+		if classOf g_orm_selInfo == Array and g_orm_selInfo.count > 0 \
+			and g_orm_selInfo[1] == "mod" do modIdx = g_orm_selInfo[2]
+		if ORM_isMixedEnabled modIdx then
+		(
+			if (popUpMenu rmc_toggle) == undefined do
+				ORM_setToggleUI (ORM_getLiveEnabled modIdx) mixedState:(ORM_isMixedEnabled modIdx)
+		)
+		else
+			ORM_toggleSelected st
 	)
 
 	on btn_delete pressed do
 	(
-		if g_orm_selInfo.count == 0 do return false
+		if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do return false
 		if g_orm_selInfo[1] != "mod" do
 		(
 			messageBox "Base object cannot be deleted." title:APP_TITLE
@@ -1197,6 +1463,12 @@ rollout rollout_mods "Modifiers"
 		if modDataIdx < 1 or modDataIdx > g_orm_modClasses.count do return false
 		if ORM_onDeleteMod modDataIdx do ORM_rebuildNow()
 	)
+
+	on chk_geom    changed st do ORM_onFilterChanged()
+	on chk_shape   changed st do ORM_onFilterChanged()
+	on chk_light   changed st do ORM_onFilterChanged()
+	on chk_camera  changed st do ORM_onFilterChanged()
+	on chk_helper  changed st do ORM_onFilterChanged()
 
 	-- Автовысота при сворачивании/разворачивании свитка; сохранение позиции при закрытии
 	on rollout_mods rolledUp state do ORM_updateFloaterHeight()
@@ -1247,7 +1519,7 @@ fn ORM_saveFloaterState =
 	if g_orm_floater == undefined do return false
 	local iniPath = getmaxinifile()
 	setINISetting iniPath "ModPropsLister" "Position" (g_orm_floater.pos as string)
-	setINISetting iniPath "ModPropsLister" "WindowsSize" (g_orm_floater.size as string)
+	setINISetting iniPath "ModPropsLister" "TypeFilter" (g_orm_typeFilter as string)
 	true
 )
 
@@ -1255,46 +1527,19 @@ fn ORM_showUI result =
 (
 	g_orm_selInfo = #()
 
-	-- Коллекция строк списка: модификаторы сверху (порядок стека), baseobject ПОСЛЕДНИМ внизу (пп. 1)
-	local listItems = #()
-	g_orm_listItems = #()
-
-	if result != undefined do
-	(
-		for mi2 = 1 to result.modDataList.count do
-		(
-			local md = result.modDataList[mi2]
-			local label = md.displayName
-			if md.lowerCount > 0 do
-				label += "  (x" + (md.lowerCount + 1) as string + ")"
-			append listItems label
-			append g_orm_listItems #("mod", mi2)
-		)
-
-		if result.baseObjData != undefined and result.baseObjData.props.count > 0 do
-		(
-			append listItems ("Base: " + (result.baseObjData.objClass as string))
-			append g_orm_listItems #("base", 0)
-		)
-
-		if listItems.count == 0 do
-		(
-			listItems = #("No common modifiers or base properties found.")
-			g_orm_listItems = #()
-		)
-	)
+	-- Строки списка (символ enabled в начале; см. архитектура п. 1/2)
+	local listItems = ORM_buildListItems result
 
 	local flW = 255
 	local iniPath = getmaxinifile()
 	local posStr  = getINISetting iniPath "ModPropsLister" "Position"
-	local sizeStr = getINISetting iniPath "ModPropsLister" "WindowsSize"
-	-- Восстановление положения/размера из INI; lockHeight:false — разрешаем автовысоту (пп. 7)
-	if posStr != "" and sizeStr != "" then
+	-- Восстановление только ПОЛОЖЕНИЯ из INI; размер — расчётный (автовысота),
+	-- в конфиге не хранится. lockHeight:false — разрешаем автовысоту (см. архитектура п. 7)
+	if posStr != "" then
 	(
 		local p = execute posStr
-		local s = execute sizeStr
 		try
-			g_orm_floater = newRolloutFloater APP_TITLE s[1] s[2] p[1] p[2] lockHeight:false lockWidth:true
+			g_orm_floater = newRolloutFloater APP_TITLE flW 420 p[1] p[2] lockHeight:false lockWidth:true
 		catch
 			g_orm_floater = newRolloutFloater APP_TITLE flW 420 lockHeight:false lockWidth:true
 	)
@@ -1307,25 +1552,37 @@ fn ORM_showUI result =
 
 	addRollout rollout_mods g_orm_floater
 
+	-- Галочки фильтра по типам из глобального состояния (прочитанного из INI)
+	ORM_setFilterUI()
+
 	-- Запуск без валидного анализа: показываем текущее состояние, а не блокируем
 	if result == undefined do
 	(
-		local validCount = 0
-		for o in (selection as array) do if isValidNode o do validCount += 1
-		if validCount < 2 then
+		local vc = 0
+		for o in (selection as array) do if isValidNode o do vc += 1
+		if vc == 1 then
+			listItems = #("Single Selection")
+		else if vc < 1 then
 			listItems = #("No selection.")
 		else
-			listItems = #("Select 2+ non-instance objects.")
+			listItems = #("No Match")
 	)
 
 	rollout_mods.lst_mods.items = listItems
-	rollout_mods.lst_mods.selection = 0
 	ORM_setToggleUI false
 	rollout_mods.btn_toggle.enabled = false
+	rollout_mods.btn_delete.enabled = false
+
+	-- При открытии сразу выделяем первый элемент списка (верхний модификатор стека)
+	if listItems.count > 0 do
+	(
+		rollout_mods.lst_mods.selection = 1
+		ORM_onListSelect 1
+	)
 
 	addRollout rollout_about g_orm_floater
 
-	-- Автозамёты: обновление при смене выделения / стека (пп. 3)
+	-- Автозамёты: обновление при смене выделения / стека (см. архитектура п. 3)
 	ORM_registerCallbacks()
 
 	ORM_updateFloaterHeight()
@@ -1341,6 +1598,19 @@ fn ORM_run =
 	local sel = selection as array
 	local validCount = 0
 	for o in sel do if isValidNode o do validCount += 1
+
+	-- Восстанавливаем фильтр по типам из INI (секция "ModPropsLister")
+	local iniPath = getmaxinifile()
+	local fstr = getINISetting iniPath "ModPropsLister" "TypeFilter"
+	if fstr != "" do
+	(
+		try
+		(
+			local f = execute fstr
+			if classOf f == Array and f.count == 5 do g_orm_typeFilter = f
+		)
+		catch ()
+	)
 
 	local result = undefined
 	if validCount >= 2 do
