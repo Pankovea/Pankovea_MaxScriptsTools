@@ -1,4 +1,4 @@
-/* #PankovScripts - ModPropsLister
+﻿/* #PankovScripts - ModPropsLister
 
 Динамический мульти-редактор параметров для выделенных НЕ-ИНСТАНС объектов.
 Сравнивает и редактирует общие свойства базового объекта и общих модификаторов
@@ -208,6 +208,13 @@ global g_orm_propLookup     = #()
 global g_orm_selInfo        = #()
 -- Соответствие строк listbox -> #("base"|"mod", modDataIdx)
 global g_orm_listItems      = #()
+-- dotNet списка: иконки и флаги инстанса по индексам строк (см. ORM_buildListItems/ORM_drawListItem)
+global g_orm_listIcons      = #()
+global g_orm_listFlags      = #()
+-- Кадры ModProps_24i.bmp для owner-draw (загружаются в ORM_initModList)
+global g_orm_iconFrames     = #()
+-- Размер иконки/высоты строки списка (px) — простая переменная в коде
+global g_orm_iconSize        = 16
 -- Фильтр по типам: #(geometry, shape, light, camera, helper)
 global g_orm_typeFilter     = #(true, true, true, true, true)
 -- Защита от рекурсии при синхронизации галочек фильтра
@@ -216,8 +223,6 @@ global g_orm_syncFilter     = false
 global g_orm_ctxKey         = ""
 -- Признак того, что rollout свойств уже построен для текущего выбора (см. архитектура п. 4)
 global g_orm_lastSelKey     = ""
--- Зарегистрированы ли callbacks (см. архитектура п. 3)
-global g_orm_callbacksOn    = false
 -- Защита от рекурсии колбэков (см. архитектура п. 3)
 global g_orm_refreshing     = false
 
@@ -268,6 +273,15 @@ global ORM_updateFloaterHeight
 global ORM_saveFloaterState
 global ORM_showUI
 global ORM_closeDialog
+-- dotNet owner-draw списока (определены ниже; предобъявление для старого скоупа)
+global ORM_enableDoubleBuffered
+global ORM_loadIconFrames
+global ORM_initModList
+global ORM_listSetItems
+global ORM_listSelectChanged
+global ORM_drawListItem
+global ORM_refreshList
+global g_orm_debug
 
 
 -- ======================================================================
@@ -592,12 +606,15 @@ fn ORM_buildListItems result =
 (
 	local listItems = #()
 	g_orm_listItems = #()
+	g_orm_listIcons = #()
+	g_orm_listFlags = #()
 	if result == undefined do return listItems
 	g_orm_uniqueObjs = result.uniqueObjs
 	for mi2 = 1 to result.modDataList.count do
 	(
 		local md = result.modDataList[mi2]
-		local eyeMark = ""
+		-- Иконка глаза: 9 — открытый (все вкл), 10 — закрытый (все выкл), 11 — смешанный
+		local eyeIdx = 9
 		local sts = ORM_getEnabledStates mi2
 		local refEn = undefined
 		local isMixed = false
@@ -608,23 +625,44 @@ fn ORM_buildListItems result =
 			if e != refEn do isMixed = true
 			if e do allOff = false
 		)
-		if sts.count > 0 do
-			eyeMark = (if isMixed then "∅" else (if allOff then "👁️‍🗨️" else "👁️")) + " "
-		local label = eyeMark + md.displayName
+		if sts.count > 0 and allOff do eyeIdx = 10
+		if isMixed do eyeIdx = 11
+		-- Инстанс: у всех выделенных объектов это один и тот же общий инстанс модификатора
+		local isInst = false
+		if g_orm_uniqueObjs.count > 1 then
+		(
+			local m1 = ORM_resolveTarget g_orm_uniqueObjs[1] mi2
+			if m1 != undefined then
+			(
+				isInst = true
+				for k = 2 to g_orm_uniqueObjs.count do
+				(
+					local mk = ORM_resolveTarget g_orm_uniqueObjs[k] mi2
+					if mk == undefined or mk != m1 do ( isInst = false; exit )
+				)
+			)
+		)
+		local label = md.displayName
 		if md.lowerCount > 0 do
 			label += "  (x" + (md.lowerCount + 1) as string + ")"
 		append listItems label
 		append g_orm_listItems #("mod", mi2)
+		append g_orm_listIcons eyeIdx
+		append g_orm_listFlags isInst
 	)
 	if result.baseObjData != undefined and result.baseObjData.props.count > 0 do
 	(
 		append listItems ("Base: " + (result.baseObjData.objClass as string))
 		append g_orm_listItems #("base", 0)
+		append g_orm_listIcons 0
+		append g_orm_listFlags false
 	)
 	if listItems.count == 0 do
 	(
 		listItems = #("No Match")
 		g_orm_listItems = #()
+		g_orm_listIcons = #()
+		g_orm_listFlags = #()
 	)
 	listItems
 )
@@ -635,10 +673,11 @@ fn ORM_buildListItems result =
 fn ORM_refreshList =
 (
 	if g_orm_rollMods == undefined or g_orm_result == undefined do return false
-	local selIdx = g_orm_rollMods.lst_mods.selection
-	g_orm_rollMods.lst_mods.items = ORM_buildListItems g_orm_result
-	if selIdx >= 1 and selIdx <= g_orm_rollMods.lst_mods.items.count do
-		g_orm_rollMods.lst_mods.selection = selIdx
+	local lb = g_orm_rollMods.lst_mods
+	local selIdx0 = lb.SelectedIndex
+	ORM_listSetItems (ORM_buildListItems g_orm_result)
+	if selIdx0 >= 0 and selIdx0 < lb.Items.Count do
+		lb.SelectedIndex = selIdx0
 	true
 )
 
@@ -875,17 +914,16 @@ fn ORM_applyCommon lookupKey mode =
 	ORM_applyProperty modIdx realName val
 
 	-- Отмечаем свойство как «одинаковое» в данных, чтобы UI не предлагал снова
-	local updated = false
 	if modIdx == 0 and g_orm_result.baseObjData != undefined then
 	(
 		for p in g_orm_result.baseObjData.props do
-			if (p.name as string) == realName do ( p.allSame = true; p.value = val; updated = true; exit )
+			if (p.name as string) == realName do ( p.allSame = true; p.value = val; exit )
 	)
 	else if modIdx > 0 then
 	(
 		for md in g_orm_result.modDataList do
 			for p in md.props do
-				if (p.name as string) == realName do ( p.allSame = true; p.value = val; updated = true; exit )
+				if (p.name as string) == realName do ( p.allSame = true; p.value = val; exit )
 	)
 
 	-- Активируем контрол и прячем кнопку «Сделать общим»
@@ -978,7 +1016,10 @@ fn ORM_setFilterUI =
 		g_orm_rollMods.chk_camera.checked = g_orm_typeFilter[4]
 		g_orm_rollMods.chk_helper.checked = g_orm_typeFilter[5]
 	)
-	catch ()
+	catch
+	(
+		if g_orm_debug do format "ModPropsLister: setFilterUI failed: %\n" (getCurrentException() as string)
+	)
 	g_orm_syncFilter = false
 	true
 )
@@ -1047,18 +1088,23 @@ fn ORM_clearUI msg:"No selection." =
 	local changed = false
 	if g_orm_rollMods != undefined do
 	(
-		local oldItems = g_orm_rollMods.lst_mods.items
-		if oldItems.count != 1 or (oldItems.count == 1 and oldItems[1] != msg) do
+		local lb = g_orm_rollMods.lst_mods
+		local oldCnt = lb.Items.Count
+		local oldText = ""
+		if oldCnt == 1 do try ( oldText = lb.Items.Item[0] as string ) catch ()
+		if oldCnt != 1 or oldText != msg do
 		(
-			g_orm_rollMods.lst_mods.items = #(msg)
+			ORM_listSetItems #(msg)
 			changed = true
 		)
-		g_orm_rollMods.lst_mods.selection = 0
+		g_orm_rollMods.lst_mods.SelectedIndex = -1
 		ORM_setToggleUI false
 		g_orm_rollMods.btn_toggle.enabled = false
 		g_orm_rollMods.btn_delete.enabled = false
 	)
 	g_orm_listItems = #()
+	g_orm_listIcons = #()
+	g_orm_listFlags = #()
 	g_orm_selInfo = #()
 	g_orm_lastSelKey = ""
 	g_orm_modClasses = #()
@@ -1111,8 +1157,7 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	local listItems = ORM_buildListItems result
 
 	-- Обновляем listbox без пересоздания floater
-	g_orm_rollMods.lst_mods.items = listItems
-	g_orm_rollMods.lst_mods.selection = 0
+	ORM_listSetItems listItems
 	ORM_setToggleUI false
 	g_orm_rollMods.btn_toggle.enabled = false
 	g_orm_rollMods.btn_delete.enabled = false
@@ -1127,22 +1172,19 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	g_orm_lastSelKey = ""
 
 	-- При изменении выделения сразу выделяем первый элемент списка:
-	-- это верхний модификатор стека, его свойства открываются сразу (см. архитектура п. 2)
+	-- это верхний модификатор стека, его свойства открываются сразу (см. архитектура п. 2).
+	-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged → ORM_onListSelect.
 	if autoSel then
 	(
 		if g_orm_listItems.count > 0 do
-		(
-			g_orm_rollMods.lst_mods.selection = 1
-			ORM_onListSelect 1
-		)
+			g_orm_rollMods.lst_mods.SelectedIndex = 0
 	)
 	else if classOf wasSel == Array and wasSel.count > 0 do
 	(
 		for i = 1 to g_orm_listItems.count do
 			if g_orm_listItems[i][1] == wasSel[1] and g_orm_listItems[i][2] == wasSel[2] do
 			(
-				g_orm_rollMods.lst_mods.selection = i
-				ORM_onListSelect i
+				g_orm_rollMods.lst_mods.SelectedIndex = i - 1
 				exit
 			)
 	)
@@ -1186,7 +1228,10 @@ fn ORM_cbRefresh autoSel:false =
 			callbacks.addScript #postModifierAdded         "ORM_cbRefresh()" id:#ModPropsLister
 			callbacks.addScript #postModifierDeleted       "ORM_cbRefresh()" id:#ModPropsLister
 		)
-		catch ()
+		catch
+		(
+			if g_orm_debug do format "ModPropsLister: registerCallbacks failed: %\n" (getCurrentException() as string)
+		)
 	)
 	g_orm_refreshing = false
 	true
@@ -1200,13 +1245,11 @@ fn ORM_registerCallbacks =
 	callbacks.addScript #selectionSetChanged       "ORM_cbRefresh autoSel:true" id:#ModPropsLister
 	callbacks.addScript #postModifierAdded         "ORM_cbRefresh()" id:#ModPropsLister
 	callbacks.addScript #postModifierDeleted       "ORM_cbRefresh()" id:#ModPropsLister
-	g_orm_callbacksOn = true
 )
 
 fn ORM_unregisterCallbacks =
 (
 	try ( callbacks.removeScripts id:#ModPropsLister ) catch ()
-	g_orm_callbacksOn = false
 )
 
 -- Закрытие диалога + floater
@@ -1416,24 +1459,247 @@ fn ORM_rebuildPropsRollout =
 
 
 -- ======================================================================
+-- DOTNET LIST (owner-draw ListBox): иконки-глаза из BMP + курсив для инстансов
+-- Паттерн взят из BatchViewsManager (initListBox/DrawItem/DoubleBuffered).
+-- ======================================================================
+
+global g_orm_iconFrames = #()   -- кадры ModProps_24i.bmp (1..12), резаные по 24px
+global g_orm_listIcons   = #()   -- параллельно g_orm_listItems: индекс иконки для строки (9/10/11; base = 0)
+global g_orm_listFlags   = #()   -- параллельно g_orm_listItems: true = инстанс (курсив)
+global g_orm_debug       = false -- включить для логирования всех catch в Listener
+-- ПРИМЕЧАНИЕ: шрифты (plain/italic) хранит сам rollout rollout_mods как локальные переменные
+-- и рисует ими в DrawItem (closure, как в рабочем примере). Глобалов не нужно.
+
+-- Двойная буферизация owner-draw ListBox (свойство защищённое, доступ через рефлексию)
+fn ORM_enableDoubleBuffered ctrl =
+(
+	try
+	(
+		-- BindingFlags.Instance(4) | BindingFlags.NonPublic(32) = 36
+		local bf = (dotNetClass "System.Enum").ToObject ((dotNetClass "System.Reflection.BindingFlags")) 36
+		local prop = (ctrl.GetType()).GetProperty "DoubleBuffered" bf
+		if prop != undefined do prop.SetValue ctrl true
+	)
+	catch
+	(
+		if g_orm_debug do format "ModPropsLister: enableDoubleBuffered failed: %\n" (getCurrentException() as string)
+	)
+)
+
+-- Загрузка иконок для owner-draw. Штатный загрузчик 3ds Max: openBitMap + getPixels
+-- с форматом #rgba — Max честно отдаёт альфу из 32-бит BMP (GDI+ видит файл как
+-- Format32bppRgb и выбрасывает 4-й байт). ВСЕ ошибки печатаются в Listener, чтобы
+-- не уходить в тупик на пустых catch.
+fn ORM_loadIconFrames path =
+(
+	local frames = #()
+	format "ModPropsLister: loadIconFrames: '%'\n" path
+	local bm = undefined
+	try ( bm = openBitMap path ) catch
+	(
+		format "ModPropsLister:   openBitMap error: %\n" (getCurrentException() as string)
+	)
+	if bm == undefined then
+		format "ModPropsLister:   openBitMap returned undefined (file missing/unreadable?)\n"
+	else
+	(
+		local fw = (try ( bm.width as integer ) catch ( 0 )) / 12
+		local fh = try ( bm.height as integer ) catch ( 0 )
+		format "ModPropsLister:   bitmap %x% -> frame %x%\n" bm.width bm.height fw fh
+		if fw >= 1 and fh >= 1 then
+		(
+			try
+			(
+				local alphaOK = false
+				local probe = getPixels bm [0, 0] 1
+				try ( alphaOK = (probe[1].a != undefined) ) catch ( alphaOK = false )
+				if alphaOK then
+					format "ModPropsLister:   probe[0,0] .a=% .r=% .g=% .b=%\n" probe[1].a probe[1].r probe[1].g probe[1].b
+				else
+					format "ModPropsLister:   WARNING: (color).a not readable -> alpha = 1.0 (fully opaque)\n"
+				local pf = (dotNetClass "System.Drawing.Imaging.PixelFormat").Format32bppArgb
+				for k = 0 to 11 do
+				(
+					local db = dotNetObject "System.Drawing.Bitmap" fw fh pf
+					for y = 0 to fh - 1 do
+					(
+						local row = getPixels bm [k * fw, y] fw
+						if row.count != fw do
+							format "ModPropsLister:   row % len % (expected %)\n" y row.count fw
+						for x = 1 to row.count do
+						(
+							local c = row[x]
+							local a = if alphaOK then ( try ( c.a ) catch ( 1.0 ) ) else 1.0
+							local av = amax 0 (amin 255 ((a * 255.0) as integer))
+							db.SetPixel (x - 1) y ((dotNetClass "System.Drawing.Color").FromARGB av (c.r as integer) (c.g as integer) (c.b as integer))
+						)
+					)
+					append frames db
+				)
+			)
+			catch
+			(
+				for fr in frames do ( try ( fr.Dispose() ) catch () )
+				frames = #()
+				format "ModPropsLister:   pixel copy failed: %\n" (getCurrentException() as string)
+			)
+		)
+		close bm
+	)
+	format "ModPropsLister:   result: % icon frames\n" frames.count
+	frames
+)
+
+-- Инициализация dotNet-списка (owner-draw, тёмная тема, загрузка иконок)
+fn ORM_initModList =
+(
+	if g_orm_rollMods == undefined do return false
+	local lb = g_orm_rollMods.lst_mods
+	try
+	(
+		lb.BeginUpdate()
+		lb.Items.Clear()
+		lb.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").One
+		lb.DrawMode = (dotNetClass "System.Windows.Forms.DrawMode").OwnerDrawFixed
+		lb.IntegralHeight = false
+		-- Размер иконок/высоты строк — просто глобал в коде (по умолчанию маленькие 16px)
+		if g_orm_iconSize == undefined do g_orm_iconSize = 16
+		lb.ItemHeight = g_orm_iconSize + 6
+		lb.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
+		lb.ForeColor = (dotNetClass "System.Drawing.Color").White
+		-- Шрифт задаётся в on rollout_mods open (lst_mods.Font = fontND): эта привязка
+		-- к контролу оставляет и plain, и italic шрифт живыми для GDI+ (см. DrawItem).
+		lb.EndUpdate()
+	)
+	catch
+	(
+		if g_orm_debug do format "ModPropsLister: initModList setup failed: %\n" (getCurrentException() as string)
+	)
+	ORM_enableDoubleBuffered lb
+	g_orm_iconFrames = ORM_loadIconFrames icon_path
+	lb.Invalidate()
+	true
+)
+
+-- Полная замена содержимого списка (сборка строк — ORM_buildListItems)
+fn ORM_listSetItems listItems =
+(
+	if g_orm_rollMods == undefined do return false
+	local lb = g_orm_rollMods.lst_mods
+	lb.BeginUpdate()
+	lb.Items.Clear()
+	for s in listItems do lb.Items.Add s
+	lb.SelectedIndex = -1
+	lb.EndUpdate()
+	lb.Invalidate()
+	true
+)
+
+-- Реакция на смену выделения dotNet-списка (0-based SelectedIndex):
+-- idx>=1 → как старый on lst_mods selected; иначе — сброс (кнопки неактивны)
+fn ORM_listSelectChanged =
+(
+	if g_orm_rollMods == undefined do return false
+	local idx = g_orm_rollMods.lst_mods.SelectedIndex + 1
+	if idx >= 1 then
+		ORM_onListSelect idx
+	else
+	(
+		ORM_setToggleUI false
+		g_orm_rollMods.btn_toggle.enabled = false
+		g_orm_rollMods.btn_delete.enabled = false
+		true
+	)
+)
+
+-- Owner-draw строки: иконка глаза (кадр 9/10/11), текст (курсив = инстанс).
+-- fPlain/fItalic — rollout-локальные шрифты (как в рабочей Italic-версии).
+fn ORM_drawListItem args fPlain fItalic =
+(
+	local idx = args.Index
+	if idx < 0 do return false
+	local lb = g_orm_rollMods.lst_mods
+	local rect = args.Bounds
+	local g = args.Graphics
+	local isSelected = lb.GetSelected idx
+
+	local backBrush = try
+		dotNetObject "System.Drawing.SolidBrush" (
+			if isSelected then (dotNetClass "System.Drawing.SystemColors").Highlight else lb.BackColor
+		)
+		catch ( undefined )
+	if backBrush != undefined do
+	(
+		try ( g.FillRectangle backBrush rect ) catch ()
+		backBrush.Dispose()
+	)
+
+	local x = rect.X + 2
+	local iconIdx = if idx + 1 <= g_orm_listIcons.count then g_orm_listIcons[idx + 1] else 0
+	if classOf iconIdx == Integer and iconIdx >= 1 and iconIdx <= g_orm_iconFrames.count then
+	(
+		local s = g_orm_iconSize
+		if s < 1 do s = 16
+		local dst = dotNetObject "System.Drawing.Rectangle" x (rect.Y + ((rect.Height - s) / 2)) s s
+		try ( g.DrawImage g_orm_iconFrames[iconIdx] dst )
+		catch
+		(
+			if g_orm_debug do
+				format "ModPropsLister: DrawImage idx=% iconIdx=% error=%\n" idx iconIdx (getCurrentException() as string)
+		)
+		x += s + 5
+	)
+	else
+		if iconIdx >= 1 and g_orm_debug do
+			format "ModPropsLister: icon frame missing iconIdx=% frames=%\n" iconIdx g_orm_iconFrames.count
+
+	local isInst = (idx + 1 <= g_orm_listFlags.count) and g_orm_listFlags[idx + 1]
+	local textColor = if isSelected then (dotNetClass "System.Drawing.SystemColors").HighlightText else lb.ForeColor
+	local textBrush = dotNetObject "System.Drawing.SolidBrush" textColor
+	local txt = lb.Items.Item[idx] as string
+	local pt = dotNetObject "System.Drawing.PointF" (x as float) (rect.Y as float)
+	-- Текст: обычные строки — fPlain (== lst_mods.Font), инстансы — fItalic
+	-- (шрифты закреплены за контролом, поэтому живые, без shear).
+	local f = fPlain
+	if f == undefined do
+		try ( f = args.Font ) catch ()
+	local fIt = fItalic
+	if fIt == undefined do fIt = f
+	if isInst do f = fIt
+	try ( g.DrawString txt f textBrush pt )
+	catch ( format "ModPropsLister: draw failed: %\n" (getCurrentException() as string) )
+	textBrush.Dispose()
+	true
+)
+
+
+-- ======================================================================
 -- UI: ROLLOUT "MODIFIERS" (статический)
 -- ======================================================================
 rollout rollout_mods "Modifiers"
 (
-	listbox lst_mods "" height:8 width:180 align:#left --across:2
+	dotNetControl lst_mods "System.Windows.Forms.ListBox" height:130 width:180 align:#left offset:[-4,0]
 
-	checkbutton btn_toggle "️" images:#(icon_path, undefined, 12, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-8*15]
-	button btn_delete "" images:#(icon_path, undefined, 12, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,60]
+	-- Шрифты (plain/italic): как в рабочей Italic-версии — rollout-локальные, создаются
+	-- в on open и ЗАКРЕПЛЯЮТСЯ за контролом (lst_mods.Font), поэтому живые для GDI+.
+	local fontND
+	local fontItalicND
 
-	label lbl_filter "Inclade:" align:#left offset:[-5,4] across:7
+	checkbutton btn_toggle "️" images:#(icon_path, undefined, 12, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
+	button btn_delete "" images:#(icon_path, undefined, 12, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,80]
+
+	label lbl_filter "Include:" align:#left offset:[-5,4] across:7
 	checkbutton chk_geom    "" images:#(icon_path, undefined, 12, 2, 2, 2, 2,true) tooltip:"Geometry"
 	checkbutton chk_shape   "" images:#(icon_path, undefined, 12, 3, 3, 3, 3,true) tooltip:"Shapes"
 	checkbutton chk_light   "" images:#(icon_path, undefined, 12, 4, 4, 4, 4,true) tooltip:"Light"
 	checkbutton chk_camera  "" images:#(icon_path, undefined, 12, 5, 5, 5, 5,true) tooltip:"Camera"
 	checkbutton chk_helper  "" images:#(icon_path, undefined, 12, 6, 6, 6, 6,true) tooltip:"Helpers"
 
-	on lst_mods selected idx do
-		ORM_onListSelect idx
+	on lst_mods DrawItem sender args do
+		ORM_drawListItem args fontND fontItalicND
+
+	on lst_mods SelectedIndexChanged sender args do
+		ORM_listSelectChanged()
 
 	on btn_toggle changed st do
 	(
@@ -1472,7 +1738,30 @@ rollout rollout_mods "Modifiers"
 
 	-- Автовысота при сворачивании/разворачивании свитка; сохранение позиции при закрытии
 	on rollout_mods rolledUp state do ORM_updateFloaterHeight()
-	on rollout_mods close do ORM_saveFloaterState()
+
+	-- Создание шрифтов в on open — ровно как в рабочей Italic-версии:
+	-- fontND создаётся и ПРИСВАИВАЕТСЯ контролу (живой), курсив — от fontND.FontFamily.
+	on rollout_mods open do
+	(
+		local fsClass = dotNetClass "System.Drawing.FontStyle"
+		-- Простой шрифт создаём и ПРИСВАИВАЕМ контролу (как в рабочей Italic-версии).
+		-- Присвоение в отдельном try: при повторном показе floater контрол может быть
+		-- ещё не готов — это НЕ должно прерывать создание курсива.
+		fontND = dotNetObject "System.Drawing.Font" "Segoe UI" 9.0 (fsClass.Regular)
+		try ( lst_mods.Font = fontND ) catch (
+			if g_orm_debug do format "ModPropsLister: lst_mods.Font assign failed: %\n" (getCurrentException() as string)
+		)
+		-- Курсив строится от ЖИВОГО fontND.FontFamily (строковый "Segoe UI" даёт мёртвый шрифт).
+		fontItalicND = dotNetObject "System.Drawing.Font" fontND.FontFamily fontND.Size fsClass.Italic
+		if fontItalicND == undefined do fontItalicND = fontND
+		if g_orm_debug do
+			format "ModPropsLister: fonts ok plain=% italic=%\n" (fontND != undefined) (fontItalicND != undefined)
+	)
+
+	on rollout_mods close do
+	(
+		ORM_saveFloaterState()
+	)
 )
 
 
@@ -1530,7 +1819,7 @@ fn ORM_showUI result =
 	-- Строки списка (символ enabled в начале; см. архитектура п. 1/2)
 	local listItems = ORM_buildListItems result
 
-	local flW = 255
+	local flW = 245
 	local iniPath = getmaxinifile()
 	local posStr  = getINISetting iniPath "ModPropsLister" "Position"
 	-- Восстановление только ПОЛОЖЕНИЯ из INI; размер — расчётный (автовысота),
@@ -1552,6 +1841,9 @@ fn ORM_showUI result =
 
 	addRollout rollout_mods g_orm_floater
 
+	-- dotNet-список: owner-draw + иконки глаза из BMP + курсив для инстансов
+	ORM_initModList()
+
 	-- Галочки фильтра по типам из глобального состояния (прочитанного из INI)
 	ORM_setFilterUI()
 
@@ -1568,17 +1860,15 @@ fn ORM_showUI result =
 			listItems = #("No Match")
 	)
 
-	rollout_mods.lst_mods.items = listItems
+	ORM_listSetItems listItems
 	ORM_setToggleUI false
 	rollout_mods.btn_toggle.enabled = false
 	rollout_mods.btn_delete.enabled = false
 
-	-- При открытии сразу выделяем первый элемент списка (верхний модификатор стека)
+	-- При открытии сразу выделяем первый элемент списка (верхний модификатор стека);
+	-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged → ORM_onListSelect
 	if listItems.count > 0 do
-	(
-		rollout_mods.lst_mods.selection = 1
-		ORM_onListSelect 1
-	)
+		rollout_mods.lst_mods.SelectedIndex = 0
 
 	addRollout rollout_about g_orm_floater
 
@@ -1609,7 +1899,10 @@ fn ORM_run =
 			local f = execute fstr
 			if classOf f == Array and f.count == 5 do g_orm_typeFilter = f
 		)
-		catch ()
+		catch
+		(
+			if g_orm_debug do format "ModPropsLister: run INI TypeFilter failed: %\n" (getCurrentException() as string)
+		)
 	)
 
 	local result = undefined
