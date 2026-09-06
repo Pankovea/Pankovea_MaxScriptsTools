@@ -20,6 +20,10 @@
      выборке сплайна; порог острого узла SS_SCHNEIDER_SHARP_ANGLE защищает углы.
   2) Эвристика углов (false) — накопленный планарный/торсионный угол между сегментами.
 
+Защита границы длинного и короткого сегментов (SS_LONGSEG_RATIO / SS_LONGSEG_ANGLE_TOL),
+аналогичная run_rebuildArcs: если у вершины соседние сегменты сильно различаются по длине,
+а локальный поворот мал, вершина остаётся опорной — длинная прямая не изгибается в фит.
+
 Пост-обработка: выравнивание хендлов почти-прямых узлов (SS_SMOOTH_ANGLE).
 
 --- Восстановление дуг (run_rebuildArcs) ---
@@ -70,7 +74,16 @@ global SS_TOLERANCE_PCT = 0.1
 
 -- Порог острого узла (градусы): угол между in/out касательными
 -- Меньше порога → узел считается опорным и не удаляется
-global SS_SCHNEIDER_SHARP_ANGLE = 150
+global SS_SCHNEIDER_SHARP_ANGLE = 160
+
+-- Защита границы длинного и короткого сегментов (как в run_rebuildArcs/эвристике):
+-- если хорды соседних у вершины сегментов различаются >= порога, а локальный поворот
+-- (текущий и предыдущий) мал — вершина становится опорной. Иначе длинная прямая рядом
+-- с плотной дугой попадает в фит плавного поворота и изгибается.
+-- Отношение длин соседних сегментов.
+global SS_LONGSEG_RATIO = 4.0
+-- Допуск поворота (градусы): считаем продолжение "локально прямым".
+global SS_LONGSEG_ANGLE_TOL = 5.0
 
 
 -- == Восстановление дуг =====================================================
@@ -551,6 +564,44 @@ fn findSupportPointsSchneider spline s_num samplesPerSegment:20 tolerancePct:0.1
 		if (dot din dout) > sharpAngleCos do (
 			if (finditem clean k) == 0 do append clean k
 		)
+	)
+
+	-- Пост-проход: защита границы ДЛИННОГО и КОРОТКОГО сегментов (аналог эвристики
+	-- findSupportPoints и цепочек run_rebuildArcs). Если у вершины соседние сегменты
+	-- различаются по длине >= SS_LONGSEG_RATIO и направление до и после неё почти
+	-- совпадает (локально прямое продолжение) — вершину делаем опорной. Без неё длинная
+	-- прямая рядом с плотной дугой/кривой попадает в фит плавного поворота, изгибается.
+	local lgRatio = if SS_LONGSEG_RATIO == undefined then 4.0 else SS_LONGSEG_RATIO
+	local lgAngTol = if SS_LONGSEG_ANGLE_TOL == undefined then 5.0 else SS_LONGSEG_ANGLE_TOL
+	local lgCos = cos lgAngTol
+	for k = 1 to nk do (
+		if not closedS and (k == 1 or k == nk) then continue
+		if (finditem clean k) > 0 then continue
+		local kp = getKnotPoint spline s_num k
+		local kpPrev = getKnotPoint spline s_num (if k == 1 then nk else k - 1)
+		local kpNext = getKnotPoint spline s_num (if k == nk then 1 else k + 1)
+		local v1 = kp - kpPrev
+		local v2 = kpNext - kp
+		local l1 = length v1
+		local l2 = length v2
+		if l1 < 1e-9 or l2 < 1e-9 do continue
+		if (amax #(l1, l2)) < lgRatio * (amin #(l1, l2)) then continue
+
+		-- поворот в самой вершине
+		local d1 = v1 / l1
+		local d2 = v2 / l2
+		if (dot d1 d2) < lgCos then continue
+
+		-- поворот в предыдущей вершине (локально прямое продолжение до этой)
+		local prevPrev = if closedS then (if k == 1 then nk - 1 else (if k == 2 then nk else k - 2)) else (if k == 2 then 0 else k - 2)
+		if prevPrev == 0 do continue
+		local v0 = kpPrev - (getKnotPoint spline s_num prevPrev)
+		local l0 = length v0
+		if l0 < 1e-9 do continue
+		local d0 = v0 / l0
+		if (dot d0 d1) < lgCos then continue
+
+		append clean k
 	)
 	sort clean
 	if SS_DEBUG do format "Schneider: участков=% опорных=% допуск=% | уперлись в разрешение узлов: % (худшая ошибка %)\n" supports.count clean.count tolErr floorHits worstFloorD
@@ -2252,7 +2303,7 @@ fn run_rebuildArcs = (
 	local noneFound = true
 
 	for obj in selection do (
-		if not (iskindof obj.baseobject SplineShape) then continue
+		if not (superclassof obj.baseobject == Shape) then continue
 
 		-- per-object: resolve splines to process + selected knots
 		local splinesToProcess = #()
@@ -2471,7 +2522,7 @@ fn run_simplifySpline = (
 		local rangesToReselect = #() -- #(s_num, pLo, pHi) — диапазоны для повторного выделения
 
 		for obj in selection do (
-		if not (iskindof obj.baseobject SplineShape) then continue
+		if not (superclassof obj.baseobject == Shape) then continue
 
 		local autoDetectSplines = #()
 		if savedSubObjLevel == 0 then (
