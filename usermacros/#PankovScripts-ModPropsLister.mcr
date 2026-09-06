@@ -26,6 +26,11 @@ UI:
     "Base: <Класс>" со свойствами базового объекта. Если общих модификаторов нет,
     а базовые объекты ИДЕНТИЧНЫ (инстансы обменивают один baseObject) — всё равно
     показываем свойства базы (все контролы активны, значения у всех одинаковые).
+  - Base: MIXED — если базовые классы РАЗНЫЕ (напр. Circle и Line), но у всех баз
+    есть свойства с СОВПАДАЮЩИМИ именем и типом (напр. steps у Shapes), показываем
+    пункт "Base: MIXED" только с этими совпавшими свойствами; если у всех баз
+    одинаковый суперкласс — добавляем его в скобках ("Base: MIXED (Shape)").
+    Различающиеся значения по-прежнему дают кнопку «Сделать общим».
   - Положение окна сохраняется в INI (секция "ModPropsLister" в max.ini)
     и восстанавливается при открытии.
   - Автовысота окна: сумма высот открытых свитков, не больше размера экрана.
@@ -54,9 +59,9 @@ UI:
    Все функции, вызываемые из обработчиков rollout'ов, codeStr и callbacks,
    объявлены global (см. блок "global ORM_*"). Статические rollouts доступны
    из global-функций только через глобальные псевдонимы g_orm_rollMods /
-   g_orm_rollAbout (паттерн BatchViewsManager). rcmenu rmc_common тоже global
-   (вызывается из global-функции ORM_onMakeCommon через popUpMenu без pos: —
-   меню появляется у курсора).
+   g_orm_rollAbout (паттерн BatchViewsManager). rcmenu rmc_* (типовые меню
+   «Сделать общим») тоже global (вызываются из global-функции ORM_onMakeCommon
+   через popUpMenu без pos: — меню появляется у курсора).
 
 2. LOOKUP — НЕ ХЕШ. g_orm_propLookup — линейный массив кортежей
    #(key, modIdx, propNameStr, prefix), поиск через ORM_lookupFind.
@@ -126,6 +131,23 @@ UI:
     отфильтрованы в ORM_collectSupportedProps, иначе 3ds Max пишет предупреждения
     в Listener.
 
+13. ШАГ СПИННЕРОВ: БЕЗ РАЗГОНА, СКАЧКОВ И ПРОСКАЛЬЗЫВАНИЯ. Целевой шаг — НЕПРЕРЫВНЫЙ
+     1% от величины (ORM_stepScale: 1 → 0.01, 5000 → 50), БЕЗ квантования 1-2-5
+     (давало неожиданные скачки ×2/×2.5 внутри декады). Нижняя граница шага — от
+     СРЕДНЕЙ величины параметров свитка (g_orm_avgMag, 1% от неё): с нуля (или малым
+     значением) шаг не схлопывается в 0.01, а остаётся комфортным для работы с тысячными.
+     scale ставится ОДИН раз на СТАРТЕ драга (событие buttondown: обычное вращение —
+     адаптивный шаг от текущего значения; с зажатым Alt — точный степенной шаг формулой
+     (abs(v)+1)/1000, ~0.001 на малых и ~0.1% от величины на больших) и ВО ВРЕМЯ драга
+     НЕ меняется. Почему: смена scale в середине драга пересчитывает накопленное
+     движение мыши с новым множителем (резкий скачок), а «коррекция значения» поверх
+     аккумулятора 3ds Max копит расхождение и даёт проскальзывание при смене
+     направления. Между драгами (buttonup) scale обновляется под новое значение.
+     Исключение — групповой режим Scale (см. g_orm_incrMap): спиннер показывает ФАКТОР
+     в %, а не величину, поэтому шаг тоже степенной, но ОТ БАЗЫ 100 — (abs(100)+1)/1000
+     = 0.101 (1 единица = 0.1%), независимо от средней величины параметров (ORM_spinStep) —
+     иначе на тысячном avgMag фактор «скакал» бы на 7% за тик.
+
 ======================================================================
 ИЗВЕСТНЫЕ ОГРАНИЧЕНИЯ (невозможно исправить штатно):
 =====================================================================
@@ -177,8 +199,10 @@ struct ORM_ModData (
 )
 
 struct ORM_BaseObjData (
-	objClass,       -- класс базового объекта (Box, Sphere, ...)
-	props           -- #(ORM_PropInfo)
+	objClass,       -- класс базового объекта (Box, Sphere, ...); для MIXED — класс первого объекта (не используется)
+	props,          -- #(ORM_PropInfo)
+	isMixed,        -- true = базовые классы разные, показаны ТОЛЬКО совпадающие по имени/типу свойства (Base: MIXED)
+	commonSuper     -- строка общего суперкласса ("Shape", "Geometry"...) или undefined (Base: MIXED (Shape))
 )
 
 struct ORM_Result (
@@ -192,6 +216,7 @@ struct ORM_Result (
 -- ======================================================================
 -- ГЛОБАЛЬНОЕ СОСТОЯНИЕ
 -- ======================================================================
+global g_orm_debug -- true для дебаг вывода в listener
 
 global g_orm_result         = undefined
 global g_orm_uniqueObjs     = #()
@@ -230,6 +255,15 @@ global g_orm_ctxKey         = ""
 global g_orm_lastSelKey     = ""
 -- Защита от рекурсии колбэков (см. архитектура п. 3)
 global g_orm_refreshing     = false
+-- Групповой режим спиннера (см. «Сделать общим»): lookupKey ->
+--   #( #(obj, baseVal, modIdx, realName), ... , mode ) где mode = #incr | #scale.
+--   #incr:  контрол стартует с 0, изменение ПРИБАВЛЯЕТ дельту к запомненной базе
+--           (0 = «прибавить ноль», ничего не меняем).
+--   #scale: контрол стартует со 100 (%), изменение УМНОЖАЕТ базы на значение/100
+--           (100 = «умножить на 1»).
+--   И в том, и в другом случае показанное число — фактор (дельту/процент),
+--   НЕ абсолютное значение свойства.
+global g_orm_incrMap        = #()
 
 
 -- Функции, вызываемые из статических rollout-обработчиков и codeStr
@@ -244,6 +278,7 @@ global ORM_resolveTarget
 global ORM_applyProperty
 global ORM_deleteModifier
 global ORM_toggleModifier
+global ORM_refreshModPanel
 global ORM_collectValues
 global ORM_isNumeric
 global ORM_avgValues
@@ -265,6 +300,24 @@ global ORM_onFilterChanged
 global ORM_onMakeCommon
 global ORM_applyCommon
 global ORM_enableAfterCommon
+global ORM_syncCtrlValue
+global ORM_incrFind
+global ORM_incrBegin
+global ORM_applyTick
+global ORM_incrApplyPairs
+-- Групповой undo (см. блок «ГРУППОВОЙ UNDO» ниже): одна запись Undo на весь цикл
+-- нажатие-отпускание спиннера, реализуется через theHold.Begin()/Accept().
+-- Функции и флаги global, потому что их вызывает код, живущий в чужом scope:
+-- события динамического rollout'а и codeStr (см. блок «Для codeStr важно...» ниже).
+global ORM_gestureBegin
+global ORM_gestureCommit
+-- Имя текущей undo-записи для theHold.Accept; перезаписывается при каждом begin
+-- (например "ModPropsLister Edit", "ModPropsLister Point3", "ModPropsLister Incremental").
+global g_orm_incrUndoLabel = "ModPropsLister Edit"
+-- true = theHold открыт НАМИ (между Begin и Accept/Cancel). Защита от повторного
+-- Begin на следующих changed внутри одного цикла нажатие-отпускание.
+global g_orm_gestureActive = false
+global ORM_ctxPtype
 global ORM_onDeleteMod
 global ORM_rebuildPropsRollout
 global ORM_addPropControls
@@ -278,7 +331,10 @@ global ORM_updateFloaterHeight
 global ORM_saveFloaterState
 global ORM_showUI
 global ORM_closeDialog
--- dotNet owner-draw списока (определены ниже; предобъявление для старого скоупа)
+-- Функции owner-draw списка вызываются из dotNet-событий (DrawItem, SelectedIndexChanged)
+-- и из глобальных ORM_*-функций, т.е. из скоупа, ОТДЕЛЬНОГО от макроса. В .mcr обычный
+-- fn локален макроскоупу — без этого предобъявления global dotNet-событие увидело бы
+-- имя как Global:undefined.
 global ORM_enableDoubleBuffered
 global ORM_loadIconFrames
 global ORM_initModList
@@ -286,7 +342,26 @@ global ORM_listSetItems
 global ORM_listSelectChanged
 global ORM_drawListItem
 global ORM_refreshList
-global g_orm_debug
+-- Точность спиннеров и подавление программных `changed`. Тоже global по той же
+-- причине (оживает в codeStr динамического rollout'а — он вне scope макроса,
+-- поэтому без global из события переменная рисуется как undefined).
+-- g_orm_uiSuppress: во время ПРОГРАММНОЙ установки контрола (ORM_syncCtrlValue после
+-- Unify, обнуление в ORM_incrBegin) изменившееся `changed` НЕ должно начать групповой
+-- undo — хендлеры спиннеров/чекбоксов/цвета на это проверяют флаг.
+global g_orm_uiSuppress   = false
+-- Средняя ВЕЛИЧИНА параметров текущего свитка (float/int + компоненты point3,
+-- ненулевые). Нижняя граница шага спиннеров (ORM_stepScale): при значении 0 шаг не
+-- схлопывается до фиксированного минимума, а даёт комфортную скорость для работы
+-- с тысячными значениями (1% от средней величины). Global — читается из codeStr
+-- (ROLLOUT-скоуп, см. ниже).
+global g_orm_avgMag = 1.0
+-- Для codeStr важно, чтобы глобальные объявления были ДО определений fn
+-- (см. паттерн остальных global ORM_* в блоке выше) — иначе из rollout'а
+-- переменная видна как Global:undefined.
+global ORM_setSpinnerScale
+global ORM_spinStep
+global ORM_stepScale
+global ORM_logExcept
 
 -- Логирование исключений: ВСЕ catch идут через этот хелпер, пустых catch в скрипте нет.
 -- g_orm_debug=false — молчание допускается только там, где сбой заведомо безопасен
@@ -296,6 +371,42 @@ fn ORM_logExcept ctx msg =
 	if g_orm_debug do format "ModPropsLister[%]: %\n" ctx msg
 	undefined
 )
+
+-- Целевой шаг спиннера по величине значения: НЕПРЕРЫВНО, 1% от величины
+-- (1 → 0.01, 5000 → 50), БЕЗ квантования 1-2-5 и без разгона. Нижняя граница шага
+-- НЕ фиксированная, а от СРЕДНЕЙ величины параметров свитка (g_orm_avgMag, 1% от неё):
+-- когда значение в нуле, а остальные параметры на тысячах, шаг всё равно комфортный.
+-- Применяется на СТАРТЕ каждого драга (buttondown) — во время драга scale фиксирован.
+fn ORM_stepScale v =
+(
+	amax 0.01 ( (amax (abs (v as float)) g_orm_avgMag) * 0.01 )
+)
+
+-- Установка scale спиннера. В codeStr напрямую .scale = ... не пишем: сборка строки
+	-- с try/catch была бы многословной, а сбой здесь заведомо безопасен — оборачиваем
+	-- в этот хелпер и логгируем (без него при сбое события умрут молча).
+	fn ORM_setSpinnerScale ctrl s =
+	(
+		try ( ctrl.scale = s ) catch ( ORM_logExcept "spinScale" (getCurrentException() as string) )
+		true
+	)
+
+	-- Шаг спиннера для codeStr-хендлеров buttondown/buttonup.
+	-- В обычном режиме (и в #incr) — адаптивный: 1% от ТЕКУЩЕГО значения с нижней
+	-- границей от средней величины свитка (ORM_stepScale). В Scale-режиме контрол
+	-- показывает ФАКТОР (%), поэтому шаг тоже степенной, но ОТ 100 (базы фактора):
+	-- (abs(100)+1)/1000 = 0.101, т.е. 1 единица = 0.1%, без нижней границы от среднего —
+	-- иначе на большом avgMag фактор скакал бы на 7% за тик.
+	-- Alt — тот же принцип, от текущего показания.
+	fn ORM_spinStep ctrlName lookupKey alt:false =
+	(
+		local v = try ( ctrlName.value as float ) catch ( 0.0 )
+		if alt do return ( (abs v) + 1.0 ) / 1000.0
+		local item = ORM_incrFind lookupKey
+		if item != undefined and item[3] == #scale do return ( (abs 100) + 1.0 ) / 1000.0
+		ORM_stepScale v
+	)
+
 
 -- ======================================================================
 -- LAYER 1: ANALYSIS
@@ -381,6 +492,17 @@ fn ORM_matchesFilter obj =
 	if sc == Camera       then return g_orm_typeFilter[4]
 	-- Прочие суперклассы (Helpers и спец.) — категория "Helpers"
 	g_orm_typeFilter[5]
+)
+
+-- Имя суперкласса объекта для заголовка Base: MIXED (чистое, без "Class")
+fn ORM_superClassName obj =
+(
+	local sc = superClassOf obj
+	if sc == GeometryClass then return "Geometry"
+	if sc == Shape        then return "Shape"
+	if sc == Light        then return "Light"
+	if sc == Camera       then return "Camera"
+	"--"
 )
 
 fn ORM_analyzeSelection sel =
@@ -504,7 +626,7 @@ fn ORM_analyzeSelection sel =
 			if classOf uniqueObjs[ui].baseObject != firstBaseClass \
 				do ( allSameBaseClass = false; exit )
 
-		if allSameBaseClass do
+		if allSameBaseClass then
 		(
 			local props = ORM_collectSupportedProps uniqueObjs[1] uniqueObjs[1].baseObject
 			if props.count > 0 do
@@ -522,7 +644,50 @@ fn ORM_analyzeSelection sel =
 					)
 					props[pi].allSame = allSame
 				)
-				baseObjData = ORM_BaseObjData objClass:firstBaseClass props:props
+				baseObjData = ORM_BaseObjData objClass:firstBaseClass props:props isMixed:false commonSuper:undefined
+			)
+		)
+		else
+		(
+			-- Base: MIXED — базовые классы РАЗНЫЕ (напр. Circle и Line). Показываем ТОЛЬКО
+			-- свойства, совпадающие у всех баз ПО ИМЕНИ И ТИПУ (напр. steps у всех Shapes).
+			-- Различающиеся значения по-прежнему дают «Unify» (контрол неактивен).
+			local baseObjs = for obj in uniqueObjs collect obj.baseObject
+			local cand = ORM_collectSupportedProps uniqueObjs[1] baseObjs[1]
+			local shared = #()
+			for p in cand do
+			(
+				local ok = true
+				for ui = 2 to baseObjs.count do
+				(
+					local otherVal = undefined
+					try ( otherVal = getProperty baseObjs[ui] p.name ) catch ( ORM_logExcept "sharedBaseProps" (getCurrentException() as string) )
+					if otherVal == undefined or (ORM_getPropType otherVal) != p.ptype \
+						do ( ok = false; exit )
+				)
+				if ok do append shared p
+			)
+			if shared.count > 0 do
+			(
+				-- allSame: значение одинаково у всех баз
+				for pi = 1 to shared.count do
+				(
+					local allSame = true
+					for ui = 2 to baseObjs.count do
+					(
+						local otherVal = undefined
+						try ( otherVal = getProperty baseObjs[ui] shared[pi].name ) catch ( ORM_logExcept "sharedSameProps" (getCurrentException() as string) )
+						if otherVal == undefined or shared[pi].value != otherVal \
+							do ( allSame = false; exit )
+					)
+					shared[pi].allSame = allSame
+				)
+				-- Общий суперкласс: если у всех баз одинаковый (напр. Shape) — покажем в скобках
+				local curaSc = ORM_superClassName baseObjs[1]
+				local commonSc = curaSc
+				for ui = 2 to baseObjs.count do
+					if ORM_superClassName baseObjs[ui] != curaSc do ( commonSc = undefined; exit )
+				baseObjData = ORM_BaseObjData objClass:firstBaseClass props:shared isMixed:true commonSuper:commonSc
 			)
 		)
 	)
@@ -613,7 +778,7 @@ fn ORM_applyProperty modIdx propNameStr value =
 )
 
 -- Построение строк списка: модификаторы сверху (порядок стека), baseobject ПОСЛЕДНИМ внизу.
--- В начале строки — символ состояния enabled (👁️ / 👁️‍🗨️ / ∅; см. архитектура п. 1/2).
+-- Состояние enabled — ИКОНКОЙ глаза в начале строки (owner-draw, не текст).
 -- Единая точка: используется и при полном refresh (ORM_refreshUI), и при открытии окна (ORM_showUI).
 fn ORM_buildListItems result =
 (
@@ -665,7 +830,12 @@ fn ORM_buildListItems result =
 	)
 	if result.baseObjData != undefined and result.baseObjData.props.count > 0 do
 	(
-		append listItems ("Base: " + (result.baseObjData.objClass as string))
+		local bd = result.baseObjData
+		local baseLabel = if bd.isMixed then
+			"Base: MIXED" + (if bd.commonSuper != undefined then " (" + bd.commonSuper + ")" else "")
+		else
+			("Base: " + (bd.objClass as string))
+		append listItems baseLabel
 		append g_orm_listItems #("base", 0)
 		append g_orm_listIcons 0
 		append g_orm_listFlags false
@@ -729,7 +899,49 @@ fn ORM_toggleModifier modClass state =
 				exit
 			)
 	)
+	-- Глазок и rollups на Modify-панели не перечитываются сами после скриптового
+	-- изменения enabled — обновляем панель, если она открыта.
+	if applied do ORM_refreshModPanel()
 	applied
+)
+
+-- Обновляет модификационную панель (Modify) после изменения стека скриптом.
+-- Callback'а на смену enabled в Max нет, поэтому панель повторно открываем на
+-- том же объекте/модификаторе. Документация (Command Panels, modPanel):
+--  * getCurrentObject() возвращает undefined, если панель Modify НЕ открыта —
+--    в этом случае ничего не делаем;
+--  * setCurrentObject <obj> node:<node> ui:true — открывает стек указанного
+--    узла на этом объекте, ui:true переводит командную панель в режим Modify.
+-- setCurrentObject сужает выделение до одного узла, поэтому исходный выбор
+-- восстанавливаем; на время этого прикрываемся g_orm_refreshing, чтобы колбэк
+-- selectionSetChanged не пересобрал наш список.
+fn ORM_refreshModPanel =
+(
+	if not (ORM_validTargets()) do return false
+	local curObj = modPanel.getCurrentObject()
+	if curObj == undefined do return false
+	local savedSel = selection as array
+	if savedSel.count == 0 do return false
+	-- Узел, которому принадлежит показываемый панелью объект. Узлы направленных
+	-- инстансов общие, но на всякий случай ищем владельца: иначе не рискуем
+	-- перещёлкивать панель на чужой стек.
+	local panelOwner = undefined
+	if isKindOf curObj Node do panelOwner = curObj
+	for obj in g_orm_uniqueObjs do
+	(
+		if panelOwner != undefined do exit
+		if curObj == obj.baseObject do ( panelOwner = obj; exit )
+		for m in obj.modifiers do
+			if m == curObj do ( panelOwner = obj; exit )
+	)
+	if panelOwner == undefined do return false
+	g_orm_refreshing = true
+	try ( modPanel.setCurrentObject curObj node:panelOwner ui:true ) \
+		catch ( ORM_logExcept "setCurrentObject" (getCurrentException() as string) )
+	try ( select savedSel ) \
+		catch ( ORM_logExcept "select" (getCurrentException() as string) )
+	g_orm_refreshing = false
+	true
 )
 
 
@@ -767,10 +979,16 @@ fn ORM_avgValues vals =
 	acc / vals.count
 )
 
--- Медиана (только для чисел)
+-- Медиана: для чисел — классическая; для булевых — большинство голосов (true если больше половины).
 fn ORM_medianValues vals =
 (
 	if vals.count == 0 do return undefined
+	if classOf vals[1] == BooleanClass then
+	(
+		local t = 0
+		for v in vals do if v do t += 1
+		return (t * 2 > vals.count)
+	)
 	local nums = for v in vals collect (v as float)
 	sort nums
 	local n = nums.count
@@ -805,7 +1023,7 @@ fn ORM_commonValue modIdx propName mode =
 		#max: ( if ORM_isNumeric vals[1] then (amax (for v in vals collect (v as float))) else ORM_avgValues vals )
 		#min: ( if ORM_isNumeric vals[1] then (amin (for v in vals collect (v as float))) else ORM_avgValues vals )
 		#avg: ( ORM_avgValues vals )
-		#median: ( if ORM_isNumeric vals[1] then ORM_medianValues vals else ORM_avgValues vals )
+		#median: ( ORM_medianValues vals )
 		#mode: ( ORM_modeValues vals )
 		default: undefined
 	)
@@ -837,24 +1055,40 @@ fn ORM_lookupFind propNameStr =
 	undefined
 )
 
+-- Групповой undo: первый changed открывает theHold (ORM_gestureBegin), значение
+-- применяется ВНУТРЬ открытого hold (записывается в него); событие спиннера
+-- `entered` на отпускании закроет его одним undo-шагом (ORM_gestureCommit).
+-- Чекбокс — ДИСКРЕТНОЕ действие (клик = одно изменение, нет группировки):
+-- дискретная запись явной undo-клаузой, без hold.
 fn ORM_propChanged propNameStr val =
 (
+	-- Групповой режим (Incremental/Scale, см. g_orm_incrMap): спиннер показывает фактор
+	-- (дельту, старт 0, или процент, старт 100), изменение уходит в ORM_applyTick.
+	if ORM_incrFind propNameStr != undefined do return (ORM_applyTick propNameStr val)
 	local lookup = ORM_lookupFind propNameStr
 	if lookup == undefined do return false
 	local modIdx    = lookup[2]
 	local realName  = lookup[3]
+	if classOf val == BooleanClass do
+	(
+		undo "ModPropsLister Toggle" on ( ORM_applyProperty modIdx realName val )
+		return true
+	)
 	local value = val
 	if classOf val == String do
-		try ( value = val as float ) catch ()
+		try ( value = val as float ) catch ( value = val )
+	ORM_gestureBegin label:"ModPropsLister Edit"
 	ORM_applyProperty modIdx realName value
 	true
 )
 
+-- Цвет — тоже ДИСКРЕТНОЕ действие (смена в диалоге = одна запись, группировки нет):
+-- явная undo-клауза на каждое событие changed.
 fn ORM_propColorChanged propNameStr val =
 (
 	local lookup = ORM_lookupFind propNameStr
 	if lookup == undefined do return false
-	ORM_applyProperty lookup[2] lookup[3] val
+	undo "ModPropsLister Color" on ( ORM_applyProperty lookup[2] lookup[3] val )
 	true
 )
 
@@ -877,6 +1111,7 @@ fn ORM_propPoint3Changed propNameStr component val =
 		"y": currentVal.y = val as float
 		"z": currentVal.z = val as float
 	)
+	ORM_gestureBegin label:"ModPropsLister Point3"
 	ORM_applyProperty modIdx realName currentVal
 	true
 )
@@ -904,14 +1139,52 @@ fn ORM_enableAfterCommon prefix propName =
 	if rl == undefined do return undefined
 	local main = prefix + propName
 	local c = ORM_ctrlByName rl main
-	if c != undefined do try ( c.enabled = true ) catch ()
+	if c != undefined do c.enabled = true
 	local b = ORM_ctrlByName rl (main + "_mk")
-	if b != undefined do try ( b.visible = false ) catch ()
+	if b != undefined do b.visible = false
 	for comp in #("x", "y", "z") do
 	(
 		local cc = ORM_ctrlByName rl (main + "_" + comp)
-		if cc != undefined do try ( cc.enabled = true ) catch ()
+		if cc != undefined do cc.enabled = true
 	)
+)
+
+-- После применения «общего» значения обновляем ОТОБРАЖЕНИЕ контрола,
+-- чтобы он не оставался со старым значением из времени создания rollout'а
+-- (например, галочка checkbox, если применяли Disable/Enable).
+-- Программная установка .value/.color/.checked тоже генерит `changed` — чтобы
+-- она НЕ начала групповой undo, глушим её флагом g_orm_uiSuppress (см. codeStr).
+fn ORM_syncCtrlValue prefix realName val =
+(
+	local rl = g_orm_rlProps
+	if rl == undefined do return false
+	local main = prefix + realName
+	g_orm_uiSuppress = true
+	if classOf val == Point3 then
+	(
+		for comp in #("x", "y", "z") do
+		(
+			local cc = ORM_ctrlByName rl (main + "_" + comp)
+			if cc != undefined do
+				cc.value = case comp of ( "x": val.x; "y": val.y; "z": val.z )
+		)
+		g_orm_uiSuppress = false
+		return true
+	)
+	local c = ORM_ctrlByName rl main
+	if c != undefined do
+	(
+		case classOf val of
+		(
+			BooleanClass: c.checked = val
+			Integer:      c.value  = val
+			Float:        c.value  = val
+			Double:       c.value  = val
+			Color:        c.color  = val
+		)
+	)
+	g_orm_uiSuppress = false
+	true
 )
 
 -- Применяет вычисленное «общее» значение (по выбранному из контекстного меню)
@@ -923,10 +1196,18 @@ fn ORM_applyCommon lookupKey mode =
 	local realName = lookup[3]
 	local prefix   = lookup[4]
 
-	local val = ORM_commonValue modIdx realName mode
+	local val = case mode of
+	(
+		#enable:  true
+		#disable: false
+		default:  ORM_commonValue modIdx realName mode
+	)
 	if val == undefined do return false
 
-	ORM_applyProperty modIdx realName val
+	undo "ModPropsLister Unify" on
+	(
+		ORM_applyProperty modIdx realName val
+	)
 
 	-- Отмечаем свойство как «одинаковое» в данных, чтобы UI не предлагал снова
 	if modIdx == 0 and g_orm_result.baseObjData != undefined then
@@ -941,41 +1222,250 @@ fn ORM_applyCommon lookupKey mode =
 				if (p.name as string) == realName do ( p.allSame = true; p.value = val; exit )
 	)
 
-	-- Активируем контрол и прячем кнопку «Сделать общим»
+	-- Активируем контрол, прячем кнопку «Сделать общим» и обновляем отображение значения
 	ORM_enableAfterCommon prefix realName
+	ORM_syncCtrlValue prefix realName val
 
 	true
 )
 
-
 -- ======================================================================
--- КОНТЕКСТНОЕ МЕНЮ «СДЕЛАТЬ ОБЩИМ» (rcmenu на уровне макроса)
--- rmc_common объявлен global, т.к. вызывается из global-функции ORM_onMakeCommon
--- (global-функции не видят макро-локальные переменные без явного объявления)
+-- ГРУППОВОЙ UNDO: одно действие Undo от НАЖАТИЯ до ОТПУСКАНИЯ мыши на спиннере.
+-- Первый `changed` открывает theHold.Begin(), `entered` (отпускание/Enter)
+-- закрывает theHold.Accept — 3ds Max сам группирует всё в одну undo-запись.
+-- Правый клик (entered inCancel:true) — theHold.Cancel(). theHold — прямые
+-- пробросы SDK без защиты, поэтому Begin/Accept/Cancel обёрнуты в try/catch.
 -- ======================================================================
 
-global rmc_common
-
-rcmenu rmc_common (
-	menuItem cc_max "Maximum"
-	menuItem cc_avg "Average"
-	menuItem cc_med "Median"
-	menuItem cc_min "Minimum"
-	menuItem cc_mode "Most common"
-
-	on cc_max  picked do ORM_applyCommon g_orm_ctxKey #max
-	on cc_avg  picked do ORM_applyCommon g_orm_ctxKey #avg
-	on cc_med  picked do ORM_applyCommon g_orm_ctxKey #median
-	on cc_min  picked do ORM_applyCommon g_orm_ctxKey #min
-	on cc_mode picked do ORM_applyCommon g_orm_ctxKey #mode
-)
-
--- Открывает контекстное меню «Сделать общим» для конкретного свойства
-fn ORM_onMakeCommon lookupKey =
+-- Первый тик изменения открывает hold; следующие тики пишут в уже открытый.
+-- Если снаружи уже идёт другая операция (theHold.Holding()) — свой hold не
+-- открываем (изменения запишутся во внешний, закрывать его не наша забота).
+fn ORM_gestureBegin label: =
 (
-	g_orm_ctxKey = lookupKey
-	popUpMenu rmc_common
+	if label != undefined do g_orm_incrUndoLabel = label
+	if g_orm_gestureActive do return true
+	if theHold.Holding() do return true
+	try ( theHold.Begin() ) catch ( ORM_logExcept "gestureBegin" (getCurrentException() as string); return false )
+	g_orm_gestureActive = true
 	true
+)
+
+-- Завершение группового undo (событие спиннера `entered`, а также rebuild/close/refresh):
+-- Accept — одна undo-запись на весь цикл нажатие-отпускание, inCancel:true — откат через Cancel.
+fn ORM_gestureCommit inCancel:false =
+(
+	if not g_orm_gestureActive do return true
+	g_orm_gestureActive = false
+	if not theHold.Holding() do return true
+	try
+	(
+		if inCancel then theHold.Cancel() else theHold.Accept g_orm_incrUndoLabel
+	)
+	catch ( ORM_logExcept "gestureCommit" (getCurrentException() as string) )
+	true
+)
+
+-- Групповой режим: снапшот базовых значений свойства со всех объектов.
+-- Возвращает запись g_orm_incrMap (см. её комментарий) или undefined, если режим не активен.
+fn ORM_incrFind lookupKey =
+(
+	for item in g_orm_incrMap do
+		if item[1] == lookupKey do return item
+	undefined
+)
+
+-- Начать групповой режим для свойства: запомнить текущие значения каждого объекта
+-- и активировать спиннер со стартовым фактором (0 — приращение, 100% — масштаб).
+-- mode: #incr = спиннер прибавляет дельту к базе, #scale = умножает базы на значение/100.
+-- Кнопка Unify НЕ прячется: её видимость показывает, что значения всё ещё разные.
+fn ORM_incrBegin lookupKey mode:#incr =
+(
+	local lookup = ORM_lookupFind lookupKey
+	if lookup == undefined do return false
+	local modIdx   = lookup[2]
+	local realName = lookup[3]
+	local prefix   = lookup[4]
+
+	local pairs = #()
+	for obj in g_orm_uniqueObjs do
+	(
+		if not (isValidNode obj) do continue
+		local target
+		try ( target = ORM_resolveTarget obj modIdx ) catch ( target = undefined )
+		if target == undefined do continue
+		local v
+		try ( v = getProperty target realName ) catch ( v = undefined )
+		if v != undefined do append pairs #(obj, v, modIdx, realName)
+	)
+	if pairs.count == 0 do return false
+
+	-- Держим по одному снапшоту на ключ, старые ключи не трогаем
+	g_orm_incrMap = for item in g_orm_incrMap where item[1] != lookupKey collect item
+	append g_orm_incrMap #(lookupKey, pairs, mode)
+
+	-- Активируем спиннер (при differ он создан enabled:false) и ставим стартовый фактор.
+	-- Программная установка .value стреляет `changed` (фактор «ничего не меняет» нельзя
+	-- применять) — глушим, чтобы не начать групповой undo.
+	local main = prefix + realName
+	local c = ORM_ctrlByName g_orm_rlProps main
+	if c != undefined do
+	(
+		c.enabled = true
+		g_orm_uiSuppress = true
+		c.value = if mode == #scale then 100 else 0
+		g_orm_uiSuppress = false
+	)
+	true
+)
+
+-- Применить фактор к базовым значениям каждого объекта.
+-- #incr:  новое = база + d
+-- #scale: новое = база * (d / 100)
+-- Вызывается прямо ВНУТРЬ открытого theHold (ORM_applyTick): всё накопленное
+-- за цикл нажатие-отпускание «запомнит» ORM_gestureCommit (entered спиннера)
+-- одной undo-записью. Сама функция без undo-клаузы — записывается ровно тем hold,
+-- что держим.
+fn ORM_incrApplyPairs lookupKey d =
+(
+	local item = ORM_incrFind lookupKey
+	if item == undefined do return false
+	local pairs   = item[2]
+	local isScale = (item[3] == #scale)
+	local addend = if isScale then 0.0 else (d as float)
+	local mult   = if isScale then (d as float) / 100.0 else 1.0
+	if not (ORM_validTargets()) do ( ORM_refreshUI quiet:true; return false )
+	for pair in pairs do
+	(
+		local obj    = pair[1]
+		local base   = pair[2]
+		local modIdx = pair[3]
+		local realNm = pair[4]
+		if not (isValidNode obj) do continue
+		local target
+		try ( target = ORM_resolveTarget obj modIdx ) catch ( target = undefined )
+		if target == undefined do continue
+		local newVal
+		try
+		(
+			newVal = case classOf base of
+			(
+				Integer: ( ( (base as float) * mult ) + addend ) as integer
+				Float:   ( ( (base as float) * mult ) + addend ) as float
+				Double:  ( ( (base as double) * mult ) + addend ) as double
+				default: base
+			)
+			setProperty target realNm newVal
+		)
+		catch ( ORM_logExcept "applyIncr" (getCurrentException() as string) )
+	)
+	true
+)
+
+-- Тик группового режима: фактор применяется ВНУТРЬ открытого theHold (ORM_gestureBegin),
+-- `entered` спиннера закроет его одним undo-шагом.
+-- Стартовый фактор игнорируем (дельту 0 / 100% — они ничего не меняют).
+fn ORM_applyTick lookupKey val =
+(
+	local item = ORM_incrFind lookupKey
+	if item == undefined do return true
+	local isScale = (item[3] == #scale)
+	local d = try ( val as float ) catch ( ( ORM_logExcept "incrDelta" (getCurrentException() as string); undefined ) )
+	if d == undefined do return true
+	if isScale then
+		( if (abs (d - 100.0)) < 0.0001 do return true )
+	else
+		( if d == 0 do return true )
+	ORM_gestureBegin label:(if isScale then "ModPropsLister Scale" else "ModPropsLister Incremental")
+	ORM_incrApplyPairs lookupKey d
+	true
+)
+
+-- Тип свойства по lookupKey (из данных текущего результата)
+fn ORM_ctxPtype lookupKey =
+(
+	local lookup = ORM_lookupFind lookupKey
+	if lookup == undefined do return undefined
+	local modIdx   = lookup[2]
+	local realName = lookup[3]
+	local theProps = undefined
+	if modIdx == 0 then
+	(
+		if g_orm_result != undefined and g_orm_result.baseObjData != undefined do
+			theProps = g_orm_result.baseObjData.props
+	)
+	else
+	(
+		if g_orm_result != undefined and modIdx <= g_orm_result.modDataList.count do
+			theProps = g_orm_result.modDataList[modIdx].props
+	)
+	if theProps == undefined do return undefined
+	for p in theProps do
+		if (p.name as string) == realName do return p.ptype
+	undefined
+)
+
+
+-- ======================================================================
+-- КОНТЕКСТНЫЕ МЕНЮ «СДЕЛАТЬ ОБЩИМ» (rcmenu на уровне макроса)
+-- Набор пунктов зависит от ТИПА свойства (см. ORM_onMakeCommon):
+--   числовое (float/integer/double): максимум/среднее/медиана/минимум/большинство + Incremental + Scale
+--   boolean: включить/выключить/большинство/медиана (арифметика с булевым невозможна)
+--   color/point3: среднее/большинство (медиана и min/max через as float невозможны)
+--   строки/прочее: только большинство
+-- g_orm_ctxKey — lookupKey свойства, по которому открыто меню.
+-- rmc_* объявлены global, т.к. вызываются из global-функций ORM_onMakeCommon/ORM_incrBegin.
+
+global rmc_num_common
+
+rcmenu rmc_num_common (
+	menuItem nc_max  "Maximum"
+	menuItem nc_avg  "Average"
+	menuItem nc_med  "Median"
+	menuItem nc_min  "Minimum"
+	menuItem nc_mode "Most common"
+	separator nc_sep
+	menuItem nc_incr  "Incremental"
+	menuItem nc_scale "Scale"
+
+	on nc_max   picked do ORM_applyCommon g_orm_ctxKey #max
+	on nc_avg   picked do ORM_applyCommon g_orm_ctxKey #avg
+	on nc_med   picked do ORM_applyCommon g_orm_ctxKey #median
+	on nc_min   picked do ORM_applyCommon g_orm_ctxKey #min
+	on nc_mode  picked do ORM_applyCommon g_orm_ctxKey #mode
+	on nc_incr  picked do ORM_incrBegin g_orm_ctxKey mode:#incr
+	on nc_scale picked do ORM_incrBegin g_orm_ctxKey mode:#scale
+)
+
+global rmc_bool_common
+
+rcmenu rmc_bool_common (
+	menuItem bc_on   "Enable"
+	menuItem bc_off  "Disable"
+	menuItem bc_mode "Most common"
+	menuItem bc_med  "Median"
+
+	on bc_on   picked do ORM_applyCommon g_orm_ctxKey #enable
+	on bc_off  picked do ORM_applyCommon g_orm_ctxKey #disable
+	on bc_mode picked do ORM_applyCommon g_orm_ctxKey #mode
+	on bc_med  picked do ORM_applyCommon g_orm_ctxKey #median
+)
+
+global rmc_vec_common
+
+rcmenu rmc_vec_common (
+	menuItem vc_avg  "Average"
+	menuItem vc_mode "Most common"
+
+	on vc_avg  picked do ORM_applyCommon g_orm_ctxKey #avg
+	on vc_mode picked do ORM_applyCommon g_orm_ctxKey #mode
+)
+
+global rmc_mode_common
+
+rcmenu rmc_mode_common (
+	menuItem mc_mode "Most common"
+
+	on mc_mode picked do ORM_applyCommon g_orm_ctxKey #mode
 )
 
 -- Контекстное меню кнопки On/Off при СМЕШАННОМ состоянии модификатора
@@ -989,6 +1479,25 @@ rcmenu rmc_toggle (
 
 	on tm_enable  picked do ORM_toggleSelected true
 	on tm_disable picked do ORM_toggleSelected false
+)
+
+-- Открывает контекстное меню «Сделать общим»: набор пунктов зависит от типа свойства,
+-- чтобы не предлагать арифметику, которая для boolean/color/point3/строк бросает ошибку.
+fn ORM_onMakeCommon lookupKey =
+(
+	g_orm_ctxKey = lookupKey
+	local menu = case ORM_ctxPtype lookupKey of
+	(
+		#float:   rmc_num_common
+		#integer: rmc_num_common
+		#double:  rmc_num_common
+		#boolean: rmc_bool_common
+		#color:   rmc_vec_common
+		#point3:  rmc_vec_common
+		default:  rmc_mode_common
+	)
+	popUpMenu menu
+	true
 )
 
 
@@ -1112,7 +1621,8 @@ fn ORM_clearUI msg:"No selection." =
 		local lb = g_orm_rollMods.lst_mods
 		local oldCnt = lb.Items.Count
 		local oldText = ""
-		if oldCnt == 1 do try ( oldText = lb.Items.Item[0] as string ) catch ()
+		if oldCnt == 1 do try ( oldText = lb.Items.Item[0] as string ) \
+			catch ( ORM_logExcept "listItemRead" (getCurrentException() as string) )
 		if oldCnt != 1 or oldText != msg do
 		(
 			ORM_listSetItems #(msg)
@@ -1129,11 +1639,15 @@ fn ORM_clearUI msg:"No selection." =
 	g_orm_selInfo = #()
 	g_orm_lastSelKey = ""
 	g_orm_modClasses = #()
+	ORM_gestureCommit()
+	g_orm_incrMap = #()
 
 	if g_orm_rlProps != undefined and g_orm_floater != undefined do
 	(
-		try ( removeRollout g_orm_rlProps g_orm_floater ) catch ()
-		try ( destroyDialog g_orm_rlProps ) catch ()
+		try ( removeRollout g_orm_rlProps g_orm_floater ) \
+			catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
+		try ( destroyDialog g_orm_rlProps ) \
+			catch ( ORM_logExcept "destroyProps" (getCurrentException() as string) )
 		g_orm_rlProps = undefined
 		changed = true
 	)
@@ -1147,8 +1661,21 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	-- Безопасность для callbacks: если floater уже закрыт — не трогаем UI (см. архитектура п. 3)
 	if g_orm_floater == undefined or g_orm_rollMods == undefined do return false
 
-	-- Запоминаем выбранный элемент, чтобы сохранить контекст при автозамёте
-	local wasSel = copy g_orm_selInfo
+	-- Запоминаем выбранный элемент, чтобы сохранить контекст при автозамёте.
+	-- wasLabel: текст строки — она и будет критерием «имя совпадает» при восстановлении.
+	-- wasSel: кортеж (#("mod", mi) / #("base", 0)) берём напрямую из ЖИВОГО списка
+	-- (глобал g_orm_selInfo оказался ненадёжным — в дебаге держал ok вместо массива).
+	local prevIdx0 = g_orm_rollMods.lst_mods.SelectedIndex   -- 0-based, -1 = ничего не выбрано
+	local wasSel = undefined
+	local wasLabel = ""
+	if prevIdx0 >= 0 and prevIdx0 < g_orm_listItems.count do
+		wasSel = deepcopy g_orm_listItems[prevIdx0 + 1]
+	if prevIdx0 >= 0 and prevIdx0 < g_orm_rollMods.lst_mods.Items.Count do
+		wasLabel = try ( g_orm_rollMods.lst_mods.Items.Item[prevIdx0] as string ) catch ( "" )
+	if g_orm_debug do
+		format "ModPropsLister[refresh]: STEP 1 capture — prevIdx0=% Items.Count=% wasLabel='%' wasSel=% wasSelCnt=% g_orm_selInfo=%\n" \
+			prevIdx0 g_orm_rollMods.lst_mods.Items.Count wasLabel wasSel \
+			(if classOf wasSel == Array then wasSel.count else 0) (g_orm_selInfo as string)
 
 	local sel = selection as array
 	local validCount = 0
@@ -1182,6 +1709,9 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	ORM_setToggleUI false
 	g_orm_rollMods.btn_toggle.enabled = false
 	g_orm_rollMods.btn_delete.enabled = false
+	if g_orm_debug do
+		format "ModPropsLister[refresh]: STEP 2 rebuilt — g_orm_listItems.count=% listItems.count=% (SelectedIndex now %)\n" \
+			g_orm_listItems.count listItems.count g_orm_rollMods.lst_mods.SelectedIndex
 
 	-- Убираем rollout свойств из floaterа, если он был (removeRollout, а не только destroyDialog)
 	if g_orm_rlProps != undefined and g_orm_floater != undefined do
@@ -1202,18 +1732,51 @@ fn ORM_refreshUI quiet:false autoSel:false =
 		if g_orm_listItems.count > 0 do
 			g_orm_rollMods.lst_mods.SelectedIndex = 0
 	)
-	else if classOf wasSel == Array and wasSel.count > 0 do
+	else if classOf wasSel == Array and wasSel.count > 0 then
 	(
+		-- Восстанавливаем выбор ТОЛЬКО если на той же позиции (i) и имя строки (label)
+		-- совпадает с сохранённым: позиция могла сдвинуться, а modDataIdx — указывать
+		-- на другой модификатор после изменения стека.
+		local restored = false
 		for i = 1 to g_orm_listItems.count do
-			if g_orm_listItems[i][1] == wasSel[1] and g_orm_listItems[i][2] == wasSel[2] do
+			if g_orm_listItems[i][1] == wasSel[1] and g_orm_listItems[i][2] == wasSel[2] \
+				and listItems[i] == wasLabel do
 			(
+				-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged →
+				-- ORM_onListSelect → ORM_rebuildPropsRollout (свойства выбранного модификатора).
 				g_orm_rollMods.lst_mods.SelectedIndex = i - 1
+				restored = true
+				if g_orm_debug do
+					format "ModPropsLister[refresh]: RESTORED row=% label='%'\n" (i - 1) listItems[i]
 				exit
 			)
+		if not restored do
+		(
+			local doPrint = g_orm_debug
+			if doPrint do
+			(
+				local labelMatch = -1
+				local typeMatch = -1
+				for i = 1 to listItems.count do
+				(
+					if listItems[i] == wasLabel do ( if labelMatch < 0 do labelMatch = i )
+					if g_orm_listItems[i][1] == wasSel[1] and g_orm_listItems[i][2] == wasSel[2] do ( if typeMatch < 0 do typeMatch = i )
+				)
+				format "ModPropsLister[refresh]: NOT restored — wasLabel='%' labelMatch=% typeMatch=% want=%/% items=%\n" \
+					wasLabel labelMatch typeMatch (wasSel[1] as string) (wasSel[2] as string) listItems.count
+				for i = 1 to listItems.count do
+					format "    [%] '%' %/%\n" (i - 1) listItems[i] (g_orm_listItems[i][1] as string) (g_orm_listItems[i][2] as string)
+			)
+		)
 	)
+	else if g_orm_debug do
+		format "ModPropsLister[refresh]: STEP 3 no selInfo to restore (wasSel empty, autoSel=%)\n" autoSel
 
 	-- Автовысота под текущий набор свитков
 	ORM_updateFloaterHeight()
+	if g_orm_debug do
+		format "ModPropsLister[refresh]: STEP 4 final — SelectedIndex=% Items.Count=%\n" \
+			g_orm_rollMods.lst_mods.SelectedIndex g_orm_rollMods.lst_mods.Items.Count
 
 	true
 )
@@ -1282,6 +1845,7 @@ fn ORM_unregisterCallbacks =
 -- Закрытие диалога + floater
 fn ORM_closeDialog =
 (
+	ORM_gestureCommit()
 	ORM_unregisterCallbacks()
 	try ( destroyDialog g_orm_rlProps ) \
 		catch ( ORM_logExcept "destroyPropsClose" (getCurrentException() as string) )
@@ -1313,17 +1877,22 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 	if propInfo.ptype == #float or propInfo.ptype == #integer then
 	(
 		local initVal = if propInfo.value != undefined then propInfo.value else 0.0
-		-- диапазон: зависит от величины значения (см. архитектура п. 6)
+		-- диапазон: зависит от величины значения (шаг — см. архитектура п. 13)
 		local mag = abs (initVal as float)
 		if mag < 100 do mag = 100
 		local rangeMin = -mag * 50
 		local rangeMax =  mag * 50
+		-- Адаптивный шаг вращения (scale) до первого драга — от СТАРТОВОГО значения
+		-- (1% величины, ORM_stepScale). Дальше scale живёт от buttondown, см. ниже.
+		-- Для integer шаг — целый, минимум 1.
+		local step = ORM_stepScale initVal
+		if propInfo.ptype == #integer do step = amax 1 (ceil step)
 		local typeFlag = if propInfo.ptype == #float then "#float" else "#integer"
 		local acrossStr = if differing then " across:2" else ""
 
 		rc.addControl #spinner ctrlName (pNameStr + ":") paramStr:(
 			"range:[" + rangeMin as string + "," + rangeMax as string + "," + initVal as string + "] " \
-			+ "type:" + typeFlag + " fieldWidth:75 align:#left" + disStr + acrossStr
+			+ "type:" + typeFlag + " scale:" + step as string + " fieldWidth:75 align:#left" + disStr + acrossStr
 		)
 		height += 22
 		if differing do
@@ -1332,8 +1901,40 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 			rc.addHandler (ctrlName + "_mk") #pressed filter:on \
 				codeStr:("if ORM_onMakeCommon \"" + lookupKey + "\" do ()")
 		)
+		-- Шаг спиннера ставится НА СТАРТЕ драга (buttondown): обычное вращение — адаптивный
+		-- 1% от ТЕКУЩЕГО значения (ORM_stepScale), с зажатым Alt — точный шаг по формуле
+		-- (abs(v)+1)/1000 (степенной: ~0.1% от величины на больших значениях, ~0.001 на малых).
+		-- В Scale-режиме (см. g_orm_incrMap) контрол показывает ФАКТОР в %, а не величину:
+		-- шаг тоже степенной, но ОТ базы 100 — (abs(100)+1)/1000 = 0.101 (1 единица = 0.1%),
+		-- а не от средней величины параметров.
+		-- Решение — в ORM_spinStep. Во время драга scale НЕ меняется (см. архитектура п. 13),
+		-- поэтому value в changed не переписываем — Max сам шагает выбранным множителем.
+		-- После отпускания (buttonup) scale пересчитывается под новое значение (следующий драг).
+		local isInt = (propInfo.ptype == #integer)
+		local castExpr = if isInt then "val" else "val as float"
+		local spinStepExpr = if isInt \
+			then "(amax 1 (ceil (ORM_spinStep " + ctrlName + " \"" + lookupKey + "\" alt:keyboard.altPressed)))" \
+			else "(ORM_spinStep " + ctrlName + " \"" + lookupKey + "\" alt:keyboard.altPressed)"
+		local spinStepUpExpr = if isInt \
+			then "(amax 1 (ceil (ORM_spinStep " + ctrlName + " \"" + lookupKey + "\")))" \
+			else "(ORM_spinStep " + ctrlName + " \"" + lookupKey + "\")"
+		rc.addHandler ctrlName #buttondown \
+			codeStr:(
+				"local _s = " + spinStepExpr + "\n" +
+				"ORM_setSpinnerScale " + ctrlName + " _s\n"
+			)
+		rc.addHandler ctrlName #buttonup \
+			codeStr:("ORM_setSpinnerScale " + ctrlName + " " + spinStepUpExpr + "\n")
 		rc.addHandler ctrlName #changed paramStr:"val" filter:on \
-			codeStr:("if ORM_propChanged \"" + lookupKey + "\" val do ()")
+			codeStr:(
+				"if g_orm_uiSuppress do return false\n" +
+				"local _cv = " + castExpr + "\n" +
+				"ORM_propChanged \"" + lookupKey + "\" _cv\n"
+			)
+		-- Завершение группового undo: entered вызывается и при отпускании мыши, и при вводе
+		-- с клавиатуры (доки Spinner). ORM_gestureCommit закрывает theHold.
+		rc.addHandler ctrlName #entered paramStr:"_inSpin _inCancel" \
+			codeStr:("ORM_gestureCommit inCancel:_inCancel")
 	)
 	else if propInfo.ptype == #boolean then
 	(
@@ -1352,7 +1953,7 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 				codeStr:("if ORM_onMakeCommon \"" + lookupKey + "\" do ()")
 		)
 		rc.addHandler ctrlName #changed paramStr:"val" filter:on \
-			codeStr:("if ORM_propChanged \"" + lookupKey + "\" val do ()")
+			codeStr:("if not g_orm_uiSuppress and ORM_propChanged \"" + lookupKey + "\" val do ()")
 	)
 	else if propInfo.ptype == #color then
 	(
@@ -1369,7 +1970,7 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 				codeStr:("if ORM_onMakeCommon \"" + lookupKey + "\" do ()")
 		)
 		rc.addHandler ctrlName #changed paramStr:"val" filter:on \
-			codeStr:("if ORM_propColorChanged \"" + lookupKey + "\" " + ctrlName + ".color do ()")
+			codeStr:("if not g_orm_uiSuppress and ORM_propColorChanged \"" + lookupKey + "\" " + ctrlName + ".color do ()")
 	)
 	else if propInfo.ptype == #point3 then
 	(
@@ -1383,9 +1984,12 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 			local compCtrl = ctrlName + "_" + comp
 			local compLabel = pNameStr + " " + (toUpper comp) + ":"
 			local acrossStr = if (differing and ci == 1) then " across:2" else ""
+			-- Стартовый шаг при создании: 1% от величины компонента (ORM_stepScale). В рантайме
+			-- scale ставится на старте каждого драга (buttondown), см. архитектура п. 13.
+			local step = ORM_stepScale compVal
 			rc.addControl #spinner compCtrl compLabel paramStr:(
 				"range:[-999999,999999," + compVal as string + "] " \
-				+ "type:#float fieldWidth:55 align:#left" + disStr + acrossStr
+				+ "type:#float scale:" + step as string + " fieldWidth:55 align:#left" + disStr + acrossStr
 			)
 			height += 22
 			if differing and ci == 1 do
@@ -1394,8 +1998,24 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 				rc.addHandler (ctrlName + "_mk") #pressed filter:on \
 					codeStr:("if ORM_onMakeCommon \"" + lookupKey + "\" do ()")
 			)
+			-- Scale на старте драга: обычное вращение — 1% от текущего (ORM_stepScale),
+			-- с зажатым Alt — точный шаг по формуле (abs(v)+1)/1000 (степенной);
+			-- во время драга scale фиксирован, value не переписываем (см. архитектура п. 13).
+			rc.addHandler compCtrl #buttondown \
+				codeStr:(
+					"local _s = if keyboard.altPressed then ((abs (" + compCtrl + ".value as float) + 1.0) / 1000.0) else (ORM_stepScale " + compCtrl + ".value)\n" +
+					"ORM_setSpinnerScale " + compCtrl + " _s\n"
+				)
+			rc.addHandler compCtrl #buttonup \
+				codeStr:("ORM_setSpinnerScale " + compCtrl + " (ORM_stepScale " + compCtrl + ".value)\n")
 			rc.addHandler compCtrl #changed paramStr:"val" filter:on \
-				codeStr:("if ORM_propPoint3Changed \"" + lookupKey + "\" \"" + comp + "\" val do ()")
+				codeStr:(
+					"if g_orm_uiSuppress do return false\n" +
+					"local _cv = val as float\n" +
+					"ORM_propPoint3Changed \"" + lookupKey + "\" \"" + comp + "\" _cv\n"
+				)
+			rc.addHandler compCtrl #entered paramStr:"_inSpin _inCancel" \
+				codeStr:("ORM_gestureCommit inCancel:_inCancel")
 		)
 	)
 )
@@ -1405,6 +2025,8 @@ fn ORM_rebuildPropsRollout =
 (
 	-- guard по типу: g_orm_selInfo может оказаться НЕ массивом (OK), см. архитектура п. 2
 	if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do return false
+	ORM_gestureCommit()
+	g_orm_incrMap = #()
 
 	-- Только пересоздавать, если выбранная запись реально поменялась (см. архитектура п. 4)
 	local curKey = (g_orm_selInfo[1] as string) + "_" + (g_orm_selInfo[2] as string)
@@ -1437,8 +2059,12 @@ fn ORM_rebuildPropsRollout =
 	if isBaseObj then
 	(
 		if g_orm_result.baseObjData == undefined do return false
-		sectionTitle = "Base: " + (g_orm_result.baseObjData.objClass as string)
-		props = g_orm_result.baseObjData.props
+		local bd = g_orm_result.baseObjData
+		sectionTitle = if bd.isMixed then
+			"Base: MIXED" + (if bd.commonSuper != undefined then " (" + bd.commonSuper + ")" else "")
+		else
+			("Base: " + (bd.objClass as string))
+		props = bd.props
 		modIdx = 0
 		prefix = "v_"
 	)
@@ -1455,6 +2081,28 @@ fn ORM_rebuildPropsRollout =
 	)
 
 	if props.count == 0 do return false
+
+	-- Средняя величина числовых параметров свитка (см. глобал g_orm_avgMag):
+	-- только ненулевые значения, точка3 считается по компонентам; всё нулевое → 1.0,
+	-- чтобы шаг спиннеров не схлопывался в 0.01 на пустых (нулевых) контролах.
+	g_orm_avgMag = 1.0
+	local avgAcc = 0.0
+	local avgCnt = 0
+	for p in props do
+	(
+		if p.value == undefined do continue
+		local vals = case p.ptype of
+		(
+			#float:   #(p.value)
+			#integer: #(p.value)
+			#point3:  #(p.value.x, p.value.y, p.value.z)
+			default:  #()
+		)
+		for vv in vals do
+			if (abs (vv as float)) > 0.0001 do
+			( avgAcc += abs (vv as float); avgCnt += 1 )
+	)
+	if avgCnt > 0 do g_orm_avgMag = avgAcc / avgCnt
 
 	local rc = rolloutCreator "g_orm_rlProps" sectionTitle
 	rc.begin()
@@ -1477,7 +2125,7 @@ fn ORM_rebuildPropsRollout =
 	if hasAbout do addRollout g_orm_rollAbout g_orm_floater
 
 	-- Сворачиваем About при выборе элемента (см. архитектура п. 2)
-	try ( g_orm_rollAbout.open = false ) catch ()
+	if g_orm_rollAbout != undefined do g_orm_rollAbout.open = false
 
 	-- Автовысота под новый набор свитков
 	ORM_updateFloaterHeight()
@@ -1519,25 +2167,25 @@ fn ORM_enableDoubleBuffered ctrl =
 
 -- Загрузка иконок для owner-draw. Штатный загрузчик 3ds Max: openBitMap + getPixels
 -- с форматом #rgba — Max честно отдаёт альфу из 32-бит BMP (GDI+ видит файл как
--- Format32bppRgb и выбрасывает 4-й байт). ВСЕ ошибки печатаются в Listener, чтобы
--- не уходить в тупик на пустых catch.
+-- Format32bppRgb и выбрасывает 4-й байт). Диагностика печатается в Listener при
+-- g_orm_debug=true (без него — молча, ошибки в catch не теряются).
 fn ORM_loadIconFrames path =
 (
 	local frames = #()
-	format "ModPropsLister: loadIconFrames: '%'\n" path
+	if g_orm_debug do format "ModPropsLister: loadIconFrames: '%'\n" path
 	local bm = undefined
 	try ( bm = openBitMap path ) catch
 	(
-		format "ModPropsLister:   openBitMap error: %\n" (getCurrentException() as string)
+		if g_orm_debug do format "ModPropsLister:   openBitMap error: %\n" (getCurrentException() as string)
 	)
 	if bm == undefined then
-		format "ModPropsLister:   openBitMap returned undefined (file missing/unreadable?)\n"
+		( if g_orm_debug do format "ModPropsLister:   openBitMap returned undefined (file missing/unreadable?)\n" )
 	else
 	(
 		local fw = g_orm_iconSize
 		local fh = try ( bm.height as integer ) catch ( 0 )
 		local frameCount = (try ( bm.width as integer ) catch ( 0 )) / fw
-		format "ModPropsLister:   bitmap %x% -> % frame(s) %x%\n" bm.width bm.height frameCount fw fh
+		if g_orm_debug do format "ModPropsLister:   bitmap %x% -> % frame(s) %x%\n" bm.width bm.height frameCount fw fh
 		if fw >= 1 and fh >= 1 and frameCount >= 1 then
 		(
 			try
@@ -1546,9 +2194,9 @@ fn ORM_loadIconFrames path =
 				local probe = getPixels bm [0, 0] 1
 				try ( alphaOK = (probe[1].a != undefined) ) catch ( alphaOK = false )
 				if alphaOK then
-					format "ModPropsLister:   probe[0,0] .a=% .r=% .g=% .b=%\n" probe[1].a probe[1].r probe[1].g probe[1].b
+					( if g_orm_debug do format "ModPropsLister:   probe[0,0] .a=% .r=% .g=% .b=%\n" probe[1].a probe[1].r probe[1].g probe[1].b )
 				else
-					format "ModPropsLister:   WARNING: (color).a not readable -> alpha = 1.0 (fully opaque)\n"
+					( if g_orm_debug do format "ModPropsLister:   WARNING: (color).a not readable -> alpha = 1.0 (fully opaque)\n" )
 				local pf = (dotNetClass "System.Drawing.Imaging.PixelFormat").Format32bppArgb
 				for k = 0 to frameCount - 1 do
 				(
@@ -1556,7 +2204,7 @@ fn ORM_loadIconFrames path =
 					for y = 0 to fh - 1 do
 					(
 						local row = getPixels bm [k * fw, y] fw
-						if row.count != fw do
+						if row.count != fw and g_orm_debug do
 							format "ModPropsLister:   row % len % (expected %)\n" y row.count fw
 						for x = 1 to row.count do
 						(
@@ -1575,12 +2223,12 @@ fn ORM_loadIconFrames path =
 					try ( fr.Dispose() ) \
 						catch ( ORM_logExcept "disposeFrame" (getCurrentException() as string) )
 				frames = #()
-				format "ModPropsLister:   pixel copy failed: %\n" (getCurrentException() as string)
+				if g_orm_debug do format "ModPropsLister:   pixel copy failed: %\n" (getCurrentException() as string)
 			)
 		)
 		close bm
 	)
-	format "ModPropsLister:   result: % icon frames\n" frames.count
+	if g_orm_debug do format "ModPropsLister:   result: % icon frames\n" frames.count
 	frames
 )
 
@@ -1775,6 +2423,21 @@ rollout rollout_mods "Modifiers"
 	on chk_light   changed st do ORM_onFilterChanged()
 	on chk_camera  changed st do ORM_onFilterChanged()
 	on chk_helper  changed st do ORM_onFilterChanged()
+
+	on btn_refresh pressed do
+	(
+		-- Ручное обновление: считывает реальный стек и пересобирает список + свойства.
+		-- ORM_refreshUI (autoSel:false) сохраняет текущий выбранный элемент.
+		-- Диагностика восстановления выделения печатается при g_orm_debug.
+		if g_orm_refreshing do return false
+		g_orm_refreshing = true
+		try ( ORM_refreshUI() ) catch
+		(
+			if g_orm_debug do
+				format "ModPropsLister: refresh error: %\n" (getCurrentException() as string)
+		)
+		g_orm_refreshing = false
+	)
 
 	-- Автовысота при сворачивании/разворачивании свитка; сохранение позиции при закрытии
 	on rollout_mods rolledUp state do ORM_updateFloaterHeight()
