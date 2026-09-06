@@ -288,6 +288,14 @@ global ORM_drawListItem
 global ORM_refreshList
 global g_orm_debug
 
+-- Логирование исключений: ВСЕ catch идут через этот хелпер, пустых catch в скрипте нет.
+-- g_orm_debug=false — молчание допускается только там, где сбой заведомо безопасен
+-- (в таких местах это отмечено комментарием); g_orm_debug=true — всё в Listener.
+fn ORM_logExcept ctx msg =
+(
+	if g_orm_debug do format "ModPropsLister[%]: %\n" ctx msg
+	undefined
+)
 
 -- ======================================================================
 -- LAYER 1: ANALYSIS
@@ -354,7 +362,7 @@ fn ORM_collectSupportedProps obj modOrBase =
 			if pnameStr == ob do ( isObsolete = true; exit )
 		if isObsolete do continue
 		local val = undefined
-		try ( val = getProperty modOrBase pname ) catch ()
+		try ( val = getProperty modOrBase pname ) catch ( ORM_logExcept "readProp" (getCurrentException() as string) )
 		if val == undefined do continue
 		local pt = ORM_getPropType val
 		if pt != undefined do
@@ -455,7 +463,7 @@ fn ORM_analyzeSelection sel =
 					if item[1] == c do ( otherMod = item[2]; exit )
 				if otherMod == undefined do ( allSame = false; exit )
 				local otherVal = undefined
-				try ( otherVal = getProperty otherMod props[pi].name ) catch ()
+				try ( otherVal = getProperty otherMod props[pi].name ) catch ( ORM_logExcept "diffProps" (getCurrentException() as string) )
 				if otherVal == undefined \
 					or (classOf props[pi].value) != (classOf otherVal) \
 					or props[pi].value != otherVal \
@@ -507,7 +515,7 @@ fn ORM_analyzeSelection sel =
 					for ui = 2 to uniqueObjs.count do
 					(
 						local otherVal = undefined
-						try ( otherVal = getProperty uniqueObjs[ui].baseObject props[pi].name ) catch ()
+						try ( otherVal = getProperty uniqueObjs[ui].baseObject props[pi].name ) catch ( ORM_logExcept "diffBaseProps" (getCurrentException() as string) )
 						if otherVal == undefined \
 							or props[pi].value != otherVal \
 							do ( allSame = false; exit )
@@ -600,7 +608,7 @@ fn ORM_applyProperty modIdx propNameStr value =
 		local target
 		try ( target = ORM_resolveTarget obj modIdx ) catch ( target = undefined )
 		if target != undefined do
-			try ( setProperty target propNameStr value ) catch ()
+			try ( setProperty target propNameStr value ) catch ( ORM_logExcept ("setProp " + propNameStr) (getCurrentException() as string) )
 	)
 )
 
@@ -715,7 +723,8 @@ fn ORM_toggleModifier modClass state =
 		for i = 1 to obj.modifiers.count do
 			if classOf obj.modifiers[i] == modClass do
 			(
-				try ( obj.modifiers[i].enabled = state ) catch ()
+				try ( obj.modifiers[i].enabled = state ) \
+					catch ( ORM_logExcept ("toggle " + (modClass as string)) (getCurrentException() as string) )
 				applied = true
 				exit
 			)
@@ -739,7 +748,8 @@ fn ORM_collectValues modIdx propName =
 		try ( target = ORM_resolveTarget obj modIdx ) catch ( target = undefined )
 		if target != undefined do
 		(
-			try ( append vals (getProperty target propName) ) catch ()
+			try ( append vals (getProperty target propName) ) \
+				catch ( ORM_logExcept ("collect " + propName) (getCurrentException() as string) )
 		)
 	)
 	vals
@@ -858,7 +868,7 @@ fn ORM_propPoint3Changed propNameStr component val =
 	local currentVal = undefined
 	local target = ORM_resolveTarget g_orm_uniqueObjs[1] modIdx
 	if target != undefined do
-		try ( currentVal = getProperty target realName ) catch ()
+		try ( currentVal = getProperty target realName ) catch ( ORM_logExcept "readVal" (getCurrentException() as string) )
 	if currentVal == undefined do currentVal = [0,0,0]
 
 	case component of
@@ -1176,8 +1186,10 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	-- Убираем rollout свойств из floaterа, если он был (removeRollout, а не только destroyDialog)
 	if g_orm_rlProps != undefined and g_orm_floater != undefined do
 	(
-		try ( removeRollout g_orm_rlProps g_orm_floater ) catch ()
-		try ( destroyDialog g_orm_rlProps ) catch ()
+		try ( removeRollout g_orm_rlProps g_orm_floater ) \
+			catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
+		try ( destroyDialog g_orm_rlProps ) \
+			catch ( ORM_logExcept "destroyProps" (getCurrentException() as string) )
 		g_orm_rlProps = undefined
 	)
 	g_orm_lastSelKey = ""
@@ -1227,12 +1239,14 @@ fn ORM_cbRefresh autoSel:false =
 	)
 	catch
 	(
-		try ( fileIn "ErrorDump.ms" ) catch ()
+		try ( fileIn "ErrorDump.ms" ) \
+		catch ( ORM_logExcept "errorDumpLoad" (getCurrentException() as string) )
 		if classOf FmtError == MAXScriptFunction then
 			print ("ModPropsLister: callback error:\n" + (FmtError stackLevels:4))
 		else
 			print ("ModPropsLister: callback error: " + (getCurrentException() as string))
-		try ( callbacks.removeScripts id:#ModPropsLister ) catch ()
+		try ( callbacks.removeScripts id:#ModPropsLister ) \
+		catch ( ORM_logExcept "removeCallbacks" (getCurrentException() as string) )
 		try
 		(
 			callbacks.addScript #selectionSetChanged       "ORM_cbRefresh autoSel:true" id:#ModPropsLister
@@ -1252,7 +1266,8 @@ fn ORM_cbRefresh autoSel:false =
 -- Функции вызываются global (доступны из контекста callback). id гарантирует отсутствие дублей.
 fn ORM_registerCallbacks =
 (
-	try ( callbacks.removeScripts id:#ModPropsLister ) catch ()
+	try ( callbacks.removeScripts id:#ModPropsLister ) \
+		catch ( ORM_logExcept "removeCallbacks" (getCurrentException() as string) )
 	callbacks.addScript #selectionSetChanged       "ORM_cbRefresh autoSel:true" id:#ModPropsLister
 	callbacks.addScript #postModifierAdded         "ORM_cbRefresh()" id:#ModPropsLister
 	callbacks.addScript #postModifierDeleted       "ORM_cbRefresh()" id:#ModPropsLister
@@ -1260,16 +1275,19 @@ fn ORM_registerCallbacks =
 
 fn ORM_unregisterCallbacks =
 (
-	try ( callbacks.removeScripts id:#ModPropsLister ) catch ()
+	try ( callbacks.removeScripts id:#ModPropsLister ) \
+		catch ( ORM_logExcept "removeCallbacks" (getCurrentException() as string) )
 )
 
 -- Закрытие диалога + floater
 fn ORM_closeDialog =
 (
 	ORM_unregisterCallbacks()
-	try ( destroyDialog g_orm_rlProps ) catch ()
+	try ( destroyDialog g_orm_rlProps ) \
+		catch ( ORM_logExcept "destroyPropsClose" (getCurrentException() as string) )
 	g_orm_rlProps = undefined
-	try ( closeRolloutFloater g_orm_floater ) catch ()
+	try ( closeRolloutFloater g_orm_floater ) \
+		catch ( ORM_logExcept "closeFloater" (getCurrentException() as string) )
 	g_orm_floater = undefined
 )
 
@@ -1396,8 +1414,10 @@ fn ORM_rebuildPropsRollout =
 	-- Удаляем старый rollout из floaterа (именно removeRollout, destroyDialog его не убирает из floaterа)
 	if g_orm_rlProps != undefined and g_orm_floater != undefined do
 	(
-		try ( removeRollout g_orm_rlProps g_orm_floater ) catch ()
-		try ( destroyDialog g_orm_rlProps ) catch ()
+		try ( removeRollout g_orm_rlProps g_orm_floater ) \
+			catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
+		try ( destroyDialog g_orm_rlProps ) \
+			catch ( ORM_logExcept "destroyProps" (getCurrentException() as string) )
 		g_orm_rlProps = undefined
 	)
 
@@ -1551,7 +1571,9 @@ fn ORM_loadIconFrames path =
 			)
 			catch
 			(
-				for fr in frames do ( try ( fr.Dispose() ) catch () )
+				for fr in frames do \
+					try ( fr.Dispose() ) \
+						catch ( ORM_logExcept "disposeFrame" (getCurrentException() as string) )
 				frames = #()
 				format "ModPropsLister:   pixel copy failed: %\n" (getCurrentException() as string)
 			)
@@ -1642,7 +1664,8 @@ fn ORM_drawListItem args fPlain fItalic =
 		catch ( undefined )
 	if backBrush != undefined do
 	(
-		try ( g.FillRectangle backBrush rect ) catch ()
+		try ( g.FillRectangle backBrush rect ) \
+			catch ( ORM_logExcept "fillRect" (getCurrentException() as string) )
 		backBrush.Dispose()
 	)
 
@@ -1674,7 +1697,7 @@ fn ORM_drawListItem args fPlain fItalic =
 	-- (шрифты закреплены за контролом, поэтому живые, без shear).
 	local f = fPlain
 	if f == undefined do
-		try ( f = args.Font ) catch ()
+		try ( f = args.Font ) catch ( ORM_logExcept "argsFont" (getCurrentException() as string) )
 	local fIt = fItalic
 	if fIt == undefined do fIt = f
 	if isInst do f = fIt
@@ -1815,7 +1838,8 @@ fn ORM_updateFloaterHeight =
 	local maxH = (sysInfo.DesktopSize)[2] / scale_dpi
 	if newH > maxH do newH = maxH
 	if newH < 200 do newH = 200
-	try ( g_orm_floater.size = [g_orm_floater.size[1], newH] ) catch ()
+	try ( g_orm_floater.size = [g_orm_floater.size[1], newH] ) \
+		catch ( ORM_logExcept "floaterResize" (getCurrentException() as string) )
 	true
 )
 
