@@ -7,9 +7,9 @@
 UI:
   Rollout "Modifiers" — список: модификаторы сверху (порядок стека, верхний первым),
       baseobject ПОСЛЕДНИМ внизу; переключатель On (вкл/выкл модификатора),
-      кнопка Delete. Состояние enabled показывается В НАЧАЛЕ строки списка:
-      "👁️" — все вкл, "👁️‍🗨️" — все выкл, "∅" — смешанное (часть объектов
-      вкл, часть выкл).
+      кнопка Delete. Состояние enabled показывается ИКОНКОЙ глаза в начале строки
+      (owner-draw, кадры 9/10/11 BMP): открытый — все вкл, закрытый — все выкл,
+      смешанный — часть объектов вкл, часть выкл.
   Rollout "Properties" — динамический свиток контролов выбранного элемента
       (генерируется rolloutCreator'ом на лету, пересоздаётся при смене выбора).
   Rollout "About" — инфо (сворачивается при выборе элемента, всегда последний).
@@ -150,9 +150,9 @@ local VERSION = "1.0.1 (2026-09-05)"
 
 local lbl_ver_caption = APP_TITLE + " " + VERSION
 
--- Иконки (12 кадров) в usericons\ModProps_24i.bmp:
+-- Иконки в usericons\ModProps_16i.bmp (число кадров — locIconCount в rollout_mods):
 --   1 — приложение, 2-8 — типы нодов, 9 — открытый глаз, 10 — закрытый,
---   11 — смешанный, 12 — удаление
+--   11 — смешанный, 12 — удаление, 13 — обновить (Refresh)
 local icon_path = (getDir #usericons) + "\\ModProps_16i.bmp"
 
 
@@ -211,10 +211,15 @@ global g_orm_listItems      = #()
 -- dotNet списка: иконки и флаги инстанса по индексам строк (см. ORM_buildListItems/ORM_drawListItem)
 global g_orm_listIcons      = #()
 global g_orm_listFlags      = #()
--- Кадры ModProps_24i.bmp для owner-draw (загружаются в ORM_initModList)
+-- Кадры ModProps_16i.bmp для owner-draw (загружаются в ORM_initModList)
 global g_orm_iconFrames     = #()
 -- Размер иконки/высоты строки списка (px) — простая переменная в коде
 global g_orm_iconSize        = 16
+-- Количество иконок в полоске ModProps_16i.bmp (полоска 208px / 16px = 13).
+-- Меняется при дорисовке новых иконок в PNG; от него зависят и кнопки rollout'ов
+-- (images: ... count), и нарезка кадров для dotNet (g_orm_iconFrames).
+-- Число кадров НЕ хранится глобально: в rollout_mods это rollout-локальная locIconCount
+-- (для images: ... count), а ORM_loadIconFrames считает кадры из ширины bmp / g_orm_iconSize.
 -- Фильтр по типам: #(geometry, shape, light, camera, helper)
 global g_orm_typeFilter     = #(true, true, true, true, true)
 -- Защита от рекурсии при синхронизации галочек фильтра
@@ -932,14 +937,6 @@ fn ORM_applyCommon lookupKey mode =
 	true
 )
 
--- Открывает контекстное меню «Сделать общим» для конкретного свойства
-fn ORM_onMakeCommon lookupKey =
-(
-	g_orm_ctxKey = lookupKey
-	popUpMenu rmc_common
-	true
-)
-
 
 -- ======================================================================
 -- КОНТЕКСТНОЕ МЕНЮ «СДЕЛАТЬ ОБЩИМ» (rcmenu на уровне макроса)
@@ -961,6 +958,14 @@ rcmenu rmc_common (
 	on cc_med  picked do ORM_applyCommon g_orm_ctxKey #median
 	on cc_min  picked do ORM_applyCommon g_orm_ctxKey #min
 	on cc_mode picked do ORM_applyCommon g_orm_ctxKey #mode
+)
+
+-- Открывает контекстное меню «Сделать общим» для конкретного свойства
+fn ORM_onMakeCommon lookupKey =
+(
+	g_orm_ctxKey = lookupKey
+	popUpMenu rmc_common
+	true
 )
 
 -- Контекстное меню кнопки On/Off при СМЕШАННОМ состоянии модификатора
@@ -990,14 +995,20 @@ fn ORM_setToggleUI state mixedState:false =
 	local bt = g_orm_rollMods.btn_toggle
 	-- Иконка глаза: 9 (открытый, вкл) / 10 (закрытый, выкл) / 11 (смешанный).
 	-- При mixedState меняем images всех состояний на кадр смешанного глаза.
-	try (
+	-- Число кадров берём из загруженных g_orm_iconFrames (путь: ORM_initModList
+	-- грузит и режет bmp ДО первого вызова setToggleUI); если кадры не загружены —
+	-- не трогаем images (контрол создан с корректным locIconCount в rollout-определении).
+	local cnt = 0
+	if g_orm_iconFrames != undefined do
+		try ( cnt = g_orm_iconFrames.count ) catch ( ORM_logExcept "iconFrames" (getCurrentException() as string) )
+	if cnt >= 1 then try (
 		bt.images = if mixedState then \
-			#(icon_path, undefined, 12, 11, 11, 11, 11, true) \
+			#(icon_path, undefined, cnt, 11, 11, 11, 11, true) \
 		else \
-			#(icon_path, undefined, 12, 10, 9, 9, 9, true)
-	) catch ()
+			#(icon_path, undefined, cnt, 10, 9, 9, 9, true)
+	)
+	catch ( ORM_logExcept "setImages" (getCurrentException() as string) )
 	bt.checked = state
-	bt.caption = if state then "👁️" else "👁️‍🗨️"
 	true
 )
 
@@ -1463,7 +1474,7 @@ fn ORM_rebuildPropsRollout =
 -- Паттерн взят из BatchViewsManager (initListBox/DrawItem/DoubleBuffered).
 -- ======================================================================
 
-global g_orm_iconFrames = #()   -- кадры ModProps_24i.bmp (1..12), резаные по 24px
+global g_orm_iconFrames = #()   -- кадры ModProps_16i.bmp (1..locIconCount), резаные по g_orm_iconSize px
 global g_orm_listIcons   = #()   -- параллельно g_orm_listItems: индекс иконки для строки (9/10/11; base = 0)
 global g_orm_listFlags   = #()   -- параллельно g_orm_listItems: true = инстанс (курсив)
 global g_orm_debug       = false -- включить для логирования всех catch в Listener
@@ -1503,10 +1514,11 @@ fn ORM_loadIconFrames path =
 		format "ModPropsLister:   openBitMap returned undefined (file missing/unreadable?)\n"
 	else
 	(
-		local fw = (try ( bm.width as integer ) catch ( 0 )) / 12
+		local fw = g_orm_iconSize
 		local fh = try ( bm.height as integer ) catch ( 0 )
-		format "ModPropsLister:   bitmap %x% -> frame %x%\n" bm.width bm.height fw fh
-		if fw >= 1 and fh >= 1 then
+		local frameCount = (try ( bm.width as integer ) catch ( 0 )) / fw
+		format "ModPropsLister:   bitmap %x% -> % frame(s) %x%\n" bm.width bm.height frameCount fw fh
+		if fw >= 1 and fh >= 1 and frameCount >= 1 then
 		(
 			try
 			(
@@ -1518,7 +1530,7 @@ fn ORM_loadIconFrames path =
 				else
 					format "ModPropsLister:   WARNING: (color).a not readable -> alpha = 1.0 (fully opaque)\n"
 				local pf = (dotNetClass "System.Drawing.Imaging.PixelFormat").Format32bppArgb
-				for k = 0 to 11 do
+				for k = 0 to frameCount - 1 do
 				(
 					local db = dotNetObject "System.Drawing.Bitmap" fw fh pf
 					for y = 0 to fh - 1 do
@@ -1685,15 +1697,20 @@ rollout rollout_mods "Modifiers"
 	local fontND
 	local fontItalicND
 
-	checkbutton btn_toggle "️" images:#(icon_path, undefined, 12, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
-	button btn_delete "" images:#(icon_path, undefined, 12, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,80]
+	-- Число кадров в ModProps_16i.bmp (см. комментарий у icon_path): rollout-локальная,
+	-- глобал-функции читают число кадров из загруженной bitmap (см. ORM_loadIconFrames).
+	local locIconCount = 13
+
+	checkbutton btn_toggle "️" images:#(icon_path, undefined, locIconCount, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
+	button btn_delete "" images:#(icon_path, undefined, locIconCount, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,80]
 
 	label lbl_filter "Include:" align:#left offset:[-5,4] across:7
-	checkbutton chk_geom    "" images:#(icon_path, undefined, 12, 2, 2, 2, 2,true) tooltip:"Geometry"
-	checkbutton chk_shape   "" images:#(icon_path, undefined, 12, 3, 3, 3, 3,true) tooltip:"Shapes"
-	checkbutton chk_light   "" images:#(icon_path, undefined, 12, 4, 4, 4, 4,true) tooltip:"Light"
-	checkbutton chk_camera  "" images:#(icon_path, undefined, 12, 5, 5, 5, 5,true) tooltip:"Camera"
-	checkbutton chk_helper  "" images:#(icon_path, undefined, 12, 6, 6, 6, 6,true) tooltip:"Helpers"
+	checkbutton chk_geom    "" images:#(icon_path, undefined, locIconCount, 2, 2, 2, 2, true) tooltip:"Geometry"
+	checkbutton chk_shape   "" images:#(icon_path, undefined, locIconCount, 3, 3, 3, 3, true) tooltip:"Shapes"
+	checkbutton chk_light   "" images:#(icon_path, undefined, locIconCount, 4, 4, 4, 4, true) tooltip:"Light"
+	checkbutton chk_camera  "" images:#(icon_path, undefined, locIconCount, 5, 5, 5, 5, true) tooltip:"Camera"
+	checkbutton chk_helper  "" images:#(icon_path, undefined, locIconCount, 6, 6, 6, 6, true) tooltip:"Helpers"
+	button btn_refresh "" images:#(icon_path, undefined, locIconCount, 13, 13, 13, 13, true) align:#right tooltip:"Re-read the stack: update the list and properties"
 
 	on lst_mods DrawItem sender args do
 		ORM_drawListItem args fontND fontItalicND
