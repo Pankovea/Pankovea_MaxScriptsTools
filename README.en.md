@@ -21,6 +21,9 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Renumber Material #X and Map #X](#renumber-material-x-and-map-x)
 - [Paste Image Reference To Plane](#paste-image-reference-to-plane)
 - [Rebuild Extruded Mesh to Spline](#rebuild-extruded-mesh-to-spline)
+- [ModPropsLister](#modpropslister)
+- [InstancedEditMod](#instancededitmod)
+- [ResetPivotOffset](#resetpivotoffset)
 
 
 [scripts/](scripts/)
@@ -51,7 +54,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 
 ## Simplify Spline
 
-[Version 2026.08.28 - alpha](/scripts/#Simplify-Spline.ms)
+[Version 2026.09.06 - alpha](/scripts/#Simplify-Spline.ms)
 
 A script for simplifying splines. The base object must be EditableSpline or Line. The EditSpline modifier will not work.
 
@@ -69,12 +72,16 @@ You need to select objects or subobjects and run:
 [back (contents)](#contents)
 
 ## Rebuild Extruded Mesh to Spline
-[Version 2025.08.25 - alpha](usermacros/%23PankovScripts-Rebuild-Mesh-to-Extruded-Spline.mcr)
+[Version 2026.09.05 - alpha](usermacros/%23PankovScripts-Rebuild-Mesh-to-Extruded-Spline.mcr)
 
 Restores imported meshes that were originally splines with extrusion to their original state:
-- builds a spline along the lid contour (or the wall facade — see Alt)
-- optimizes the spline shape using [Simplify Spline](#simplify-spline)
-- adds extrusion of the same height to it.
+- automatically detects the extrusion axis from the POLYGON EDGES (Editable Poly)
+- builds a spline from the cap contour (or the wall facade): openings (windows/doors)
+  stay as holes
+- optimizes the spline shape using [Simplify Spline](#simplify-spline) (optional — Ctrl turns optimization off)
+- adds extrusion of the same height
+- preserves the Material IDs of the top/bottom caps and the extrusion surface
+  (plain Extrude with default IDs, otherwise a MaterialID modifier / Shell+UVWMap)
 
 How to use:
 1. Select one or more meshes.
@@ -82,15 +89,73 @@ How to use:
 3. Done: a spline with extrusion will appear instead of each mesh.
 
 Keyboard modifiers:
-* regular run — slab: axis +Z, minimum base surface, extrusion upward
-* Shift — wall: horizontal extrusion axis, along the object's minimum extent;
-  the spline is built from the facade, openings (windows/doors) stay as holes
+* regular run — the axis is detected automatically (from polygon edges);
+  on ambiguity — world +Z (slab)
+* Shift — fallback hint for walls/tilted objects: the local axis of least extent
 * Alt — extrusion direction: maximum base surface, in the negative direction
   (without Alt — minimum base surface, in the positive direction)
-* Ctrl — enable auto‑simplification of the spline
+* Ctrl — turn off auto-simplification of the spline
 * Shift + Alt + Ctrl — any combination works
 
 The original object is deleted automatically.
+Global settings are at the top of the file (REMS_*, e.g. REMS_preserveMatIDs).
+
+[back (contents)](#contents)
+
+## ModPropsLister
+[Version 2026.09.06](usermacros/%23PankovScripts-ModPropsLister.mcr)
+
+Dynamic multi-editor for parameters of selected NON-INSTANCE objects.
+Compares and edits shared properties of the base object and common modifiers
+(top instance of each class in the stack).
+
+* Modifiers list with an eye icon: enabled / disabled / mixed state
+  (mixed opens the Enable/Disable popup menu)
+* The properties rollout is generated on the fly; differing values are shown
+  inactive, with a "Make common" button and a context menu
+  Maximum / Average / Median / Minimum / Most common
+* Base: MIXED — different base classes: only properties that match by name and type
+  are shown. This way you can edit common properties across different object types.
+* Group mode via right-click on a value: Incremental (delta) and Scale (multiplier)
+* Smart spinner step: 1% of the parameter magnitude, lower bound from the rollout
+  average; Alt — fine power step; one Undo step for a whole spinner drag
+* Object type filters: Geometry/Shapes/Light/Camera/Helpers
+
+[back (contents)](#contents)
+
+## InstancedEditMod
+[Version 1.0.0 (2026.08.30)](usermacros/%23PankovScripts-InstancedEditMod.mcr)
+
+Adds the Edit Spline / Edit Poly modifier as an INSTANCE onto all selected objects at once.
+This way you can edit multiple objects at the same time. You can group them for convenience,
+but you can also quickly find and select the instance objects by running the macro while
+the modifier is selected.
+
+* If all base objects are splines, Edit Spline is added; if any geometry is present —
+  Edit Poly (helpers/lights/cameras don't take part in the decision)
+* Edit Spline is inserted into the spline area (right below the first "converting"
+  modifier, e.g. Extrude); Edit Poly always goes to the very top of the stack
+* Re-running REUSES the existing instance (adds objects that are missing it);
+  the modifier name gets the " multi (N)" suffix
+* If our multi-modifier is open in the stack (or the objects share a common instance),
+  the run selects all objects that have it (groups are opened if necessary)
+* Shift — Collapse To: our modifier and everything below it collapse into the base object
+
+[back (contents)](#contents)
+
+## ResetPivotOffset
+[Version 2026.09.06](usermacros/%23PankovScripts-ResetPivotOffset.mcr)
+
+Works like Reset Xform but KEEPS the rotation: clears the pivot offset and scale
+(objectOffset) while preserving the axis orientation.
+
+* Regular run: the existing "Reset Pivot XForm" modifier is fitted to the current
+  pivot offset (or a new one is added), then the offset is cleared
+* Shift: the pivot offset is baked into the object transform, the offset is cleared
+  without a modifier
+
+Useful after `Hierarchy → Affect Pivot Only` → `Reset Pivot only` when you need to
+clear the pivot position/scale without losing its rotation.
 
 [back (contents)](#contents)
 
@@ -104,7 +169,7 @@ Purpose: reduce material reflectance to increase image contrast by lowering refl
 [back (contents)](#contents)
 
 ## Camera Animator
-[Version 2024.07.06](usermacros/%23PankovScripts-CameraAnimator.mcr)
+[Version 2026.08.28](usermacros/%23PankovScripts-CameraAnimator.mcr)
 
 Creates an animated camera from selected cameras in the scene.
 
@@ -121,7 +186,7 @@ Creates a camera from the current perspective view depending on the active rende
 [back (contents)](#contents)
 
 ## Batch Views Manager
-[Version 2026.08.07](usermacros/%23PankovScripts-BatchViewsManager.mcr)
+[Version 2026.09.05](usermacros/%23PankovScripts-BatchViewsManager.mcr)
 
 A utility to manage 3ds Max batch rendering (Batch Render).
 
@@ -217,7 +282,7 @@ This script:
 [back (contents)](#contents)
 
 ## Distribute
-[Version 2025.12.07](usermacros/%23PankovScripts-Distribute.mcr)
+[Version 2026.08.28](usermacros/%23PankovScripts-Distribute.mcr)
 
 A script for spatial distribution.
 
@@ -262,7 +327,7 @@ Workflow:
 * Select by material: Select any object and press the hotkey to select all visible objects that share the same material(s).
 
 ## Extract Instance
-[Version 2024.07.10](usermacros/%23PankovScripts-ExtractInstance.mcr)
+[Version 2026.08.28](usermacros/%23PankovScripts-ExtractInstance.mcr)
 
 Extracts the instance object from a reference object.
 Select a reference object and run the macro.
@@ -272,7 +337,7 @@ For single-script installation, copy icons [1](usericons/pankov_instancseAll_24i
 [back (contents)](#contents)
 
 ## Instance All
-[Version 2024.10.17](usermacros/%23PankovScripts-InstanceAll.mcr)
+[Version 2026.08.28](usermacros/%23PankovScripts-InstanceAll.mcr)
 
 Script to replace objects with instances and reference parts.
 
