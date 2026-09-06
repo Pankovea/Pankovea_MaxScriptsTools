@@ -26,6 +26,9 @@ UI:
     "Base: <Класс>" со свойствами базового объекта. Если общих модификаторов нет,
     а базовые объекты ИДЕНТИЧНЫ (инстансы обменивают один baseObject) — всё равно
     показываем свойства базы (все контролы активны, значения у всех одинаковые).
+    Пункт показывается даже когда у базы НЕТ «простых» параметров (напр. Editable
+    Mesh) — чтобы одинаковые объекты распознавались; свиток свойств в этом случае
+    содержит заглушку "No adjustable parameters.".
   - Base: MIXED — если базовые классы РАЗНЫЕ (напр. Circle и Line), но у всех баз
     есть свойства с СОВПАДАЮЩИМИ именем и типом (напр. steps у Shapes), показываем
     пункт "Base: MIXED" только с этими совпавшими свойствами; если у всех баз
@@ -103,8 +106,9 @@ UI:
    #postModifierAdded, #postModifierDeleted (#modStackChanged НЕ существует).
    При ошибке внутри колбэка стек печатается через ErrorDump.ms
    (scripts\ErrorDump.ms, fileIn "ErrorDump.ms", FmtError stackLevels:N),
-   после чего колбэки ПЕРЕРЕГИСТРИРУЮТСЯ: разовый сбой не должен убивать
-   автообновление навсегда (отдельной кнопки Refresh нет).
+   после чего колбэки УДАЛЯЮТСЯ (self-unregister по id:#ModPropsLister):
+   разовый сбой не должен оставлять «зомби»-колбэки, спамящие ошибками
+   после закрытия окна.
    #selectionSetChanged регистрируется как "ORM_cbRefresh autoSel:true" —
    при смене выделения список авто-выделяет первый элемент (верхний стек).
 
@@ -614,9 +618,11 @@ fn ORM_analyzeSelection sel =
 		-- Идентичные базовые объекты (инстансы) или одна уникальная геометрия:
 		-- общих модификаторов нет, показываем свойства БАЗОВОГО объекта.
 		-- Значения одинаковые у всех по определению, поэтому все контролы активны.
+		-- Base-пункт показываем ДАЖЕ БЕЗ поддерживаемых свойств (props пуст) —
+		-- иначе «одинаковые» объекты без «простых» параметров (напр. Editable Mesh)
+		-- вместо распознавания давали No Match.
 		local props = ORM_collectSupportedProps uniqueObjs[1] uniqueObjs[1].baseObject
-		if props.count > 0 do
-			baseObjData = ORM_BaseObjData objClass:(classOf uniqueObjs[1].baseObject) props:props
+		baseObjData = ORM_BaseObjData objClass:(classOf uniqueObjs[1].baseObject) props:props
 	)
 	else
 	(
@@ -628,24 +634,23 @@ fn ORM_analyzeSelection sel =
 
 		if allSameBaseClass then
 		(
+			-- Base-пункт показываем даже без поддерживаемых свойств: одинаковые по классу
+			-- объекты без «простых» параметров (напр. Editable Mesh) должны распознаваться.
 			local props = ORM_collectSupportedProps uniqueObjs[1] uniqueObjs[1].baseObject
-			if props.count > 0 do
+			for pi = 1 to props.count do
 			(
-				for pi = 1 to props.count do
+				local allSame = true
+				for ui = 2 to uniqueObjs.count do
 				(
-					local allSame = true
-					for ui = 2 to uniqueObjs.count do
-					(
-						local otherVal = undefined
-						try ( otherVal = getProperty uniqueObjs[ui].baseObject props[pi].name ) catch ( ORM_logExcept "diffBaseProps" (getCurrentException() as string) )
-						if otherVal == undefined \
-							or props[pi].value != otherVal \
-							do ( allSame = false; exit )
-					)
-					props[pi].allSame = allSame
+					local otherVal = undefined
+					try ( otherVal = getProperty uniqueObjs[ui].baseObject props[pi].name ) catch ( ORM_logExcept "diffBaseProps" (getCurrentException() as string) )
+					if otherVal == undefined \
+						or props[pi].value != otherVal \
+						do ( allSame = false; exit )
 				)
-				baseObjData = ORM_BaseObjData objClass:firstBaseClass props:props isMixed:false commonSuper:undefined
+				props[pi].allSame = allSame
 			)
+			baseObjData = ORM_BaseObjData objClass:firstBaseClass props:props isMixed:false commonSuper:undefined
 		)
 		else
 		(
@@ -828,7 +833,7 @@ fn ORM_buildListItems result =
 		append g_orm_listIcons eyeIdx
 		append g_orm_listFlags isInst
 	)
-	if result.baseObjData != undefined and result.baseObjData.props.count > 0 do
+	if result.baseObjData != undefined do
 	(
 		local bd = result.baseObjData
 		local baseLabel = if bd.isMixed then
@@ -1790,8 +1795,9 @@ fn ORM_rebuildNow =
 -- Обёртка для колбэков с защитой от рекурсии (см. архитектура п. 3)
 -- Колбэки срабатывают очень часто; повторный вход (например, потому что сам
 -- refresh меняет выбор/стек, что вновь вызывает колбэк) обрываем на месте.
--- При ошибке печатаем стек через ErrorDump.ms и ПЕРЕРЕГИСТРИРУЕМ колбэки,
--- чтобы разовый сбой не убивал автообновление навсегда (кнопки Refresh нет).
+-- При ошибке печатаем стек через ErrorDump.ms и УДАЛЯЕМ колбэки (self-unregister):
+-- разовый сбой (например, после закрытия окна) не должен оставлять «зомби»-колбэки,
+-- спамящие ошибками. Перезапуск окна заново регистрирует колбэки в ORM_showUI.
 fn ORM_cbRefresh autoSel:false =
 (
 	if g_orm_refreshing do return false
@@ -1810,16 +1816,8 @@ fn ORM_cbRefresh autoSel:false =
 			print ("ModPropsLister: callback error: " + (getCurrentException() as string))
 		try ( callbacks.removeScripts id:#ModPropsLister ) \
 		catch ( ORM_logExcept "removeCallbacks" (getCurrentException() as string) )
-		try
-		(
-			callbacks.addScript #selectionSetChanged       "ORM_cbRefresh autoSel:true" id:#ModPropsLister
-			callbacks.addScript #postModifierAdded         "ORM_cbRefresh()" id:#ModPropsLister
-			callbacks.addScript #postModifierDeleted       "ORM_cbRefresh()" id:#ModPropsLister
-		)
-		catch
-		(
-			if g_orm_debug do format "ModPropsLister: registerCallbacks failed: %\n" (getCurrentException() as string)
-		)
+		if g_orm_debug do
+			format "ModPropsLister: callbacks removed after error (id:#ModPropsLister)\n"
 	)
 	g_orm_refreshing = false
 	true
@@ -2080,7 +2078,9 @@ fn ORM_rebuildPropsRollout =
 		prefix = "m" + modDataIdx as string + "_"
 	)
 
-	if props.count == 0 do return false
+	-- База без поддерживаемых свойств (напр. Editable Mesh) — показываем свиток-заглушку.
+	-- Пункт-модификатор без свойств оставляем без свитка (ничего не показываем).
+	if props.count == 0 and not isBaseObj do return false
 
 	-- Средняя величина числовых параметров свитка (см. глобал g_orm_avgMag):
 	-- только ненулевые значения, точка3 считается по компонентам; всё нулевое → 1.0,
@@ -2108,8 +2108,18 @@ fn ORM_rebuildPropsRollout =
 	rc.begin()
 
 	local h = 10
-	for p in props do
-		ORM_addPropControls rc modIdx prefix p &h
+	if props.count == 0 then
+	(
+		-- Объекты распознаны как одинаковые, но у базового класса нет «простых»
+		-- параметров (float/integer/boolean/color/point3) — править нечего.
+		rc.addControl #label "lbl_noParams" "No adjustable parameters." paramStr:"align:#left"
+		h += 30
+	)
+	else
+	(
+		for p in props do
+			ORM_addPropControls rc modIdx prefix p &h
+	)
 
 	h += 10
 	if h < 40 do h = 40
@@ -2464,6 +2474,12 @@ rollout rollout_mods "Modifiers"
 	on rollout_mods close do
 	(
 		ORM_saveFloaterState()
+		-- Штатное снятие колбэков при закрытии окна (крестиком или скриптом):
+		-- иначе «зомби»-колбэки продолжают дёргать мёртвый dotNet-контрол и спамят.
+		ORM_unregisterCallbacks()
+		g_orm_floater   = undefined
+		g_orm_rollMods  = undefined
+		g_orm_rollAbout = undefined
 	)
 )
 
