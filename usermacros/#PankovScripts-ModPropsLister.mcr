@@ -43,10 +43,13 @@ UI:
   - При смене выделения автоматически выделяется первый элемент списка
     (верхний модификатор стека) — его свойства открываются сразу для редактирования.
   - Объекты класса Dummy (заголовки групп, болванки) НИКОГДА не участвуют в анализе.
-  - Фильтр по типу (галочки Geometry / Shapes / Light / Camera / Helpers под
-    списком) работает ТОЛЬКО с внутренними массивами анализа — сценное
-    выделение не меняется. Позволяет исключить «лишние» объекты и всё равно
-    редактировать общие свойства; состояние фильтра сохраняется в INI.
+  - Фильтр по типу (галочки Ignore: Geometry / Shapes / Light / Camera / Helpers
+    под списком) работает ТОЛЬКО с внутренними массивами анализа — сценное
+    выделение не меняется. Нажатая галочка ИСКЛЮЧАЕТ соответствующий тип из
+    анализа (по умолчанию все выключены = ничего не игнорируем, можно всё
+    редактировать). По умолчанию (настройка g_orm_saveFilter=false) состояние
+    фильтра НЕ сохраняется и НЕ восстанавливается — при запуске всегда «всё
+    включено»; при g_orm_saveFilter=true состояние пишется/читается из INI.
   - Выключенные модификаторы НЕ исключаются из списка: мод без поддерживаемых
     свойств (например, выключенный) всё равно остаётся в списке (раньше мог
     молча пропадать). При СМЕШАННОМ состоянии (часть вкл, часть выкл) клик по
@@ -98,6 +101,10 @@ UI:
    10 — закрытый, 11 — смешанный (ORM_setToggleUI подменяет images по mixedState).
    Отдельного колбэка на смену enabled в Max нет (только pre/postModifierAdded|Deleted),
    поэтому после toggle строки списка пересобираются явно (ORM_refreshList).
+   МАССОВЫЕ ПРАВКИ СТЕКА: циклы .enabled= / deleteModifier по всем объектам оборачиваются
+   в `with redraw off` — он не только гасит крас viewport'ов, но и ПРИОСТАНАВЛИВАЕТ
+   Modify-панель (документация: redraw Context), поэтому панель обновляется один раз,
+   а не на каждый объект цикла; явный ORM_refreshModPanel остаётся один на операцию.
 
 7. CALLBACKS.
    Все колбэки идут через ORM_cbRefresh с флагом g_orm_refreshing (защита от
@@ -249,10 +256,16 @@ global g_orm_iconSize        = 16
 -- (images: ... count), и нарезка кадров для dotNet (g_orm_iconFrames).
 -- Число кадров НЕ хранится глобально: в rollout_mods это rollout-локальная locIconCount
 -- (для images: ... count), а ORM_loadIconFrames считает кадры из ширины bmp / g_orm_iconSize.
--- Фильтр по типам: #(geometry, shape, light, camera, helper)
-global g_orm_typeFilter     = #(true, true, true, true, true)
+-- ФИЛЬТР ПО ТИПАМ — «Игнор»: #(geometry, shape, light, camera, helper).
+-- true = этот тип ИСКЛЮЧАЕТСЯ из анализа (галочка нажата); по умолчанию все false
+-- (ничего не игнорируем = всё участвует), чтобы кнопки не выглядели нажатыми.
+global g_orm_typeFilter     = #(false, false, false, false, false)
 -- Защита от рекурсии при синхронизации галочек фильтра
 global g_orm_syncFilter     = false
+-- НАСТРОЙКА: сохранять/восстанавливать ли состояние фильтра в INI.
+-- false (по умолчанию) — фильтр всегда сбрасывается на «ничего не игнорируем» при запуске,
+-- его состояние НЕ пишется в max.ini и НЕ читается из него. true — прежнее поведение.
+global g_orm_saveFilter     = false
 -- Контекст кнопки «Сделать общим» (lookupKey), читается из rcmenu
 global g_orm_ctxKey         = ""
 -- Признак того, что rollout свойств уже построен для текущего выбора (см. архитектура п. 4)
@@ -486,16 +499,16 @@ fn ORM_collectSupportedProps obj modOrBase =
 	props
 )
 
--- Разрешает ли фильтр по типам объектов (галочки под списком) участие в анализе
+-- Разрешает ли фильтр участие объекта в анализе: true = тип НЕ игнорируется.
 fn ORM_matchesFilter obj =
 (
 	local sc = superClassOf obj
-	if sc == GeometryClass then return g_orm_typeFilter[1]
-	if sc == Shape        then return g_orm_typeFilter[2]
-	if sc == Light        then return g_orm_typeFilter[3]
-	if sc == Camera       then return g_orm_typeFilter[4]
+	if sc == GeometryClass then return not g_orm_typeFilter[1]
+	if sc == Shape        then return not g_orm_typeFilter[2]
+	if sc == Light        then return not g_orm_typeFilter[3]
+	if sc == Camera       then return not g_orm_typeFilter[4]
 	-- Прочие суперклассы (Helpers и спец.) — категория "Helpers"
-	g_orm_typeFilter[5]
+	not g_orm_typeFilter[5]
 )
 
 -- Имя суперкласса объекта для заголовка Base: MIXED (чистое, без "Class")
@@ -622,7 +635,7 @@ fn ORM_analyzeSelection sel =
 		-- иначе «одинаковые» объекты без «простых» параметров (напр. Editable Mesh)
 		-- вместо распознавания давали No Match.
 		local props = ORM_collectSupportedProps uniqueObjs[1] uniqueObjs[1].baseObject
-		baseObjData = ORM_BaseObjData objClass:(classOf uniqueObjs[1].baseObject) props:props
+		baseObjData = ORM_BaseObjData objClass:(classOf uniqueObjs[1].baseObject) props:props isMixed:false commonSuper:undefined
 	)
 	else
 	(
@@ -874,15 +887,18 @@ fn ORM_deleteModifier modClass =
 	if not (ORM_validTargets()) do ( ORM_refreshUI quiet:true; return false )
 	undo "ModPropsLister Delete Modifier" on
 	(
-		for obj in g_orm_uniqueObjs do
+		with redraw off
 		(
-			if not (isValidNode obj) do continue
-			for i = 1 to obj.modifiers.count do
-				if classOf obj.modifiers[i] == modClass do
-				(
-					deleteModifier obj i
-					exit
-				)
+			for obj in g_orm_uniqueObjs do
+			(
+				if not (isValidNode obj) do continue
+				for i = 1 to obj.modifiers.count do
+					if classOf obj.modifiers[i] == modClass do
+					(
+						deleteModifier obj i
+						exit
+					)
+			)
 		)
 	)
 )
@@ -891,21 +907,25 @@ fn ORM_deleteModifier modClass =
 fn ORM_toggleModifier modClass state =
 (
 	if not (ORM_validTargets()) do ( ORM_refreshUI quiet:true; return false )
+	-- Подавляем лишние крас всех вьюпортов: каждый .enabled= заново пересчитывает стек.
 	local applied = false
-	for obj in g_orm_uniqueObjs do
+	with redraw off
 	(
-		if not (isValidNode obj) do continue
-		for i = 1 to obj.modifiers.count do
-			if classOf obj.modifiers[i] == modClass do
-			(
-				try ( obj.modifiers[i].enabled = state ) \
-					catch ( ORM_logExcept ("toggle " + (modClass as string)) (getCurrentException() as string) )
-				applied = true
-				exit
-			)
+		for obj in g_orm_uniqueObjs do
+		(
+			if not (isValidNode obj) do continue
+			for i = 1 to obj.modifiers.count do
+				if classOf obj.modifiers[i] == modClass do
+				(
+					try ( obj.modifiers[i].enabled = state ) \
+						catch ( ORM_logExcept ("toggle " + (modClass as string)) (getCurrentException() as string) )
+					applied = true
+					exit
+				)
+		)
 	)
 	-- Глазок и rollups на Modify-панели не перечитываются сами после скриптового
-	-- изменения enabled — обновляем панель, если она открыта.
+	-- изменения enabled — обновляем панель один раз, если она открыта.
 	if applied do ORM_refreshModPanel()
 	applied
 )
@@ -1541,7 +1561,7 @@ fn ORM_setFilterUI =
 (
 	if g_orm_rollMods == undefined do return false
 	if classOf g_orm_typeFilter != Array or g_orm_typeFilter.count != 5 do
-		g_orm_typeFilter = #(true, true, true, true, true)
+		g_orm_typeFilter = #(false, false, false, false, false)
 	g_orm_syncFilter = true
 	try
 	(
@@ -1571,7 +1591,7 @@ fn ORM_onFilterChanged =
 		g_orm_rollMods.chk_camera.checked,
 		g_orm_rollMods.chk_helper.checked
 	)
-	ORM_saveFloaterState()
+	if g_orm_saveFilter do ORM_saveFloaterState()
 	ORM_refreshUI autoSel:true
 	true
 )
@@ -2018,6 +2038,20 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 	)
 )
 
+-- Модификаторы «редактирования геометрии» (Edit Mesh / Edit Spline / Edit Poly),
+-- у которых НЕТ «простых» параметров — для них показываем свиток-заглушку
+-- "No adjustable parameters.", а не оставляем без свитка.
+fn ORM_isEditableGeomMod modDataIdx =
+(
+	if g_orm_result == undefined or modDataIdx < 1 or modDataIdx > g_orm_result.modDataList.count \
+		do return false
+	local c = g_orm_result.modDataList[modDataIdx].modClass
+	local cs = c as string
+	matchpattern cs pattern:"*Edit*Mesh*" \
+		or matchpattern cs pattern:"*Edit*Spline*" \
+		or matchpattern cs pattern:"*Edit*Poly*"
+)
+
 -- Создаёт/пересоздаёт динамический rollout со свойствами выбранного элемента
 fn ORM_rebuildPropsRollout =
 (
@@ -2078,9 +2112,9 @@ fn ORM_rebuildPropsRollout =
 		prefix = "m" + modDataIdx as string + "_"
 	)
 
-	-- База без поддерживаемых свойств (напр. Editable Mesh) — показываем свиток-заглушку.
-	-- Пункт-модификатор без свойств оставляем без свитка (ничего не показываем).
-	if props.count == 0 and not isBaseObj do return false
+	-- База и «редакторы геометрии» (Edit Mesh/Spline/Poly) без поддерживаемых свойств
+	-- показываем свиток-заглушку. Прочие моды без свойств — без свитка (ничего не показываем).
+	if props.count == 0 and not isBaseObj and not (ORM_isEditableGeomMod modDataIdx) do return false
 
 	-- Средняя величина числовых параметров свитка (см. глобал g_orm_avgMag):
 	-- только ненулевые значения, точка3 считается по компонентам; всё нулевое → 1.0,
@@ -2110,7 +2144,7 @@ fn ORM_rebuildPropsRollout =
 	local h = 10
 	if props.count == 0 then
 	(
-		-- Объекты распознаны как одинаковые, но у базового класса нет «простых»
+		-- Объекты/редакторы геометрии распознаны, но у них нет «простых»
 		-- параметров (float/integer/boolean/color/point3) — править нечего.
 		rc.addControl #label "lbl_noParams" "No adjustable parameters." paramStr:"align:#left"
 		h += 30
@@ -2385,7 +2419,7 @@ rollout rollout_mods "Modifiers"
 	checkbutton btn_toggle "️" images:#(icon_path, undefined, locIconCount, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
 	button btn_delete "" images:#(icon_path, undefined, locIconCount, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,80]
 
-	label lbl_filter "Include:" align:#left offset:[-5,4] across:7
+	label lbl_filter "Ignore:" align:#left offset:[-5,4] across:7
 	checkbutton chk_geom    "" images:#(icon_path, undefined, locIconCount, 2, 2, 2, 2, true) tooltip:"Geometry"
 	checkbutton chk_shape   "" images:#(icon_path, undefined, locIconCount, 3, 3, 3, 3, true) tooltip:"Shapes"
 	checkbutton chk_light   "" images:#(icon_path, undefined, locIconCount, 4, 4, 4, 4, true) tooltip:"Light"
@@ -2528,7 +2562,10 @@ fn ORM_saveFloaterState =
 	if g_orm_floater == undefined do return false
 	local iniPath = getmaxinifile()
 	setINISetting iniPath "ModPropsLister" "Position" (g_orm_floater.pos as string)
-	setINISetting iniPath "ModPropsLister" "TypeFilter" (g_orm_typeFilter as string)
+	-- Состояние фильтра пишем ТОЛЬКО при включённой настройке g_orm_saveFilter
+	-- (по умолчанию false — фильтр всегда «ничего не игнорируем» при запуске).
+	if g_orm_saveFilter do
+		setINISetting iniPath "ModPropsLister" "TypeFilter" (g_orm_typeFilter as string)
 	true
 )
 
@@ -2609,21 +2646,27 @@ fn ORM_run =
 	local validCount = 0
 	for o in sel do if isValidNode o do validCount += 1
 
-	-- Восстанавливаем фильтр по типам из INI (секция "ModPropsLister")
-	local iniPath = getmaxinifile()
-	local fstr = getINISetting iniPath "ModPropsLister" "TypeFilter"
-	if fstr != "" do
+	-- Состояние фильтра по типам: при включённой настройке g_orm_saveFilter
+	-- восстанавливаем из INI (секция "ModPropsLister"); иначе — всегда «ничего не игнорируем».
+	if g_orm_saveFilter then
 	(
-		try
+		local iniPath = getmaxinifile()
+		local fstr = getINISetting iniPath "ModPropsLister" "TypeFilter"
+		if fstr != "" do
 		(
-			local f = execute fstr
-			if classOf f == Array and f.count == 5 do g_orm_typeFilter = f
-		)
-		catch
-		(
-			if g_orm_debug do format "ModPropsLister: run INI TypeFilter failed: %\n" (getCurrentException() as string)
+			try
+			(
+				local f = execute fstr
+				if classOf f == Array and f.count == 5 do g_orm_typeFilter = f
+			)
+			catch
+			(
+				if g_orm_debug do format "ModPropsLister: run INI TypeFilter failed: %\n" (getCurrentException() as string)
+			)
 		)
 	)
+	else
+		g_orm_typeFilter = #(false, false, false, false, false)
 
 	local result = undefined
 	if validCount >= 2 do
