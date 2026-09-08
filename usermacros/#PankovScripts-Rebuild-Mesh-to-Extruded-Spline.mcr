@@ -67,7 +67,7 @@ Customize -> Customize User Interface -> Toolbars -> #PankovScripts
        трансформацию;
    3.2 величина Extrude - протяжённость объекта вдоль оси выдавливания.
 4. При зажатом Ctrl запускает автоматическую обработку скриптом
-   scripts\Simplify-Spline.ms (run_rebuildArcs, затем run_simplifySpline).
+   scripts\Simplify-Spline.ms (run_simplifySpline — мастер: линии → дуги → безье).
 5. Вешает на сплайн модификатор Extrude:
     - без Alt - положительная величина (от базы в сторону +оси);
     - с Alt   - отрицательная (от базы в сторону -оси);
@@ -92,13 +92,14 @@ Customize -> Customize User Interface -> Toolbars -> #PankovScripts
 Определение верха/низа - по ЛОКАЛЬНОЙ ОСИ Z сплайна (всегда, независимо от знака
 выдавливания; при отрицательном extrude верх - это база после разворота).
    - если ID исходника совпадают с дефолтом Extrude (верх=1, низ=2, торец=3) -
-     ничего не добавлять, обычный Extrude;
+      ничего не добавлять, обычный Extrude;
    - если все ID одинаковые - Extrude + модификатор MaterialID (materialID);
-   - иначе (свой набор) - вместо Extrude ставится Shell + UVWMap (plane 1 м,
-     размер переводится в системные единицы функцией REMS_mmToSys) + UVW Xform
-     (tile = 1 / размер в системных). Настройки Shell: overrideMatID/matID (торец),
-     overrideInnerMatID/matInnerID (нижняя), overrideOuterMatID/matOuterID (верхняя);
-     направления: outerAmount (вверх/+Z), innerAmount (вниз/-Z) по знаку extrude.
+   - иначе (свой набор) - Extrude + Edit Poly "MatID Replace": Extrude даёт
+      дефолтные ID (1=верх, 2=низ, 3=торец), стандартный Edit Poly переназначает
+      их на исходные (miTop/miBottom/miSide) через #SelectByMaterial/#SetMaterial
+      с вычитанием уже назначенных граней и последующим Commit. При отрицательном
+      extrude маппинг инвертируется для сохранения пространственной привязки.
+      При сбое Edit Poly - fallback на Shell + UVWMap + UVW Xform.
 
 Ориентация осей XY к минимальному bbox: для любой оси выдавливания профиль
 построения (локальные x,y) обрабатывается выпуклой оболочкой (Andrew's Monotone
@@ -134,7 +135,8 @@ bbox крышек базы; нижний контур по этой оси (пр
 исходный объект не модифицируется.
 
 Результат: SplineShape (трансформ без масштаба) + Extrude (mapcoords on,
-realWorldMapSize on) - или, при своём наборе Material ID, Shell + UVWMap + UVW Xform.
+realWorldMapSize on) - или, при своём наборе Material ID, Extrude + Edit Poly
+"MatID Replace" (Shell+UVWMap+UVW Xform как fallback).
 Материал заимствуется с исходного объекта.
 
 Ограничения:
@@ -162,6 +164,11 @@ macroScript REMS_RebuildMeshToSpline
 global REMS_deleteSourceObjects = true -- false - оставлять исходные объекты
 
 global REMS_debug = true -- подробный лог этапов (отборка, крышки, трансформация)
+
+-- ПОДСКАЗКА СТЕНЫ (Shift): true - применять СРАЗУ (ось = наименьшая протяжённость
+-- ещё до голосования по рёбрам); false - классическое поведение (подсказка только
+-- при вырождении голосования/несогласованности длин).
+global REMS_shiftAxisImmediate = true
 
 -- Толщина выдавливания: true - ПРОЕКЦИЕЙ всех вершин меша на ось (удалённая
 -- точка) - устойчиво к куполам/фасетам/скосам дальней шапки; false (по умолч.) -
@@ -421,7 +428,37 @@ fn REMS_pickAxisByEdges m tolAng:0.9998 minCount:3 = (
         if (abs (dot rk[1] bestDir)) >= 0.9999 do continue
         if rk[2] == bestCh and rk[3] == bestSp do return undefined
     )
+    if REMS_debug do (
+        format "  [ось] голосование по рёбрам (всего=%):\n" edges.count
+        for rk in ranked do
+            format "     семья dir=[%,%,%]: цепочек=%, образующих (крышка-крышка)=%\n" \
+                rk[1].x rk[1].y rk[1].z rk[2] rk[3]
+        format "  [ось] победитель: dir=[%,%,%] (цепочек=%, образующих=%)\n" \
+            bestDir.x bestDir.y bestDir.z bestCh bestSp
+    )
     bestDir
+)
+
+-- Длины ВСЕХ видимых рёбер, параллельных dir. У НАСТОЯЩЕЙ оси выдавливания все
+-- образующие = рёбра, натянутые от крышки к крышке, имеют ОДНУ длину (равную
+-- величине экструзии). Сильная СМЕСЬ длин (у стены с проёмом вертикаль даёт
+-- 2100 и 4550) означает: параллельные рёбра - это контуры ПРОФИЛЯ/ПРОЁМА, а не
+-- образующие, и голосование по ним уводит ось не туда (вверх вместо вдоль толщины).
+-- Возвращает true, если выбранная ось правдоподобна (длины согласованы).
+fn REMS_axisConsistentLengths m dir = (
+    local lens = #()
+    for e in REMS_collectVisibleEdges m do
+        if (abs (dot e[2] dir)) >= 0.9 do append lens e[1]
+    if lens.count < 4 then true else (
+        local mn = amin lens
+        local mx = amax lens
+        local ratio = mx / (if mn < 1e-6 then 1.0 else mn)
+        if REMS_debug do (
+            format "  [ось] согласованность длин параллельных рёбер: % рёбер, мин=% макс=% ratio=%\n" \
+                lens.count mn mx ratio
+        )
+        ratio <= 1.5
+    )
 )
 
 -- Ось-подсказка (фолбэк при вырождении/неудаче): без Shift - мировая +Z (плита);
@@ -819,6 +856,17 @@ fn REMS_buildCollinearChains diffs = (
     local chains = #()
     local n = diffs.count
     local used = for i = 1 to n collect false
+    if REMS_debug and n > 0 do
+        for i = 1 to n do (
+            local pA = diffs[i][1]
+            local pB = diffs[i][2]
+            local dv = diffs[i][3]
+            local u = normalize dv
+            format "    [составление] дифф %: в базе=(%,%,%) наружу=(%,%,%) len=% dir=[%,%,%]\n" \
+                i pA.x pA.y pA.z pB.x pB.y pB.z (length dv) u.x u.y u.z
+        )
+    local pairsChecked = 0
+    local pairsMerged = 0
     for i = 1 to n where not used[i] do (
         used[i] = true
         local comp = #(i)
@@ -831,10 +879,11 @@ fn REMS_buildCollinearChains diffs = (
                 if (abs (dot vecSum djDir)) < 0.999 do continue
                 local link = false
                 for k in comp do (
+                    pairsChecked += 1
                     if (distance diffs[j][1] diffs[k][1]) < 1e-4 or \
                        (distance diffs[j][2] diffs[k][1]) < 1e-4 or \
                        (distance diffs[j][1] diffs[k][2]) < 1e-4 or \
-                       (distance diffs[j][2] diffs[k][2]) < 1e-4 do (link = true; exit)
+                       (distance diffs[j][2] diffs[k][2]) < 1e-4 do (link = true; pairsMerged += 1; exit)
                 )
                 if link do (
                     used[j] = true
@@ -851,8 +900,16 @@ fn REMS_buildCollinearChains diffs = (
             clen += length diffs[k][3]
         )
         local cdir = normalize acc
-        if (length cdir) > 1e-9 do append chains #(cdir, clen, comp.count)
+        if (length cdir) > 1e-9 do (
+            append chains #(cdir, clen, comp.count)
+            if REMS_debug do (
+                format "    [составление] цепочка: звеньев=% диффы=% длины=(%) сумма=% dir=[%,%,%]\n" \
+                    comp.count (for k in comp collect k) \
+                    (for k in comp collect (length diffs[k][3])) clen cdir.x cdir.y cdir.z
+            )
+        )
     )
+    if REMS_debug do format "    [составление] проверено пар=% слито=% (цепочек=%)\n" pairsChecked pairsMerged chains.count
     chains
 )
 
@@ -897,26 +954,48 @@ fn REMS_extrudeDirFromCaps m baseSel dir tol = (
     )
     if diffs.count >= 2 then (
         local chains = REMS_buildCollinearChains diffs
-        if REMS_debug do format "    [extrudeDirFromCaps] диффов=% цепочек=% (состыкованных коллинеарных)\n" \
-            diffs.count chains.count
+        if REMS_debug do (
+            format "    [extrudeDirFromCaps] диффов=% цепочек=% (состыкованных коллинеарных):\n" \
+                diffs.count chains.count
+            for ci = 1 to chains.count do
+                format "    [extrudeDirFromCaps]   цепочка %: dir=[%,%,%] len=% звеньев=%\n" \
+                    ci chains[ci][1].x chains[ci][1].y chains[ci][1].z chains[ci][2] chains[ci][3]
+        )
         -- отбор цепочек по ПАРАЛЛЕЛЬНОСТИ к известному направлению dir
         -- (вместо медианы по длине): согласованных = цепочка, чьё направление
         -- совпадает с dir в пределах ~16° (0.96 косинуса)
         local sel = for c in chains where (abs (dot c[1] dir)) >= 0.96 collect c
         if REMS_debug do (
-            format "    [extrudeDirFromCaps] dir=[%,%,%] согласованных цепочек=% (из %)\n" \
+            format "    [extrudeDirFromCaps] dir=[%,%,%] согласованных цепочек=% (из %):\n" \
                 dir.x dir.y dir.z sel.count chains.count
+            for sc in sel do
+                format "    [extrudeDirFromCaps]     + цепочка dir=[%,%,%] len=% звеньев=%\n" \
+                    sc[1].x sc[1].y sc[1].z sc[2] sc[3]
         )
-        if sel.count >= 2 do (
-            local acc = [0,0,0]
-            local accLen = 0.0
-            for c in sel do (
-                acc += normalize c[1]
-                accLen += c[2]
+        if sel.count >= 2 then (
+            -- СОГЛАСОВАННОСТЬ ДЛИН: у настоящей оси выдавливания все образующие
+            -- имеют ОДНУ длину (= величине экструзии). Сильно различающиеся длины
+            -- (у стены с проёмом 2100 и 4550) = рёбра ПЕРИМЕТРА, а не образующие:
+            -- направление по ним ненадёжно для уточнения оси.
+            local sLen = for c in sel collect c[2]
+            local mnL = amin sLen
+            local mxL = amax sLen
+            local ratio = mxL / (if mnL < 1e-6 then 1.0 else mnL)
+            if REMS_debug do format "    [extrudeDirFromCaps]  длины согласованных: мин=% макс=% ratio=%\n" mnL mxL ratio
+            if ratio > 1.5 then (
+                if REMS_debug do format "    [extrudeDirFromCaps]  РАЗНЫЕ длины - это периметр, а не образующие: уточнение по dir не применяется\n"
+                res = #(dir, 0, 0.0)
+            ) else (
+                local acc = [0,0,0]
+                local accLen = 0.0
+                for c in sel do (
+                    acc += normalize c[1]
+                    accLen += c[2]
+                )
+                local nd = normalize acc
+                if (dot nd dir) < 0 do nd = -nd
+                res = #(nd, sel.count, accLen / sel.count)
             )
-            local nd = normalize acc
-            if (dot nd dir) < 0 do nd = -nd
-            res = #(nd, sel.count, accLen / sel.count)
         )
     ) else (
         if REMS_debug do format "    [extrudeDirFromCaps] диффов < 2 - направление по рёбрам не распознано\n"
@@ -1177,31 +1256,48 @@ fn REMS_makeSplineShape loopsP nodeName tmFacade:(matrix3 1) = (
 --
 */ --------------------
 
--- Загрузка скрипта упрощения: его точки входа run_rebuildArcs/run_simplifySpline
--- становятся глобальными после fileIn
+-- Загрузка скрипта упрощения: его точки входа (главная run_simplifySpline — мастер,
+-- вызывающий по порядку run_rebuildLines/run_rebuildArcs/run_rebuildBezier) становятся
+-- глобальными после fileIn.
+-- ВАЖНО: имена точек входа объявляются здесь явно глобальными (global), иначе ссылки
+-- внутри функций макроса компилируются как неявные локальные (всегда undefined) —
+-- тот же приём, что в BodyulCG-SplineTangentAligner.mcr. Проверка по классу
+-- (MAXScriptFunction) вместо == undefined: заведомо ловит и «глобал есть, но не функция».
 fn REMS_loadSimplifyScript = (
-    if run_simplifySpline == undefined or run_rebuildArcs == undefined do (
+    global run_simplifySpline
+    global run_rebuildArcs
+    if classOf run_simplifySpline != MAXScriptFunction or classOf run_rebuildArcs != MAXScriptFunction then (
         local scriptPath = (getDir #userScripts) + "\\Simplify-Spline.ms"
         if not doesFileExist scriptPath do scriptPath = "Simplify-Spline.ms"
-        fileIn scriptPath
+        try (
+            fileIn scriptPath quiet:true
+        ) catch (
+            format "REMS: не удалось загрузить Simplify-Spline.ms (%): %\n" scriptPath (getCurrentException())
+        )
+        if classOf run_simplifySpline != MAXScriptFunction or classOf run_rebuildArcs != MAXScriptFunction do
+            format "REMS: % загружен, но run_rebuildArcs/run_simplifySpline не определены\n" scriptPath
     )
 )
 
 /*
-Упрощение всех сплайнов объекта через точки входа Simplify-Spline.ms:
-1) run_rebuildArcs   - восстановление дуг (заполняет SS_ARC_PROTECTED);
-2) run_simplifySpline - сокращение вершин с учётом защиты дуг.
-Обе функции рассчитаны на ручной запуск, поэтому предварительно выставляется
+Упрощение всех сплайнов объекта через точку входа Simplify-Spline.ms:
+run_simplifySpline — мастер, выполняет ПО ПОРЯДКУ три прохода:
+1) run_rebuildLines   - слияние коллинеарных сегментов (границы линий → ориентир для дуг);
+2) run_rebuildArcs    - восстановление дуг (заполняет SS_ARC_PROTECTED);
+3) run_rebuildBezier  - сокращение вершин с учётом защиты дуг.
+Функция рассчитана на ручной запуск, поэтому предварительно выставляется
 то же состояние UI: объект один в выделении, панель Modify на базовом объекте,
 уровень подобъектов 3 (сплайны), выделены все сплайны формы.
 */
 fn REMS_autoSimplify ss loopsP tmFacade:(matrix3 1) = (
     -- Возвращает #(okFlag, ss) - узел может быть ПЕРЕСОЗДАН внутри функции.
-    -- Их run_rebuildArcs/run_simplifySpline содержат собственные undo-блоки;
-    -- исключение внутри них откатывает запись и уничтожает узел сплайна
-    -- (воспроизводится в Max 2026). При гибели узла он пересоздаётся из
-    -- исходных точек loopsP, после чего упрощение повторяется один раз
-    -- без этапа дуг (дуги - необязательное улучшение качества).
+    -- Проходы run_simplifySpline содержат собственные undo-блоки; исключение внутри
+    -- них откатывает запись и уничтожает узел сплайна (воспроизводится в Max 2026).
+    -- При гибели узла он пересоздаётся из исходных точек loopsP, после чего упрощение
+    -- повторяется один раз без этапа дуг (skipArcs:true; дуги - необязательное
+    -- улучшение качества).
+    global run_rebuildArcs
+    global run_simplifySpline
     local okFlag = false
     local nameBase = ss.name
     local attempt = 1
@@ -1214,19 +1310,13 @@ fn REMS_autoSimplify ss loopsP tmFacade:(matrix3 1) = (
             max modify mode
             modPanel.setCurrentObject ss.baseobject
             undo "REMS arcs+simplify" on (
-                if attempt == 1 then (
-                    try (
-                        run_rebuildArcs()
-                    ) catch (
-                        format "REMS: восстановление дуг прервано: % (продолжаем без дуг)\n" (getCurrentException())
-                    )
-                )
                 if isValidNode ss then (
                     -- в этой версии setSplineSelection требует массив индексов, а не bitArray
                     local allSplines = for s = 1 to numSplines ss collect s
                     setSplineSelection ss allSplines
                     try (
-                        run_simplifySpline()
+                        -- мастер: линии → дуги → безье; на повторной попытке без дуг
+                        run_simplifySpline skipArcs:(attempt != 1)
                     ) catch (
                         simpOk = false
                         format "REMS: упрощение прервано: %\n" (getCurrentException())
@@ -1296,11 +1386,31 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
     -- ШАГИ 1-2 (схема пользователя): ось по ВИДИМЫМ рёбрам большинством голосов,
     -- где СВЯЗНЫЕ рёбра считаются за одно (REMS_pickAxisByEdges). Коробки/плиты/
     -- колонны вырождены (ничья по всем трём осям) - подсказка wall:Shift.
-    local dir = REMS_pickAxisByEdges p
-    local axisNote = "подсказка"
-    if dir != undefined then axisNote = "видимые рёбра" else (
-        dir = REMS_pickFallbackAxis p wall:wall
+    -- Shift (wall=true) = подсказка СТЕНЫ: ось - локальная наименьшая протяжённость
+    -- (толщина, PCA). При REMS_shiftAxisImmediate=true подсказка применяется СРАЗУ:
+    -- у стены с проёмом голосование по рёбрам уводит в продольную вертикаль
+    -- (рёбра периметра проёма вертикальны и многочисленны), и без неё выдавливание
+    -- уходит вверх. При false - классика: подсказка только на фолбэке. Без Shift -
+    -- автоматическое голосование, но победитель дополнительно проверяется:
+    -- у настоящей оси выдавливания все параллельные рёбра имеют ОДНУ длину
+    -- (REMS_axisConsistentLengths), иначе - подсказка.
+    local wallHint = wall
+    local shiftImmediate = wallHint and REMS_shiftAxisImmediate
+    local dir = if shiftImmediate then REMS_meshMinorAxis p else REMS_pickAxisByEdges p
+    local axisNote = if shiftImmediate then "подсказка стены (Shift)" else "подсказка"
+    if not shiftImmediate and dir != undefined then (
+        axisNote = "видимые рёбра"
+        if not (REMS_axisConsistentLengths p dir) do (
+            if REMS_debug do format "  [ось] голосование [%,%,%] НЕ согласовано по длинам - не образующие, ось по подсказке\n" dir.x dir.y dir.z
+            dir = undefined
+        )
     )
+    if dir == undefined do (
+        dir = REMS_pickFallbackAxis p wall:wallHint
+        if REMS_debug do format "  [ось] подсказка: ось=[%,%,%] (стена(Shift)=%)\n" dir.x dir.y dir.z wallHint
+    )
+    if (length dir) < 1e-9 do dir = [0,0,1]   -- предохранитель: вырожденная ось PCA
+    if REMS_debug do format "  [ось] итого: dir=[%,%,%] (%)\n" dir.x dir.y dir.z axisNote
     -- ОРИЕНТАЦИЯ ЗНАКА (как check_z_up, всегда, без допусков, одинаково для всех осей):
     -- знак оси произволен (направления рёбер от обхода граней неопределённы), и он
     -- определяет, какой конец - база. Смотрим, к какой МИРОВОЙ оси ось ближе всего
@@ -1796,12 +1906,13 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
                 )
             )
         )
-        -- Выбор стека: дефолт Extrude / Extrude+MaterialID / Shell+UVWMap+UVWXform
+        -- Выбор стека: дефолт Extrude / Extrude+MaterialID / Extrude+MaterialIDReplace
         --  - MatID исходника == дефолт Extrude (верх=1, низ=2, торец=3): ничего
         --    не добавляем, обычный Extrude;
         --  - все MatID одинаковые: Extrude + модификатор MaterialID(force);
-        --  - иной набор: вместо Extrude - Shell + UVWMap (plane 1 м) + UVW Xform,
-        --    чтобы воспроизвести свой набор ID на крышках и торце.
+        --  - иной набор: Extrude + Edit Poly "MatID Replace" (запекание ID
+        --    стандартным Edit Poly, накопитель-вычитание); при сбое -
+        --    Shell+UVWMap+UVW Xform.
         local useCustomStack = false
         local useMatIDOverride = false
         if REMS_preserveMatIDs and matIsMulti and miTop != undefined and miBottom != undefined and miSide != undefined then (
@@ -1811,51 +1922,114 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
                 format "REMS: '%': MatID одинаковые (%) - Extrude + MaterialID\n" ssName miTop
                 useMatIDOverride = true
             ) else (
-                format "REMS: '%': свой набор MatID (верх=% низ=% торец=%) - Shell+UVWMap+UVW Xform\n" ssName miTop miBottom miSide
+                format "REMS: '%': свой набор MatID (верх=% низ=% торец=%) - Extrude+MaterialIDReplace\n" ssName miTop miBottom miSide
                 useCustomStack = true
             )
         )
         if useCustomStack then (
-            -- Shell modifier: порядок модификаторов UVWMap -> Shell -> UVW Xform
-            local stackOk = true
+            -- Extrude + Edit Poly "MatID Replace": Extrude даёт дефолтные ID
+            -- (1=верх, 2=низ, 3=торец), а стандартный модификатор Edit Poly
+            -- переназначает их на исходные значения (miTop/miBottom/miSide)
+            -- ТЕМ ЖЕ способом, что и запекание в scripts\startup\
+            -- #PankovScripts-MaterialID-Replace-mod.ms (один проход по source-ID
+            -- с накопителем-вычитанием, БЕЗ временных ID). Проходим только 1..3:
+            -- Extrude никогда не выдаёт ID больше 3, 4..10 не трогаем (identity).
+            -- Накопитель отсекает уже назначенные грани, которые в свопах/циклах
+            -- (1<->3) попали в выборку по текущему ID как СВОЙ целевой.
+            -- GetSelection/SetSelection вызываются с node: - чтение выделения из
+            -- UI в пакетном цикле возвращает undefined.
+            -- При отрицательном extrude маппинг инвертируется, чтобы сохранить
+            -- пространственную привязку (ID 1 = верхняя крышка +лок. Z).
+            local stackOk = false
             try (
-                local planeSize = REMS_mmToSys 1000
-                local uv = UVWMap()
-                uv.maptype = 0
-                uv.length = planeSize
-                uv.width = planeSize
-                uv.height = planeSize
-                addModifier ss uv
-                local sh = Shell()
-                if extrudeAmount >= 0 then (
-                    sh.outerAmount = extrudeAmount
-                    sh.innerAmount = 0.0
-                ) else (
-                    sh.innerAmount = -extrudeAmount
-                    sh.outerAmount = 0.0
+                local ex = Extrude()
+                ex.amount = extrudeAmount
+                ex.mapcoords = true
+                ex.realWorldMapSize = true
+                addModifier ss ex
+                local stdMod = Edit_Poly()
+                stdMod.name = "Edit Poly: MatID Replace"
+                addModifier ss stdMod
+                max modify mode
+                select ss
+                modPanel.setCurrentObject stdMod node:ss ui:true
+                stdMod.SetEPolySelLevel #Face
+                subObjectLevel = 4
+                redrawViews()
+                local toArr = #()
+                toArr[1] = if extrudeAmount >= 0 then miTop else miBottom
+                toArr[2] = if extrudeAmount >= 0 then miBottom else miTop
+                toArr[3] = miSide
+                -- ОДИН проход по source-ID 1..3 (накопитель-вычитание, как в
+                -- bake у MaterialID-Replace-mod.ms). materialIDToSet на 0-базисе.
+                local accum = bitarray()
+                local anySelected = false
+                for s = 1 to 3 do (
+                    stdMod.selectByMaterialClear = true
+                    stdMod.selectByMaterialID = s - 1
+                    stdMod.ButtonOp #SelectByMaterial
+                    local sel = stdMod.GetSelection #Face node:ss
+                    sel = sel - accum
+                    accum = accum + sel
+                    if sel.numberSet > 0 do (
+                        anySelected = true
+                        stdMod.SetSelection #Face sel node:ss
+                        stdMod.materialIDToSet = toArr[s] - 1
+                        stdMod.ButtonOp #SetMaterial
+                    )
                 )
-                sh.overrideMatID       = true
-                sh.matID       = miSide
-                sh.overrideInnerMatID = true
-                sh.matInnerID  = miBottom
-                sh.overrideOuterMatID = true
-                sh.matOuterID  = miTop
-                addModifier ss sh
-                local ux = UVW_Xform()
-                local tile = 1.0 / (REMS_mmToSys 1000)
-                ux.U_Tile = tile
-                ux.V_Tile = tile
-                ux.W_Tile = tile
-                ux.U_Flip = false
-                ux.V_Flip = false
-                ux.W_Flip = false
-                addModifier ss ux
+                if not anySelected do throw "на входе Edit Poly не найдено исходных Material ID"
+                subObjectLevel = 0
+                stdMod.Commit()
                 exAdded = true
+                stackOk = true
             ) catch (
-                stackOk = false
-                format "REMS: ошибка Shell пути '%': %\n" ssName (getCurrentException())
+                format "REMS: ошибка Extrude+EditPoly(MatID Replace) '%': %\n" ssName (getCurrentException())
             )
-            if not stackOk do format "REMS: '%': Shell НЕ ДОБАВЛЕН\n" ssName
+            if not stackOk then (
+                -- откат частично добавленного стека (свежий сплайн - модификаторы
+                -- только наши) и Fallback: Shell + UVWMap + UVW Xform
+                try ( for k = ss.modifiers.count to 1 by -1 do deleteModifier ss k ) catch ()
+                try (
+                    local planeSize = REMS_mmToSys 1000
+                    local uv = UVWMap()
+                    uv.maptype = 0
+                    uv.length = planeSize
+                    uv.width = planeSize
+                    uv.height = planeSize
+                    addModifier ss uv
+                    local sh = Shell()
+                    if extrudeAmount >= 0 then (
+                        sh.outerAmount = extrudeAmount
+                        sh.innerAmount = 0.0
+                    ) else (
+                        sh.innerAmount = -extrudeAmount
+                        sh.outerAmount = 0.0
+                    )
+                    sh.overrideMatID       = true
+                    sh.matID       = miSide
+                    sh.overrideInnerMatID = true
+                    sh.matInnerID  = miBottom
+                    sh.overrideOuterMatID = true
+                    sh.matOuterID  = miTop
+                    addModifier ss sh
+                    local ux = UVW_Xform()
+                    local tile = 1.0 / (REMS_mmToSys 1000)
+                    ux.U_Tile = tile
+                    ux.V_Tile = tile
+                    ux.W_Tile = tile
+                    ux.U_Flip = false
+                    ux.V_Flip = false
+                    ux.W_Flip = false
+                    addModifier ss ux
+                    exAdded = true
+                    stackOk = true
+                ) catch (
+                    stackOk = false
+                    format "REMS: ошибка Shell пути '%': %\n" ssName (getCurrentException())
+                )
+                if not stackOk do format "REMS: '%': Shell НЕ ДОБАВЛЕН\n" ssName
+            )
         ) else (
             -- Extrude modifier: (дефолт или + MaterialID для одинаковых ID)
             try (

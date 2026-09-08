@@ -5,14 +5,32 @@
 наличии модификаторов в стеке и при МНОЖЕСТВЕННОМ выделении — обрабатывается каждый
 выбранный объект, чей базовый объект является сплайном.
 
-Два входных режима (run_simplifySpline и run_rebuildArcs) используют единую логику
-выделения: subobject 0 — все сплайны (автоматически), 1 — выделенные вершины,
-2 — сегменты → обе вершины сегмента (начало и конец), 3 — выделенные сплайны.
+Точки входа (run_rebuildLines, run_rebuildArcs, run_rebuildBezier и мастер
+run_simplifySpline) используют единую логику выделения: subobject 0 — все сплайны
+(автоматически), 1 — выделенные вершины, 2 — сегменты → обе вершины сегмента
+(начало и конец), 3 — выделенные сплайны.
 Для subobject 2 режима упрощения крайние вершины каждого выбранного диапазона
 СОХРАНЯЮТСЯ (упрощается только внутренность), после обработки диапазоны выделяются
 заново по сохранённым позициям границ.
 
---- Упрощение (run_simplifySpline) ---
+Единая точка входа run_simplifySpline вызывает проходы ПО ПОРЯДКУ:
+   1) run_rebuildLines  — слияние коллинеарных сегментов (линии);
+   2) run_rebuildArcs   — восстановление дуг;
+   3) run_rebuildBezier — сокращение вершин (Шнайдер/эвристика) + сглаживание.
+Так после очистки линий положение границ дуг определяется точнее, а узлы дуг
+защищены от удаления на проходе Безье (SS_ARC_PROTECTED).
+
+--- Линии (run_rebuildLines) ---
+
+Слияние подряд идущих коллинеарных сегментов ЛЮБОЙ длины в один прямой
+сегмент: удаляются внутренние узлы сплошных «прямых» прогонов. Сегмент считается
+прямым, если его фактическая длина (buildSplineCumLengths — квадратура по касательной
+Безье) равна расстоянию между узлами — у дуг ручки отогнуты, поэтому их узлы этот проход не
+трогает даже при большой SS_LINE_STRAIGHT_TOL (допуск поворота на узел, по
+умолчанию 2°). Вырожденные сегменты (дублирующиеся узлы, длина ~1e-9) удаляются
+с восстановлением ручек Безье соседних узлов.
+
+--- Упрощение (run_rebuildBezier) ---
 
 Удаляет избыточные вершины, сохраняя форму кривой.
 Два метода выбора опорных точек:
@@ -53,6 +71,13 @@
   - Отсечение выбросов по отклонению (SS_ARC_MAX_DEVIATION): дуга определяется по
     «хорошим» точкам (ssArc_fitWithDeviationTrim + ssArc_longestInlierRun), выбросы
     не притягиваются и не удаляются.
+  - Проверка ГОТОВОЙ дуги против исходной кривой (как в упрощении): по математике
+    ssArc_replaceGroup/replaceGroupWrap заранее воспроизводится полилиния кубиков
+    Безье, которые ПОЛУЧАТСЯ, и измеряется max отклонение исходных точек диапазона
+    от этой полилинии (ssArc_maxDevToArc). Если дуга не ложится на исходную кривую
+    (допуск SS_ARC_VALIDATE_TOL_MULT × радиальный допуск фита), диапазон замены
+    сужается до inlier-прогона фита и попытка повторяется; если и это не помогло —
+    дуга не создаётся (фильтруется). Так отсекаются дуги, «стартующие не там».
 
 
 ВАЖНО: глобальные переменные объявлены на верхнем уровне, иначе ссылки внутри функций
@@ -93,7 +118,7 @@ global SS_ARC_PROTECTED = #()
 -- Минимальное число сегментов цепочки для распознавания дуги
 global SS_ARC_MIN_CHAIN_SEG = 4
 
--- Минимальное число сегментов в под-диапазоне для фита окружности
+-- Минимальное число сегментов в под-диапазоне для принятия окружности
 global SS_ARC_MIN_ARC_SEG = 1
 
 -- Максимальный угловой размер дуги на один кубик Безье (градусы)
@@ -125,7 +150,16 @@ global SS_ARC_MAX_STEP_DEG = 45
 -- не удаляются), но дуга определяется по оставшимся "хорошим" точкам.
 -- Меньше порога — меньше точек попадает в дугу (отсекаются выбросы).
 -- 0 = отсечение выключено (дуга заменяется целиком, если все точки в допусках фита).
-global SS_ARC_MAX_DEVIATION = 0.02
+global SS_ARC_MAX_DEVIATION = 0.01
+
+-- Множитель радиального допуска для ПОВТОРНОЙ проверки готовой дуги против исходных
+-- точек (по аналогии с упрощением: исходные сэмплы против новой кривой).
+-- Допуск проверки = SS_ARC_VALIDATE_TOL_MULT * max(radTolAbs, radTolRel * R).
+-- Допуск фита уже гарантирует «хорошие» точки на окружности; здесь проверяется,
+-- что ПОСТРОЕННЫЙ кубик Безье действительно лёг на исходную кривую (старт/конец
+-- дуги из верного места). Больше значение = слабее проверка, больше риск дуг мимо
+-- кривой; меньше = чаще отсекаются/сужаются даже корректные дуги.
+global SS_ARC_VALIDATE_TOL_MULT = 2.0
 
 
 -- == Сглаживание ============================================================
@@ -136,6 +170,13 @@ global SS_SMOOTH_ANGLE = 175.0
 -- Допуск (градусы) распознавания "прямой" стороны:
 -- Ручка лежит на хорде своего сегмента
 global SS_SMOOTH_STRAIGHT_TOL = 5.0
+
+-- Допуск (градусы) коллинеарности для run_rebuildLines: узел удаляется, если
+-- входящий и исходящий сегменты продолжают друг друга прямолинейно (длина сегментов
+-- не важна). Сами сегменты при этом должны быть прямыми (Безье-длина из
+-- buildSplineCumLengths равна хорде) — дуги с отогнутыми ручками такой тест не трогает
+-- независимо от допуска.
+global SS_LINE_STRAIGHT_TOL = 2.0
 
 
 /* --------------------
@@ -428,185 +469,11 @@ fn nearestKnotAtArcLen cum totalLen closedS L nk = (
 	bestK
 )
 
--- Кумулятивные длины сегментов: массив из nseg+1 значений, cum[i] = длина до узла i.
--- Длина сегмента считается квадратурой Гаусса-Лежандря (8 точек) - точно для кубик.
-fn buildSplineCumLengths spline s_num = (
-	local nseg = splineSegCount spline s_num
-	local glT = #(-0.96028985649753620, -0.79666647741362670, -0.52546409566427920, -0.18343464249564980,
-				   0.18343464249564980,  0.52546409566427920,  0.79666647741362670,  0.96028985649753620)
-	local glW = #( 0.10122853629037624,  0.22238103445337450,  0.31370664587788730,  0.36268378337836198,
-				   0.36268378337836198,  0.31370664587788730,  0.22238103445337450,  0.10122853629037624)
-	local cum = #(0.0)
-	local acc = 0.0
-	for seg = 1 to nseg do (
-		local halfLen = 0.0
-		for k = 1 to 8 do (
-			local t = 0.5 * (glT[k] + 1.0)
-			halfLen += glW[k] * (length (evalSplineSegmentDeriv spline s_num seg t))
-		)
-		halfLen *= 0.5
-		acc += halfLen
-		append cum acc
-	)
-	cum
-)
-
--- --------------------
--- SCHNEIDER «fitCurves»: адаптивный выбор опорных вершин.
--- Фитим кубик Безье к плотной (по длине дуги) выборке участка; если максимальное
--- ортогональное отклонение больше допуска - разрезаем участок в точке худшей ошибки
--- и повторяем для обеих половин (явный стек вместо рекурсии). Границы принятых
--- участков привязываем к ближайшим узлам сплайна - они и становятся опорными.
-fn findSupportPointsSchneider spline s_num samplesPerSegment:20 tolerancePct:0.1 maxSamples:2000 = (
+fn splineSegCount spline s_num = (
 	local nk = numknots spline s_num
-	local closedS = isClosed spline s_num
-	local cum = buildSplineCumLengths spline s_num
-	local totalLen = cum[cum.count]
-	local nsegTotal = cum.count - 1
-	if totalLen <= 0.0 or nk < 3 then return #(1, nk)
-
-	local avgSegLen = totalLen / nsegTotal
-
-	-- плотная равномерная по длине дуги выборка всего сплайна
-	local N = amin #(amax #(samplesPerSegment * nsegTotal, 200), maxSamples)
-	local samples = for j = 1 to N collect (
-		local l = (j - 1) as float * totalLen / (N - 1)
-		#(getSplinePosAtLen spline s_num cum l, l)
-	)
-
-	local tolErr = totalLen * tolerancePct * 0.01
-
-	local supports = #(0.0) -- границы принятых участков в длинах дуги
-	local stackArr = #(#(1, N))
-	local guardIter = 0
-	local floorHits = 0 -- участки, принятые из-за пола разрешения узлов (ошибка > допуска)
-	local worstFloorD = 0.0 -- худшая ошибка среди таких участков
-	while stackArr.count > 0 do (
-		local rng = stackArr[stackArr.count]
-		deleteItem stackArr stackArr.count
-		local i0 = rng[1]
-		local i1 = rng[2]
-		guardIter += 1
-
-		-- поддиапазон с длинами ОТ НАЧАЛА участка (конвенция fitBezier*)
-		local l0 = samples[i0][2]
-		local sub = for j = i0 to i1 collect #(samples[j][1], samples[j][2] - l0)
-		local subLen = sub[sub.count][2]
-		local ts = for pnt in sub collect ((pnt[2] / (if subLen > 0.0 then subLen else 1.0)))
-
-		local params = fitBezierIterative sub iterations:5
-		local P0 = sub[1][1]
-		local P3 = sub[sub.count][1]
-		local P1 = params[1]
-		local P2 = params[2]
-
-		-- худшая по ортогональному отклонению точка участка
-		local maxD = 0.0
-		local maxJ = i0
-		for j = (i0 + 1) to (i1 - 1) do (
-			local t = bezierClosestT P0 P1 P2 P3 samples[j][1] ts[j - i0 + 1]
-			local dd = distance (bezierPointAt P0 P1 P2 P3 t) samples[j][1]
-			if dd > maxD do ( maxD = dd; maxJ = j )
-		)
-
-		-- резать бессмысленно, если участок короче двух сегментов сплайна:
-		-- опорную точку можно поставить только в существующий узел
-		local canSplit = subLen >= 2.0 * avgSegLen and (i1 - i0) >= 8 and guardIter < 300
-		if maxD <= tolErr or not canSplit then (
-			append supports samples[i1][2]
-			if maxD > tolErr do (
-				floorHits += 1
-				if maxD > worstFloorD do worstFloorD = maxD
-			)
-		)
-		else (
-			append stackArr #(i0, maxJ)
-			append stackArr #(maxJ, i1)
-		)
-	)
-
-	sort supports
-
-	-- привязка границ к узлам + гарантии минимального набора
-	local result = #()
-	for idx = 1 to supports.count do (
-		local bestK = nearestKnotAtArcLen cum totalLen closedS supports[idx] nk
-		if (finditem result bestK) == 0 do append result bestK
-	)
-	if (finditem result 1) == 0 do append result 1
-	if not closedS and (finditem result nk) == 0 do append result nk
-	if closedS and result.count < 3 then (
-		for frac in #(0.25, 0.5, 0.75) do (
-			local bk = nearestKnotAtArcLen cum totalLen closedS (frac * totalLen) nk
-			if (finditem result bk) == 0 do append result bk
-		)
-	)
-	sort result
-	local clean = #()
-	for k in result do (
-		if clean.count == 0 or clean[clean.count] != k then append clean k
-	)
-
-	-- Пост-проход: узлы с острым углом (направления in/out касательных сильно отличаются
-	-- от 180°) — гарантируем их как опорные, даже если Schneider не достала их из-за
-	-- низкого разрешения (subLen < 2·avgSegLen). Это ловит внутренние точки дуг,
-	-- оказавшиеся на стыке двух под-диапазонов при разбивке по кривизне.
-	local sharpAngleCos = cos SS_SCHNEIDER_SHARP_ANGLE -- угол между normalized in/out касательными
-	for k = 1 to nk do (
-		if not closedS and (k == 1 or k == nk) then continue
-		if (finditem clean k) > 0 then continue
-		local kp = getKnotPoint spline s_num k
-		local din = getInVec spline s_num k - kp
-		local dout = getOutVec spline s_num k - kp
-		local lin = length din; local lout = length dout
-		if lin < 1e-9 or lout < 1e-9 do continue
-		din /= lin; dout /= lout
-		if (dot din dout) > sharpAngleCos do (
-			if (finditem clean k) == 0 do append clean k
-		)
-	)
-
-	-- Пост-проход: защита границы ДЛИННОГО и КОРОТКОГО сегментов (аналог эвристики
-	-- findSupportPoints и цепочек run_rebuildArcs). Если у вершины соседние сегменты
-	-- различаются по длине >= SS_LONGSEG_RATIO и направление до и после неё почти
-	-- совпадает (локально прямое продолжение) — вершину делаем опорной. Без неё длинная
-	-- прямая рядом с плотной дугой/кривой попадает в фит плавного поворота, изгибается.
-	local lgRatio = if SS_LONGSEG_RATIO == undefined then 4.0 else SS_LONGSEG_RATIO
-	local lgAngTol = if SS_LONGSEG_ANGLE_TOL == undefined then 5.0 else SS_LONGSEG_ANGLE_TOL
-	local lgCos = cos lgAngTol
-	for k = 1 to nk do (
-		if not closedS and (k == 1 or k == nk) then continue
-		if (finditem clean k) > 0 then continue
-		local kp = getKnotPoint spline s_num k
-		local kpPrev = getKnotPoint spline s_num (if k == 1 then nk else k - 1)
-		local kpNext = getKnotPoint spline s_num (if k == nk then 1 else k + 1)
-		local v1 = kp - kpPrev
-		local v2 = kpNext - kp
-		local l1 = length v1
-		local l2 = length v2
-		if l1 < 1e-9 or l2 < 1e-9 do continue
-		if (amax #(l1, l2)) < lgRatio * (amin #(l1, l2)) then continue
-
-		-- поворот в самой вершине
-		local d1 = v1 / l1
-		local d2 = v2 / l2
-		if (dot d1 d2) < lgCos then continue
-
-		-- поворот в предыдущей вершине (локально прямое продолжение до этой)
-		local prevPrev = if closedS then (if k == 1 then nk - 1 else (if k == 2 then nk else k - 2)) else (if k == 2 then 0 else k - 2)
-		if prevPrev == 0 do continue
-		local v0 = kpPrev - (getKnotPoint spline s_num prevPrev)
-		local l0 = length v0
-		if l0 < 1e-9 do continue
-		local d0 = v0 / l0
-		if (dot d0 d1) < lgCos then continue
-
-		append clean k
-	)
-	sort clean
-	if SS_DEBUG do format "Schneider: участков=% опорных=% допуск=% | уперлись в разрешение узлов: % (худшая ошибка %)\n" supports.count clean.count tolErr floorHits worstFloorD
-	clean
+	if nk >= 2 and (isClosed spline s_num) then nk else nk - 1
 )
+
 
 /* --------------------
 --
@@ -631,6 +498,40 @@ fn bezierDerivAt p0 p1 p2 p3 t = (
 	(3*mt*mt)*(p1-p0) + (6*mt*t)*(p2-p1) + (3*t*t)*(p3-p2)
 )
 
+-- Производная по t на сегменте seg
+fn evalSplineSegmentDeriv spline s_num seg t = (
+	local kB = if seg == (numknots spline s_num) then 1 else seg + 1
+	if (getSegmentType spline s_num seg) == #line then (
+		(getKnotPoint spline s_num kB) - (getKnotPoint spline s_num seg)
+	) else (
+		bezierDerivAt (getKnotPoint spline s_num seg) (getOutVec spline s_num seg) \
+					  (getInVec spline s_num kB) (getKnotPoint spline s_num kB) t
+	)
+)
+
+-- Кумулятивные длины сегментов: массив из nseg+1 значений, cum[i] = длина до узла i.
+-- Длина сегмента считается квадратурой Гаусса-Лежандря (8 точек) - точно для кубик.
+fn buildSplineCumLengths spline s_num = (
+	local nseg = splineSegCount spline s_num
+	local glT = #(-0.96028985649753620, -0.79666647741362670, -0.52546409566427920, -0.18343464249564980,
+				   0.18343464249564980,  0.52546409566427920,  0.79666647741362670,  0.96028985649753620)
+	local glW = #( 0.10122853629037624,  0.22238103445337450,  0.31370664587788730,  0.36268378337836198,
+				   0.36268378337836198,  0.31370664587788730,  0.22238103445337450,  0.10122853629037624)
+	local cum = #(0.0)
+	local acc = 0.0
+	for seg = 1 to nseg do (
+		local halfLen = 0.0
+		for k = 1 to 8 do (
+			local t = 0.5 * (glT[k] + 1.0)
+			halfLen += glW[k] * (length (evalSplineSegmentDeriv spline s_num seg t))
+		)
+		halfLen *= 0.5
+		acc += halfLen
+		append cum acc
+	)
+	cum
+)
+
 -- Точка на сегменте seg при локальном параметре t (учитывает тип сегмента и шов замкнутого сплайна)
 fn evalSplineSegment spline s_num seg t = (
 	local kB = if seg == (numknots spline s_num) then 1 else seg + 1
@@ -644,21 +545,6 @@ fn evalSplineSegment spline s_num seg t = (
 	)
 )
 
--- Производная по t на сегменте seg
-fn evalSplineSegmentDeriv spline s_num seg t = (
-	local kB = if seg == (numknots spline s_num) then 1 else seg + 1
-	if (getSegmentType spline s_num seg) == #line then (
-		(getKnotPoint spline s_num kB) - (getKnotPoint spline s_num seg)
-	) else (
-		bezierDerivAt (getKnotPoint spline s_num seg) (getOutVec spline s_num seg) \
-					  (getInVec spline s_num kB) (getKnotPoint spline s_num kB) t
-	)
-)
-
-fn splineSegCount spline s_num = (
-	local nk = numknots spline s_num
-	if nk >= 2 and (isClosed spline s_num) then nk else nk - 1
-)
 
 -- Точка на сплайне на расстоянии l от начала (по таблице длин cum)
 fn getSplinePosAtLen spline s_num cum l = (
@@ -1066,6 +952,172 @@ fn fitBezierIterative samples origOutVec:[0,0,0] origInVec:[0,0,0] iterations:5 
 	params
 )
 
+
+-- --------------------
+-- SCHNEIDER «fitCurves»: адаптивный выбор опорных вершин.
+-- Фитим кубик Безье к плотной (по длине дуги) выборке участка; если максимальное
+-- ортогональное отклонение больше допуска - разрезаем участок в точке худшей ошибки
+-- и повторяем для обеих половин (явный стек вместо рекурсии). Границы принятых
+-- участков привязываем к ближайшим узлам сплайна - они и становятся опорными.
+fn findSupportPointsSchneider spline s_num samplesPerSegment:20 tolerancePct:0.1 maxSamples:2000 = (
+	local nk = numknots spline s_num
+	local closedS = isClosed spline s_num
+	local cum = buildSplineCumLengths spline s_num
+	local totalLen = cum[cum.count]
+	local nsegTotal = cum.count - 1
+	if totalLen <= 0.0 or nk < 3 then return #(1, nk)
+
+	local avgSegLen = totalLen / nsegTotal
+
+	-- плотная равномерная по длине дуги выборка всего сплайна
+	local N = amin #(amax #(samplesPerSegment * nsegTotal, 200), maxSamples)
+	local samples = for j = 1 to N collect (
+		local l = (j - 1) as float * totalLen / (N - 1)
+		#(getSplinePosAtLen spline s_num cum l, l)
+	)
+
+	local tolErr = totalLen * tolerancePct * 0.01
+
+	local supports = #(0.0) -- границы принятых участков в длинах дуги
+	local stackArr = #(#(1, N))
+	local guardIter = 0
+	local floorHits = 0 -- участки, принятые из-за пола разрешения узлов (ошибка > допуска)
+	local worstFloorD = 0.0 -- худшая ошибка среди таких участков
+	while stackArr.count > 0 do (
+		local rng = stackArr[stackArr.count]
+		deleteItem stackArr stackArr.count
+		local i0 = rng[1]
+		local i1 = rng[2]
+		guardIter += 1
+
+		-- поддиапазон с длинами ОТ НАЧАЛА участка (конвенция fitBezier*)
+		local l0 = samples[i0][2]
+		local sub = for j = i0 to i1 collect #(samples[j][1], samples[j][2] - l0)
+		local subLen = sub[sub.count][2]
+		local ts = for pnt in sub collect ((pnt[2] / (if subLen > 0.0 then subLen else 1.0)))
+
+		local params = fitBezierIterative sub iterations:5
+		local P0 = sub[1][1]
+		local P3 = sub[sub.count][1]
+		local P1 = params[1]
+		local P2 = params[2]
+
+		-- худшая по ортогональному отклонению точка участка
+		local maxD = 0.0
+		local maxJ = i0
+		for j = (i0 + 1) to (i1 - 1) do (
+			local t = bezierClosestT P0 P1 P2 P3 samples[j][1] ts[j - i0 + 1]
+			local dd = distance (bezierPointAt P0 P1 P2 P3 t) samples[j][1]
+			if dd > maxD do ( maxD = dd; maxJ = j )
+		)
+
+		-- резать бессмысленно, если участок короче двух сегментов сплайна:
+		-- опорную точку можно поставить только в существующий узел
+		local canSplit = subLen >= 2.0 * avgSegLen and (i1 - i0) >= 8 and guardIter < 300
+		if maxD <= tolErr or not canSplit then (
+			append supports samples[i1][2]
+			if maxD > tolErr do (
+				floorHits += 1
+				if maxD > worstFloorD do worstFloorD = maxD
+			)
+		)
+		else (
+			append stackArr #(i0, maxJ)
+			append stackArr #(maxJ, i1)
+		)
+	)
+
+	sort supports
+
+	-- привязка границ к узлам + гарантии минимального набора
+	local result = #()
+	for idx = 1 to supports.count do (
+		local bestK = nearestKnotAtArcLen cum totalLen closedS supports[idx] nk
+		if (finditem result bestK) == 0 do append result bestK
+	)
+	if (finditem result 1) == 0 do append result 1
+	if not closedS and (finditem result nk) == 0 do append result nk
+	if closedS and result.count < 3 then (
+		for frac in #(0.25, 0.5, 0.75) do (
+			local bk = nearestKnotAtArcLen cum totalLen closedS (frac * totalLen) nk
+			if (finditem result bk) == 0 do append result bk
+		)
+	)
+	sort result
+	local clean = #()
+	for k in result do (
+		if clean.count == 0 or clean[clean.count] != k then append clean k
+	)
+
+	-- Пост-проход: узлы с острым углом (направления in/out касательных сильно отличаются
+	-- от 180°) — гарантируем их как опорные, даже если Schneider не достала их из-за
+	-- низкого разрешения (subLen < 2·avgSegLen). Это ловит внутренние точки дуг,
+	-- оказавшиеся на стыке двух под-диапазонов при разбивке по кривизне.
+	local sharpAngleCos = cos SS_SCHNEIDER_SHARP_ANGLE -- угол между normalized in/out касательными
+	for k = 1 to nk do (
+		if not closedS and (k == 1 or k == nk) then continue
+		if (finditem clean k) > 0 then continue
+		local kp = getKnotPoint spline s_num k
+		local din = getInVec spline s_num k - kp
+		local dout = getOutVec spline s_num k - kp
+		local lin = length din; local lout = length dout
+		if lin < 1e-9 or lout < 1e-9 then (
+			-- Угловой узел (corner) — ручки нулевые; берём направления от хорд
+			-- соседних сегментов, чтобы проверку угла всё равно выполнить.
+			local prevK = if k == 1 then nk else k - 1
+			local nextK = if k == nk then 1 else k + 1
+			din = (getKnotPoint spline s_num prevK) - kp
+			dout = (getKnotPoint spline s_num nextK) - kp
+			lin = length din; lout = length dout
+			if lin < 1e-9 or lout < 1e-9 do continue
+		)
+		din /= lin; dout /= lout
+		if (dot din dout) > sharpAngleCos do (
+			if (finditem clean k) == 0 do append clean k
+		)
+	)
+
+	-- Пост-проход: защита границы ДЛИННОГО и КОРОТКОГО сегментов (аналог эвристики
+	-- findSupportPoints и цепочек run_rebuildArcs). Если у вершины соседние сегменты
+	-- различаются по длине >= SS_LONGSEG_RATIO и направление до и после неё почти
+	-- совпадает (локально прямое продолжение) — вершину делаем опорной. Без неё длинная
+	-- прямая рядом с плотной дугой/кривой попадает в фит плавного поворота, изгибается.
+	local lgRatio = if SS_LONGSEG_RATIO == undefined then 4.0 else SS_LONGSEG_RATIO
+	local lgAngTol = if SS_LONGSEG_ANGLE_TOL == undefined then 5.0 else SS_LONGSEG_ANGLE_TOL
+	local lgCos = cos lgAngTol
+	for k = 1 to nk do (
+		if not closedS and (k == 1 or k == nk) then continue
+		if (finditem clean k) > 0 then continue
+		local kp = getKnotPoint spline s_num k
+		local kpPrev = getKnotPoint spline s_num (if k == 1 then nk else k - 1)
+		local kpNext = getKnotPoint spline s_num (if k == nk then 1 else k + 1)
+		local v1 = kp - kpPrev
+		local v2 = kpNext - kp
+		local l1 = length v1
+		local l2 = length v2
+		if l1 < 1e-9 or l2 < 1e-9 do continue
+		if (amax #(l1, l2)) < lgRatio * (amin #(l1, l2)) then continue
+
+		-- поворот в самой вершине
+		local d1 = v1 / l1
+		local d2 = v2 / l2
+		if (dot d1 d2) < lgCos then continue
+
+		-- поворот в предыдущей вершине (локально прямое продолжение до этой)
+		local prevPrev = if closedS then (if k == 1 then nk - 1 else (if k == 2 then nk else k - 2)) else (if k == 2 then 0 else k - 2)
+		if prevPrev == 0 do continue
+		local v0 = kpPrev - (getKnotPoint spline s_num prevPrev)
+		local l0 = length v0
+		if l0 < 1e-9 do continue
+		local d0 = v0 / l0
+		if (dot d0 d1) < lgCos then continue
+
+		append clean k
+	)
+	sort clean
+	if SS_DEBUG do format "Schneider: участков=% опорных=% допуск=% | уперлись в разрешение узлов: % (худшая ошибка %)\n" supports.count clean.count tolErr floorHits worstFloorD
+	clean
+)
 
 -- Выбор направления касательной на границе участка. Хендл соседнего узла доверяем,
 -- только если он согласован с направлением самих данных участка (dot >= cosThreshold).
@@ -1731,36 +1783,81 @@ fn ssArc_strictnessToTols strict typicalLen = (
 	#(planeTol, radAbs, radRel, curvTolRel)
 )
 
--- разрезка цепочки точек по скачкам знаковой кривизны.
--- Возвращает абсолютные поддиапазоны узлов #(gStartP, gEndP), по возрастанию
+-- разрезка цепочки точек на поддиапазоны постоянной знаковой кривизны.
+-- Устойчива к шуму на стыках (переходные узлы с половинным шагом по углу
+-- втягиваются в дугу): дуга = непрерывный прогон узлов с |угол поворота| >=
+-- половины типичного шага дуги; прямые прогоны (поворот ~0) отделяются и в
+-- результат не попадают. Возвращает поддиапазоны узлов #(kLo, kHi) в системе
+-- отсчёта pStart (ptsChain[1] соответствует индексу pStart), по возрастанию.
 fn ssArc_curvatureSubranges ptsChain Larr pStart curvTolRel = (
 	local res = #()
 	local nChain = ssArc_avgNormal ptsChain
 	if (length nChain) < 1e-8 do return res
 
 	local angs = ssArc_turnAngles ptsChain nChain
-	local kappa = #()
-	kappa.count = ptsChain.count
-	for t = 1 to kappa.count do kappa[t] = 0.0
+
+	-- типичный шаг дуги = медиана ненулевых углов поворота
+	local posAng = #()
+	for v = 1 to angs.count do
+		if (abs angs[v]) > 1e-6 do append posAng (abs angs[v])
+	if posAng.count < 2 do return res
+	qsort posAng ssArc_cmpNumbers
+	local arcStep = posAng[((posAng.count + 1) / 2) as integer]
+	if arcStep < 1e-6 do return res
+	local thr = arcStep * 0.45
+
+	-- интерьерные узлы, реально поворачивающие (принадлежат дуге)
+	local curved = #()
+	curved.count = ptsChain.count
+	for v = 1 to curved.count do curved[v] = false
+	for v = 2 to (ptsChain.count - 1) do
+		if (abs angs[v]) >= thr do curved[v] = true
+
+	-- непрерывные прогоны дуги (индексы интерьерных узлов)
+	local runs = #()
+	local rStart = 0
 	for v = 2 to (ptsChain.count - 1) do (
-		local avgL = (Larr[pStart+v-2] + Larr[pStart+v-1]) / 2.0
-		if avgL < 1e-12 then kappa[v] = 0.0
-		else kappa[v] = angs[v] / avgL
+		if curved[v] and rStart == 0 do rStart = v
+		if (not curved[v]) and rStart > 0 do (
+			append runs #(rStart, v - 1)
+			rStart = 0
+		)
+	)
+	if rStart > 0 do append runs #(rStart, ptsChain.count - 1)
+
+	-- ДУГА, РАЗРЕЗАННАЯ ШВОМ ЦЕПОЧКИ: если и головной, и хвостовой прогоны
+	-- примыкают к концам цепочки И поворачивают в одну сторону — это одна
+	-- непрерывная дуга, пересекающая шов. Склеиваем в один «обёрнутый» прогон
+	-- #(kLo, kHi) с kLo > kHi (голова расположена в массиве ПЕРЕД хвостом).
+	local headIdx = 0
+	local tailIdx = 0
+	for i = 1 to runs.count do (
+		if runs[i][1] == 2 do headIdx = i
+		if runs[i][2] == (ptsChain.count - 1) do tailIdx = i
+	)
+	if runs.count >= 2 and headIdx > 0 and tailIdx > 0 and headIdx != tailIdx then (
+		local sumHead = 0.0
+		local sumTail = 0.0
+		for vv = runs[headIdx][1] to runs[headIdx][2] do sumHead += angs[vv]
+		for vv = runs[tailIdx][1] to runs[tailIdx][2] do sumTail += angs[vv]
+		if (sumHead * sumTail) > 0 then (
+			-- хвост и голова — одна дуга через шов: обёрнутый прогон
+			append res #((pStart + runs[tailIdx][1] - 2), (pStart + runs[headIdx][2]))
+			-- удаляем head и tail из обхода (индекс удаления — по убыванию)
+			if tailIdx > headIdx then (
+				deleteItem runs tailIdx
+				deleteItem runs headIdx
+			) else (
+				deleteItem runs headIdx
+				deleteItem runs tailIdx
+			)
+		)
 	)
 
-	local segStarts = #(1)
-	local prevK = kappa[2]
-	for v = 3 to (ptsChain.count - 2) do (
-		local curK = kappa[v]
-		if (prevK * curK) < 0 then (append segStarts v; prevK = curK; continue)
-		local denom = amax 1e-9 (abs prevK)
-		if ((abs (curK - prevK)) / denom) > curvTolRel then (append segStarts v; prevK = curK; continue)
-		prevK = (prevK * 0.7 + curK * 0.3)
-	)
-	append segStarts (ptsChain.count)
-
-	for gi = 1 to (segStarts.count - 1) do
-		append res #((pStart + segStarts[gi] - 1), (pStart + segStarts[gi+1] - 1))
+	-- расширяем каждый прогон на переходные узлы с обеих сторон, чтобы
+	-- захватить дугу/полукруг целиком
+	for r in runs do
+		append res #((pStart + r[1] - 2), (pStart + r[2]))
 	res
 )
 
@@ -1836,7 +1933,174 @@ fn ssArc_fitWithDeviationTrim pts planeTol radTolAbs radTolRel maxDev = (
 	#(finalFit[1], finalFit[2], finalFit[3], finalFit[4], lo, hi)
 )
 
+
+fn ssArc_drawnArcPoly p0 pE c n thetaSigned R totalInterior wrapped isFullCircle:false = (
+	local thetaAbs = abs thetaSigned
+	if thetaAbs < 1e-9 or R < 1e-12 do return #()
+	local dirSign = if thetaSigned >= 0 then 1.0 else -1.0
+
+	local maxLeg = if isFullCircle then SS_ARC_FULLCIRCLE_MAX_SEG_DEG else SS_ARC_MAX_SEG_DEGREE
+	local nSegMin = amax 1 ((ceil (thetaAbs / maxLeg)) as integer)
+	local nSegMax = amax SS_ARC_MIN_ARC_SEG ((floor (thetaAbs / SS_ARC_MIN_SEG_DEGREE)) as integer)
+	local nSeg = amin nSegMax (amax nSegMin SS_ARC_MIN_ARC_SEG)
+	local nUse = amin (nSeg - 1) (amax 0 totalInterior)
+	local subTheta = thetaAbs / nSeg
+	local hl = (4.0 / 3.0) * R * (tan (subTheta / 4.0))
+
+	local r0 = ssArc_safeNormalize (p0 - c)
+	if (length r0) < 1e-12 do return #()
+	local t0 = normalize (cross n r0) * dirSign
+
+	local kPts = #(p0)
+	local kT = #(t0)
+	for i = 1 to nUse do (
+		local ang
+		if isFullCircle or not wrapped then ang = thetaAbs * (i as float) / nSeg
+		else ang = thetaAbs * (i as float) / (nUse + 1)
+		local ri = ssArc_safeNormalize (r0 * (cos ang) + (cross n r0) * (sin ang) * dirSign)
+		append kPts (c + ri * R)
+		append kT (normalize (cross n ri) * dirSign)
+	)
+	append kPts pE
+	local rEnd = ssArc_safeNormalize (pE - c)
+	if (length rEnd) > 1e-12 then append kT (normalize (cross n rEnd) * dirSign)
+	else append kT kT[kT.count]
+
+	local poly = #()
+	local steps = 10
+	for j = 1 to (kPts.count - 1) do (
+		local hOut = kPts[j] + kT[j] * hl
+		local hIn = kPts[j + 1] - kT[j + 1] * hl
+		for st = 0 to steps do (
+			local tt = st as float / steps
+			append poly (bezierPointAt kPts[j] hOut hIn kPts[j + 1] tt)
+		)
+	)
+	poly
+)
+
+-- Максимальное отклонение исходных точек originals от дуги Безье, которую получится
+-- построить (см. ssArc_drawnArcPoly). Та же мера, что и в упрощении: исходные сэмплы
+-- против новой кривой (геометрическое отклонение формы). 0 = точки лежат на дуге.
+fn ssArc_maxDevToArc originals p0 pE c n thetaSigned R totalInterior wrapped isFullCircle:false = (
+	local poly = ssArc_drawnArcPoly p0 pE c n thetaSigned R totalInterior wrapped isFullCircle:isFullCircle
+	if poly.count < 2 do return 1e30
+	local worst = 0.0
+	for i = 1 to originals.count do (
+		local p = originals[i]
+		local dBest = 1e30
+		for j = 1 to (poly.count - 1) do (
+			local dd = pointSegDist p poly[j] poly[j + 1]
+			if dd < dBest do dBest = dd
+		)
+		if dBest > worst do worst = dBest
+	)
+	worst
+)
+
+-- Обработка одной поддуги контура, полученной разбивкой замкнутой цепочки по кривизне
+-- (фолбэк для случая, когда весь периметр НЕ является одной окружностью — капсула и т.п.).
+-- subPts - упорядоченные точки поддуги; curLo/curHi - ТЕКУЩИЕ реальные индексы граничных
+-- узлов (найдены по позициям); crossesSeam - пересекает ли поддуга шов замкнутого сплайна
+-- (виртуальный диапазон). Возвращает #(заменено, отфильтровано, protPos).
+fn ssArc_fallbackSub shp s subPts curLo curHi crossesSeam segsT planeTol radTolAbs radTolRel minArcSeg minArcAng = (
+	local replaced = 0
+	local filtered = 0
+	local protPos = #()
+	if subPts.count < (minArcSeg + 1) do return #(0, 0, #())
+	local tr = ssArc_fitWithDeviationTrim subPts planeTol radTolAbs radTolRel SS_ARC_MAX_DEVIATION
+	if tr != undefined then (
+		local cFit = tr[1]
+		local nFit = tr[2]
+		local subLo = tr[5]
+		local subHi = tr[6]
+		local goodPts = for i = subLo to subHi collect subPts[i]
+		local accRes = ssArc_accumulatedAngle goodPts cFit nFit
+		local accAng = accRes[1]
+		local maxBack = accRes[2]
+		local avgStep = if goodPts.count > 1 then (abs accAng) / (goodPts.count - 1) else 0.0
+		local isArc = true
+		if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
+		if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
+		if SS_DEBUG and not isArc do
+			format "  [fallback sub reject] maxBack=%.1f avgStep=%.1f pts=%\n" maxBack avgStep goodPts.count
+		if isArc then (
+			local thetaFit = (if tr[4] >= 0 then 1.0 else -1.0) * (abs accAng)
+			if (abs thetaFit) >= minArcAng then (
+				local Rfit = distance cFit subPts[1]
+				local vMult = if SS_ARC_VALIDATE_TOL_MULT == undefined then 2.0 else SS_ARC_VALIDATE_TOL_MULT
+				local arcTol = vMult * (amax radTolAbs (radTolRel * Rfit))
+				-- Проверка готовой дуги против исходной кривой (как в упрощении):
+				-- по математике замены заранее воспроизводим полилинию кубиков Безье,
+				-- которые ПОЛУЧАТСЯ, и меряем max отклонение исходных точек диапазона.
+				-- Если дуга "не стартует" из верного места (мимо кривой) — сужаем
+				-- диапазон до inlier-прогона фита и пробуем ещё раз; иначе фильтруем.
+				local rr = undefined
+				local tryLo = curLo
+				local tryHi = curHi
+				local clamped = false
+				for attempt = 0 to 1 while rr == undefined do (
+					local chkPts = #()
+					local loP = if clamped then subLo else 1
+					local hiP = if clamped then subHi else subPts.count
+					for kk = loP to hiP do append chkPts subPts[kk]
+					if chkPts.count < (minArcSeg + 1) do chkPts = #()
+					local totalInt = if crossesSeam then (tryHi + segsT - tryLo - 1) else (tryHi - tryLo - 1)
+					local arcDev = if chkPts.count > 0 then (
+						ssArc_maxDevToArc chkPts subPts[loP] subPts[hiP] cFit nFit thetaFit Rfit totalInt crossesSeam
+					) else 1e30
+					if SS_DEBUG do
+						format "  [arc validate] dev=% tol=% range=%..% pts=%\n" arcDev arcTol tryLo tryHi chkPts.count
+					if arcDev <= arcTol then (
+						if crossesSeam then (
+							rr = ssArc_replaceGroupWrap shp s tryLo (tryHi + segsT) segsT cFit nFit thetaFit
+						) else (
+							rr = ssArc_replaceGroup shp s tryLo tryHi cFit nFit thetaFit
+						)
+					) else if attempt == 0 and not clamped and (subLo > 1 or subHi < subPts.count) then (
+						-- дуга не легла на исходную кривую: сужаем диапазон до участка,
+						-- реально лежащего на окружности (inlier-прогон фита)
+						local nLo = ssArc_findKnotByPos shp s subPts[subLo]
+						local nHi = ssArc_findKnotByPos shp s subPts[subHi]
+						local spanOk = if crossesSeam then (nLo - nHi) >= minArcSeg else (nHi - nLo) >= minArcSeg
+						if nLo > 0 and nHi > 0 and spanOk then (
+							tryLo = nLo
+							tryHi = nHi
+							clamped = true
+						) else (
+							rr = #(false, 0)
+						)
+					) else (
+						rr = #(false, 0)
+					)
+				)
+				if rr != undefined and rr[1] then (
+					replaced += 1
+					if crossesSeam then (
+						for pp in rr[3] do
+							if (finditem protPos pp) == 0 do append protPos pp
+					) else (
+						local nK = rr[2]
+						for k = tryLo to (tryLo + nK - 1) do (
+							local pp = getKnotPoint shp s k
+							if (finditem protPos pp) == 0 do append protPos pp
+						)
+					)
+				) else (
+					filtered += 1
+				)
+			) else (
+				filtered += 1
+			)
+		)
+	)
+	#(replaced, filtered, protPos)
+)
+
 -- обработка одного непрерывного диапазона узлов: резка по кривизне + фит + замена.
+-- Диапазон может содержать примыкающие прямые и дугу (напр. [верхняя прямая +
+-- полукруг + нижняя прямая]); разбиваем его по кривизне, чтобы фитить каждую
+-- дугу целиком, а прямые просто отсеивались фитом.
 -- Поддиапазоны обрабатываются С КОНЦА, чтобы индексы не плыли после deleteKnot.
 -- Возвращает #(заменено, отфильтровано, позицииPoint3 границ дуг)
 fn ssArc_processRange shp s gStartP gEndP Larr planeTol radTolAbs radTolRel curvTolRel minArcSeg minArcAng = (
@@ -1845,35 +2109,65 @@ fn ssArc_processRange shp s gStartP gEndP Larr planeTol radTolAbs radTolRel curv
 	local protPos = #()
 	if (gEndP - gStartP) >= minArcSeg then (
 		local rangePts = for k = gStartP to gEndP collect (getKnotPoint shp s k)
-		local tr = ssArc_fitWithDeviationTrim rangePts planeTol radTolAbs radTolRel SS_ARC_MAX_DEVIATION
-		if tr != undefined then (
-			local cFit = tr[1]
-			local nFit = tr[2]
-			local subLoP = gStartP + tr[5] - 1
-			local subHiP = gStartP + tr[6] - 1
-			local subPts = for k = subLoP to subHiP collect (getKnotPoint shp s k)
-			local accRes = ssArc_accumulatedAngle subPts cFit nFit
-			local accAng = accRes[1]
-			local maxBack = accRes[2]
-			local avgStep = if subPts.count > 1 then (abs accAng) / (subPts.count - 1) else 0.0
-			local isArc = true
-			if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
-			if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
-			if SS_DEBUG and not isArc do (
-				format "  [arc reject] maxBack=%.1f avgStep=%.1f (sub %..%, pts=%)\n" maxBack avgStep subLoP subHiP subPts.count
+		-- разбивка на поддуги по кривизне; прямые участки в результат не входят
+		local subs = ssArc_curvatureSubranges rangePts Larr gStartP curvTolRel
+		if subs.count > 0 then (
+			local uniRanges = #() -- #(kLo, kHi, posLo, posHi) в глобальных индексах узлов
+			for sb in subs do (
+				local kLo = amax gStartP sb[1]
+				local kHi = amin gEndP sb[2]
+				if (kHi - kLo) >= minArcSeg do
+					append uniRanges #(kLo, kHi, getKnotPoint shp s kLo, getKnotPoint shp s kHi)
 			)
-			if isArc then (
-				local thetaFit = (if tr[4] >= 0 then 1.0 else -1.0) * (abs accAng)
-				if (abs thetaFit) >= minArcAng then (
-					local rr = ssArc_replaceGroup shp s subLoP subHiP cFit nFit thetaFit
-					if rr[1] then (
-						replaced += 1
-						local nK = rr[2]
-						for k = subLoP to (subLoP + nK - 1) do
-							append protPos (getKnotPoint shp s k)
+			if uniRanges.count > 0 then (
+				qsort uniRanges ssArc_cmpArcGroupsDesc
+				local segsT = if isClosed shp s then (numKnots shp s) else (numKnots shp s - 1)
+				for ent in uniRanges do (
+					local curLo = ssArc_findKnotByPos shp s ent[3]
+					local curHi = ssArc_findKnotByPos shp s ent[4]
+					if curLo > 0 and curHi > 0 and (curHi - curLo) >= minArcSeg and curLo != curHi then (
+						local subPts = #()
+						for k = curLo to curHi do append subPts (getKnotPoint shp s k)
+						local r = ssArc_fallbackSub shp s subPts curLo curHi false segsT planeTol radTolAbs radTolRel minArcSeg minArcAng
+						replaced += r[1]
+						filtered += r[2]
+						for pp in r[3] do
+							if (finditem protPos pp) == 0 do append protPos pp
 					)
-				) else (
-					filtered += 1
+				)
+			)
+		) else (
+			-- дуг-участков не нашлось: единичный фит с отсечением выбросов
+			local tr = ssArc_fitWithDeviationTrim rangePts planeTol radTolAbs radTolRel SS_ARC_MAX_DEVIATION
+			if tr != undefined then (
+				local cFit = tr[1]
+				local nFit = tr[2]
+				local subLoP = gStartP + tr[5] - 1
+				local subHiP = gStartP + tr[6] - 1
+				local subPts = for k = subLoP to subHiP collect (getKnotPoint shp s k)
+				local accRes = ssArc_accumulatedAngle subPts cFit nFit
+				local accAng = accRes[1]
+				local maxBack = accRes[2]
+				local avgStep = if subPts.count > 1 then (abs accAng) / (subPts.count - 1) else 0.0
+				local isArc = true
+				if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
+				if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
+				if SS_DEBUG and not isArc do (
+					format "  [arc reject] maxBack=%.1f avgStep=%.1f (sub %..%, pts=%)\n" maxBack avgStep subLoP subHiP subPts.count
+				)
+				if isArc then (
+					local thetaFit = (if tr[4] >= 0 then 1.0 else -1.0) * (abs accAng)
+					if (abs thetaFit) >= minArcAng then (
+						local rr = ssArc_replaceGroup shp s subLoP subHiP cFit nFit thetaFit
+						if rr[1] then (
+							replaced += 1
+							local nK = rr[2]
+							for k = subLoP to (subLoP + nK - 1) do
+								append protPos (getKnotPoint shp s k)
+						)
+					) else (
+						filtered += 1
+					)
 				)
 			)
 		)
@@ -1881,7 +2175,130 @@ fn ssArc_processRange shp s gStartP gEndP Larr planeTol radTolAbs radTolRel curv
 	#(replaced, filtered, protPos)
 )
 
--- обработка одного сплайна: поиск и замена дуг, включая дуги через шов замкнутых.
+-- Плотная полилиния дуги Безье, которую ПОСТРОИТ ssArc_replaceGroup /
+-- ssArc_replaceGroupWrap для окружности (c, n, thetaSigned, R) между узлами-границами
+-- p0/pE. Воспроизводит РОВНО ту же раскладку, что и при реальной замене (количество
+-- сегментов nSeg, углы интерьерных узлов, касательные n×r, длина хендла
+-- (4/3)*R*tan(subTheta/4)), поэтому отклонение исходных точек от этой полилинии =
+-- отклонение от дуги ПОСЛЕ её создания (не нужно откатывать deleteKnot).
+-- wrapped: true = диапазон пересекает шов замкнутого сплайна (интерьер разбивается
+-- равномерно по nUse+1); isFullCircle: намотка ровно 360° (равномерно по nSeg).
+
+-- Обработка ОДНОЙ шовной цепочки замкнутого сплайна: виртуальный диапазон [a..bU]
+-- (bU в индексах сегментов, для шовных дуг bU > segsT либо bU == segsT — цепочка,
+-- кончающаяся РОВНО на шовном сегменте, т.е. её последний узел — узел 1).
+-- Собирает точки через шов, фитирует окружность, валидирует и заменяет участок
+-- дугой Безье через ssArc_replaceGroupWrap; если весь периметр не одна окружность
+-- (пришли прямые/острая ломаная) — фолбэк режет цепочку по кривизне и обрабатывает
+-- поддуги через ssArc_fallbackSub (шовные — с crossesSeam=true). Корнер-узел,
+-- НЕ лежащий на окружности, при этом корректно отсеется фитом (дуга не "приклеится"
+-- к острому углу, а остановится в точке касания).
+-- Возвращает #(заменено, отфильтрованоПоУглу, protPos).
+fn ssArc_processWrapChain shp s a bU segsT planeTol radTolAbs radTolRel curvTolRel minArcSeg minArcAng = (
+	local replaced = 0
+	local filteredByMinAngle = 0
+	local protPos = #()
+	local fullPts = #()
+	for k = a to (bU + 1) do (
+		local ki = k
+		if ki > segsT do ki -= segsT
+		-- Не дублировать узел-шов: если возврат через шов попадает ровно на
+		-- начальный узел (полная окружность, startK==headEnd), дубль ломает
+		-- фит окружности (fitCircle3D по 3 точкам, где первая==последняя).
+		if k == (bU + 1) and ki == a then exit
+		append fullPts (getKnotPoint shp s ki)
+	)
+	if fullPts.count < 3 do (
+		if SS_DEBUG do format "  [wrap skip] недостаточно точек (%)\n" fullPts.count
+		return #(replaced, filteredByMinAngle, protPos)
+	)
+	if SS_DEBUG do
+		format "  [wrap] segs %..% (virtual) pts=%\n" a bU fullPts.count
+
+	local fullFit = ssArc_robustFit fullPts planeTol radTolAbs radTolRel
+	if fullFit != undefined then (
+		local accRes = ssArc_accumulatedAngle fullPts fullFit[1] fullFit[2]
+		local accAng = accRes[1]
+		local maxBack = accRes[2]
+		local avgStep = if fullPts.count > 1 then (abs accAng) / (fullPts.count - 1) else 0.0
+		local isArc = true
+		if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
+		if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
+		if SS_DEBUG and not isArc do
+			format "  [wrap reject] maxBack=%.1f avgStep=%.1f\n" maxBack avgStep
+		-- Полная окружность охвачена, если цепочка покрывает все сегменты
+		-- (в т.ч. через шов со стартом не с сегмента 1 — после склейки цепочек).
+		local perimCovered = ((bU - a + 1) >= segsT)
+		-- Полная окружность может оказаться правильным многоугольником
+		-- (квадрат/треугольник): 4 равные стороны = 90° на шаг по углу — это
+		-- НЕ дуга. Требуем достаточно мелкую угловую дискретизацию входных точек.
+		if perimCovered and avgStep > SS_ARC_MAX_STEP_DEG do isArc = false
+		local thetaFit = (if fullFit[4] >= 0 then 1.0 else -1.0) * (if perimCovered then 360.0 else (abs accAng))
+		if SS_DEBUG do
+			format "  [wrap] R=%.3f accAng=%.1f maxBack=%.1f avgStep=%.3f thetaFit=%.1f minArcAng=%.1f isArc=%\n" (distance fullFit[1] fullPts[1]) accAng maxBack avgStep thetaFit minArcAng isArc
+		if isArc and (abs thetaFit) >= minArcAng then (
+			local rr = ssArc_replaceGroupWrap shp s a (bU + 1) segsT fullFit[1] fullFit[2] thetaFit
+			if SS_DEBUG do
+				format "  [wrap replaceGroupWrap] ok=% nTotal=%\n" rr[1] rr[2]
+			if rr[1] then (
+				replaced += 1
+				for pp in rr[3] do
+					if (finditem protPos pp) == 0 do append protPos pp
+			)
+		) else if isArc then (
+			filteredByMinAngle += 1
+		)
+	) else (
+		-- Весь периметр НЕ является одной окружностью (капсула/многодуговой контур).
+		-- Универсальный фолбэк: разбиваем цепочку по скачкам знаковой кривизны и
+		-- обрабатываем каждую поддугу отдельно (прямые участки отсеиваются фитом).
+		if SS_DEBUG do
+			format "  [wrap] fullFit=undefined (не одна окружность) — фолбэк по кривизне\n"
+		local Lfull = #()
+		for i = 1 to (fullPts.count - 1) do append Lfull (distance fullPts[i] fullPts[i + 1])
+		if Lfull.count >= 2 then (
+			local subs = ssArc_curvatureSubranges fullPts Lfull 1 curvTolRel
+			if SS_DEBUG do format "  [fallback] поддиапазонов по кривизне: %\n" subs.count
+			local fbRanges = #() -- #(virtStart, subPts, wrapped)
+			for rng in subs do (
+				local s0 = rng[1]
+				local s1 = rng[2]
+				local rwrapped = (s0 > s1)
+				local rsubPts = #()
+				if rwrapped then (
+					-- обёрнутая дуга: хвост (s0..конец) + голова (начало..s1)
+					for i = s0 to fullPts.count do append rsubPts fullPts[i]
+					for i = 1 to s1 do append rsubPts fullPts[i]
+				) else (
+					for i = s0 to s1 do append rsubPts fullPts[i]
+				)
+				local cntJudged = if rwrapped then ((fullPts.count - s0 + 1) + s1 - 1) else (s1 - s0)
+				if rsubPts.count >= (minArcSeg + 1) and cntJudged >= minArcSeg do
+					append fbRanges #((a + s0 - 1), rsubPts, rwrapped)
+			)
+			qsort fbRanges ssArc_cmpArcGroupsDesc
+			for ent in fbRanges do (
+				local subPts = ent[2]
+				local wrapped = ent[3]
+				if subPts.count >= (minArcSeg + 1) then (
+					local curLo = ssArc_findKnotByPos shp s subPts[1]
+					local curHi = ssArc_findKnotByPos shp s subPts[subPts.count]
+					if curLo > 0 and curHi > 0 then (
+						local crossesSeam = wrapped or (curLo > curHi)
+						local r = ssArc_fallbackSub shp s subPts curLo curHi crossesSeam segsT planeTol radTolAbs radTolRel minArcSeg minArcAng
+						replaced += r[1]
+						filteredByMinAngle += r[2]
+						for pp in r[3] do
+							if (finditem protPos pp) == 0 do append protPos pp
+					)
+				)
+			)
+		)
+	)
+	#(replaced, filteredByMinAngle, protPos)
+)
+
+
 -- Возвращает #(заменено, отфильтрованоПоУглу, индексы защищённых вершин-границ дуг)
 -- Внутри работает с позициями (Point3) и конвертирует в индексы ПОСЛЕ всех удалений,
 fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:70 minAngleDeg:0 selectedKnots:unsupplied = (
@@ -2000,11 +2417,18 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 					local isArc = true
 					if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
 					if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
+					-- Вся окружность охвачена, если головная и хвостовая части вместе
+					-- покрывают все узлы. Именно такой "полный периметр" важно проверять
+					-- на правильный многоугольник ниже (не только когда шов в узле 1).
+					local perimCovered = ((knots - tailStartK + 1) + headEndK) >= knots
 					-- Полное кольцо замкнутого может оказаться правильным многоугольником
 					-- (квадрат/треугольник) — шаг по углу велик, это не дуга.
-					if tailStartK == 1 and headEndK == knots and avgStep > SS_ARC_MAX_STEP_DEG do isArc = false
+					if perimCovered and avgStep > SS_ARC_MAX_STEP_DEG do isArc = false
 					if isArc then (
-						local thetaFit = (if fullFit[4] >= 0 then 1.0 else -1.0) * (abs accAng)
+						-- Полная окружность: дуга замыкает ровно 360°. avgStep/accAng
+						-- недосчитывают последний шаг (без дубля шва), поэтому фиксируем
+						-- угол = ±360, чтобы кольцо замкнулось в точку.
+						local thetaFit = (if fullFit[4] >= 0 then 1.0 else -1.0) * (if perimCovered then 360.0 else (abs accAng))
 						if (abs thetaFit) >= minArcAng then (
 							local aVirt = tailStartK
 							local bVirt = knots + headEndK
@@ -2124,69 +2548,11 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 
 	-- 3) обработка дуг через шов ПЕРВОЙ, пока индексы узлов не сдвинуты
 	for wc in wrapChains do (
-		local a = wc[1]
-		local bU = wc[2]
-		local fullPts = #()
-		for k = a to (bU + 1) do (
-			local ki = k
-			if ki > segsT do ki -= segsT
-			-- Не дублировать узел-шов: если возврат через шов попадает ровно на
-			-- начальный узел (полная окружность, startK==headEnd), дубль ломает
-			-- фит окружности (fitCircle3D по 3 точкам, где первая==последняя).
-			if k == (bU + 1) and ki == a then exit
-			append fullPts (getKnotPoint shp s ki)
-		)
-		if fullPts.count < 3 do (
-			if SS_DEBUG do format "  [wrap skip] недостаточно точек (%)\n" fullPts.count
-			continue
-		)
-		if SS_DEBUG do
-			format "  [wrap] segs %..% (virtual) pts=%\n" a bU fullPts.count
-
-		local fullFit = ssArc_robustFit fullPts planeTol radTolAbs radTolRel
-		if fullFit != undefined then (
-			local accRes = ssArc_accumulatedAngle fullPts fullFit[1] fullFit[2]
-			local accAng = accRes[1]
-			local maxBack = accRes[2]
-			local avgStep = if fullPts.count > 1 then (abs accAng) / (fullPts.count - 1) else 0.0
-			local isArc = true
-			if maxBack > SS_ARC_MAX_BACK_DEGREES do isArc = false
-			if avgStep > 1e-6 and maxBack > avgStep * 8.0 do isArc = false
-			-- Полная окружность может оказаться правильным многоугольником
-			-- (квадрат/треугольник): 4 равные стороны = 90° на шаг по углу — это
-			-- НЕ дуга. Требуем достаточно мелкую угловую дискретизацию входных точек.
-			if a == 1 and bU == segsT and avgStep > SS_ARC_MAX_STEP_DEG do isArc = false
-			if SS_DEBUG and not isArc do
-				format "  [wrap reject] maxBack=%.1f avgStep=%.1f\n" maxBack avgStep
-			if SS_DEBUG do
-				format "  [wrap] R=%.3f accAng=%.1f maxBack=%.1f avgStep=%.3f thetaFit=%.1f minArcAng=%.1f isArc=%\n" (distance fullFit[1] fullPts[1]) accAng maxBack avgStep ((if fullFit[4] >= 0 then 1.0 else -1.0) * (abs accAng)) minArcAng isArc
-			if isArc then (
-				-- Полная окружность (a==1, bU==segsT): дуга замыкает ровно 360°.
-				-- avgStep/accAng недосчитывают последний шаг (без дубля шва),
-				-- поэтому фиксируем угол = ±360, чтобы кольцо замкнулось в точку.
-				local isFullCircle = (a == 1 and bU == segsT)
-				local thetaFit = if isFullCircle then (
-					(if fullFit[4] >= 0 then 1.0 else -1.0) * 360.0
-				) else (
-					(if fullFit[4] >= 0 then 1.0 else -1.0) * (abs accAng)
-				)
-				if (abs thetaFit) >= minArcAng then (
-					local rr = ssArc_replaceGroupWrap shp s a (bU + 1) segsT fullFit[1] fullFit[2] thetaFit
-					if SS_DEBUG do
-						format "  [wrap replaceGroupWrap] ok=% nTotal=%\n" rr[1] rr[2]
-					if rr[1] then (
-						replaced += 1
-						for pp in rr[3] do
-							if (finditem allProtPos pp) == 0 do append allProtPos pp
-					)
-				) else (
-					filteredByMinAngle += 1
-				)
-			)
-		) else (
-			if SS_DEBUG do
-				format "  [wrap] fullFit=undefined (robustFit не сработал)\n"
-		)
+		local r = ssArc_processWrapChain shp s wc[1] wc[2] segsT planeTol radTolAbs radTolRel curvTolRel minArcSeg minArcAng
+		replaced += r[1]
+		filteredByMinAngle += r[2]
+		for pp in r[3] do
+			if (finditem allProtPos pp) == 0 do append allProtPos pp
 	)
 
 	-- 4) обработка обычных диапазонов: пересчитываем цепочки
@@ -2200,6 +2566,7 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 		append L2 (distance pA pB)
 	)
 	local ranges2 = #()
+	local wrap2 = #() -- шага 4: цепочки, заканчивающиеся РОВНО на шовном сегменте
 	if curSegsT > 1 then (
 		local i2 = 1
 		local scanned2 = 0
@@ -2221,16 +2588,39 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 				local b2 = i2 + cnt2 - 1
 				local fullCircle2 = (cnt2 >= curSegsT)
 				if not fullCircle2 then (
-					local endVtx = b2 + 1
-					if endVtx > curNk do endVtx = curNk
-					append ranges2 #(a2, endVtx)
-					if SS_DEBUG do format "  [range2] segs %..% len=%\n" a2 b2 cnt2
+					if closedS and b2 == curSegsT then (
+						-- Цепочка заканчивается РОВНО на шовном сегменте: её последний
+						-- узел — узел 1 (шов). Раньше endVtx зажимался на curNk и шовная
+						-- точка терялась: дуга прилипала к точке касания вместо того,
+						-- чтобы замкнуться через шов. Теперь обрабатываем как дугу через
+						-- шов с виртуальным концом curSegsT+1 (замена защитит узел-шов
+						-- как границу через ssArc_replaceGroupWrap).
+						append wrap2 #(a2, b2)
+						if SS_DEBUG do format "  [range2] segs %..% len=% → ШОВНАЯ (вирт. конец %)\n" a2 b2 cnt2 (b2 + 1)
+					) else (
+						local endVtx = b2 + 1
+						if endVtx > curNk do endVtx = curNk
+						append ranges2 #(a2, endVtx)
+						if SS_DEBUG do format "  [range2] segs %..% len=%\n" a2 b2 cnt2
+					)
 				)
 			)
 			scanned2 += cnt2
 			i2 = i2 + cnt2
 			if i2 > curSegsT do i2 -= curSegsT
 		)
+	)
+
+	-- 4a) шовные цепочки шага 4 обрабатываем до обычных диапазонов:
+	--	их удаления лежат на индексах не ниже начала цепочки (последняя из
+	--	последовательных цепочек с максимальным a2), поэтому индексы остальных
+	--	диапазонов (ниже по номеру) не сдвигаются.
+	for wc2 in wrap2 do (
+		local r = ssArc_processWrapChain shp s wc2[1] wc2[2] curSegsT planeTol radTolAbs radTolRel curvTolRel minArcSeg minArcAng
+		replaced += r[1]
+		filteredByMinAngle += r[2]
+		for pp in r[3] do
+			if (finditem allProtPos pp) == 0 do append allProtPos pp
 	)
 
 	if SS_DEBUG do (
@@ -2281,12 +2671,58 @@ fn ssArc_rebuildSpline shp s segTolPct:25 minChainSeg:8 minArcSeg:6 strictness:7
 	#(replaced, filteredByMinAngle, protected)
 )
 
+-- Повторное выделение диапазона [pLo..pHi] после удаления избыточных узлов.
+-- Границы диапазона сохранены по позициям (Point3) — находим их новые индексы
+-- по ближайшему узлу. Возвращает МАССИВ для выделения (сам выбор НЕ выполняет,
+-- чтобы несколько диапазонов можно было накопить и выделить одним вызовом с
+-- keep:false, а не затирать друг друга):
+--   mode:1 → массив индексов узлов;  mode:2 → массив индексов сегментов.
+fn ssReselectRange obj s_num pLo pHi mode:1 = (
+	local nk = numKnots obj s_num
+	if nk < 1 do return #()
+	local idxLo = 0
+	local idxHi = 0
+	local dLo = 1e30
+	local dHi = 1e30
+	for k = 1 to nk do (
+		local d = distance (getKnotPoint obj s_num k) pLo
+		if d < dLo do (dLo = d; idxLo = k)
+	)
+	for k = 1 to nk do (
+		local d = distance (getKnotPoint obj s_num k) pHi
+		if d < dHi do (dHi = d; idxHi = k)
+	)
+	-- Почти всегда ближайшие узлы — это сами сохранившиеся границы. Не отбрасываем
+	-- диапазон по жёсткому расстоянию: после фита дуг границы могут сместиться на
+	-- доли/единицы. Достаточно, что обе границы найдены.
+	if idxLo == 0 or idxHi == 0 do return #()
+	if mode == 2 then (
+		-- Режим сегментов: сегменты между найденными узлами-границами.
+		local segs = #()
+		if idxLo <= idxHi then (
+			for k = idxLo to (idxHi - 1) do append segs k
+		) else (
+			for k = idxLo to nk do append segs k
+			for k = 1 to (idxHi - 1) do append segs k
+		)
+		return segs
+	)
+	local sel = #()
+	if idxLo <= idxHi then (
+		for k = idxLo to idxHi do append sel k
+	) else (
+		for k = idxLo to nk do append sel k
+		for k = 1 to idxHi do append sel k
+	)
+	sel
+)
+
 -- ТОЧКА ВХОДА: восстановление дуг во всех сплайнах выбранной формы.
 -- Запускать ДО упрощения (кнопка удаления вершин). Не вызываете - механизм выключен.
 -- Границы заменённых дуг запоминаются в SS_ARC_PROTECTED (по индексу сплайна)
--- и исключаются из удаления в run_simplifySpline.
+-- и исключаются из удаления в run_rebuildBezier.
 --
--- Логика выделения (идентична run_simplifySpline):
+-- Логика выделения (идентична run_rebuildBezier):
 --   subobject 0 (object): автоматический режим по ВСЕМ сплайнам
 --   subobject 1 (vertex): только выделенные вершины (если ничего не выделено — пропуск)
 --   subobject 2 (segment): сегменты → обе вершины сегмента (начало и конец), как subobject 1
@@ -2456,51 +2892,255 @@ fn run_rebuildArcs = (
 )
 
 
--- Повторное выделение диапазона [pLo..pHi] после удаления избыточных узлов.
--- Границы диапазона сохранены по позициям (Point3) — находим их новые индексы
--- по ближайшему узлу. Возвращает МАССИВ для выделения (сам выбор НЕ выполняет,
--- чтобы несколько диапазонов можно было накопить и выделить одним вызовом с
--- keep:false, а не затирать друг друга):
---   mode:1 → массив индексов узлов;  mode:2 → массив индексов сегментов.
-fn ssReselectRange obj s_num pLo pHi mode:1 = (
-	local nk = numKnots obj s_num
-	if nk < 1 do return #()
-	local idxLo = 0
-	local idxHi = 0
-	local dLo = 1e30
-	local dHi = 1e30
-	for k = 1 to nk do (
-		local d = distance (getKnotPoint obj s_num k) pLo
-		if d < dLo do (dLo = d; idxLo = k)
+/* --------------------
+--
+-- Восстановление линий (run_rebuildLines)
+--
+*/ --------------------
+
+-- Слияние подряд идущих коллинеарных сегментов (ЛЮБОЙ длины) в один прямой сегмент:
+-- удаляются внутренние узлы сплошных прямых прогонов. После этого границы дуг
+-- определяются по чистым линиям (в мастере run_simplifySpline этот проход идёт
+-- ПЕРВЫМ). Сегмент считается прямым, если его фактическая длина (buildSplineCumLengths,
+-- квадратура по касательной Безье) равна расстоянию между узлами — у дуг ручки отогнуты,
+-- поэтому их узлы этот проход не трогает даже при большой SS_LINE_STRAIGHT_TOL.
+-- Допуск поворота на узел SS_LINE_STRAIGHT_TOL (по умолчанию 2°). Вырожденные
+-- сегменты (дублирующиеся узлы, длина ~1e-9) удаляются с восстановлением ручек
+-- Безье соседних узлов.
+-- Логика выделения идентична run_rebuildArcs:
+--   subobject 0 — все сплайны, 1 — выделенные вершины, 2 — сегменты,
+--   3 — выделенные сплайны. Для 1/2 после обработки выборка восстанавливается
+-- по позициям границ (индексы пересчитываются).
+fn run_rebuildLines = (
+	global SS_ARC_PROTECTED
+	local savedSubObjLevel = subObjectLevel
+	if selection.count == 0 then (
+		format "Линии: не выбрано ни одного объекта\n"
+		return OK
 	)
-	for k = 1 to nk do (
-		local d = distance (getKnotPoint obj s_num k) pHi
-		if d < dHi do (dHi = d; idxHi = k)
-	)
-	-- Почти всегда ближайшие узлы — это сами сохранившиеся границы. Не отбрасываем
-	-- диапазон по жёсткому расстоянию: после фита дуг границы могут сместиться на
-	-- доли/единицы. Достаточно, что обе границы найдены.
-	if idxLo == 0 or idxHi == 0 do return #()
-	if mode == 2 then (
-		-- Режим сегментов: сегменты между найденными узлами-границами.
-		local segs = #()
-		if idxLo <= idxHi then (
-			for k = idxLo to (idxHi - 1) do append segs k
-		) else (
-			for k = idxLo to nk do append segs k
-			for k = 1 to (idxHi - 1) do append segs k
+	local tolDeg = if SS_LINE_STRAIGHT_TOL == undefined then 2.0 else SS_LINE_STRAIGHT_TOL
+	local straightCos = cos tolDeg
+	local processed = 0
+
+	for obj in selection do (
+		if not (superclassof obj.baseobject == Shape) then continue
+
+		-- per-object: resolve splines to process + selected knots
+		local splinesToProcess = #()
+		local knotsPerSpline = #()
+
+		if savedSubObjLevel == 0 then (
+			for s = 1 to numSplines obj do (
+				append splinesToProcess s
+				append knotsPerSpline unsupplied
+			)
+		) else if savedSubObjLevel == 1 then (
+			for s_num = 1 to numSplines obj do (
+				local sel = getKnotSelection obj s_num
+				if sel != undefined and sel.count > 0 then (
+					append splinesToProcess s_num
+					append knotsPerSpline sel
+				)
+			)
+		) else if savedSubObjLevel == 2 then (
+			for s_num = 1 to numSplines obj do (
+				local selSeg = getSegSelection obj s_num
+				if selSeg != undefined and selSeg.count > 0 then (
+					local nk = numKnots obj s_num
+					local knots = #()
+					for seg in selSeg do (
+						append knots seg
+						local k2 = if seg < nk then (seg + 1) else 1
+						append knots k2
+					)
+					knots = makeUniqueArray knots
+					append splinesToProcess s_num
+					append knotsPerSpline knots
+				)
+			)
+		) else if savedSubObjLevel == 3 then (
+			local selSplines = getSplineSelection obj
+			if selSplines != undefined and selSplines.count > 0 then (
+				for s in selSplines do (
+					append splinesToProcess s
+					append knotsPerSpline unsupplied
+				)
+			)
 		)
-		return segs
+
+		if splinesToProcess.count == 0 then continue
+
+		local savedSel = #() -- режим 1: #(s_num, #positions); режим 2: #(s_num, pLo, pHi)
+		if savedSubObjLevel == 1 then (
+			for i = 1 to splinesToProcess.count do (
+				local s_num = splinesToProcess[i]
+				local sel = knotsPerSpline[i]
+				if sel != unsupplied and sel.count > 0 then (
+					local positions = for k in sel collect (getKnotPoint obj s_num k)
+					append savedSel #(s_num, positions)
+				)
+			)
+		) else if savedSubObjLevel == 2 then (
+			for i = 1 to splinesToProcess.count do (
+				local s_num = splinesToProcess[i]
+				local sel = knotsPerSpline[i]
+				if sel != unsupplied and sel.count > 0 then (
+					local nk = numKnots obj s_num
+					local grpL = getGroups sel (isClosed obj s_num) nk
+					for grp in grpL do (
+						if grp.count >= 2 do
+							append savedSel #(s_num, getKnotPoint obj s_num grp[1], getKnotPoint obj s_num grp[grp.count])
+					)
+				)
+			)
+		)
+
+		undo "Rebuild Lines" on (
+			local objDel = 0
+			for i = 1 to splinesToProcess.count do (
+				local s_num = splinesToProcess[i]
+				local selK = knotsPerSpline[i]
+				local nk = numKnots obj s_num
+				if nk < 3 then continue
+				local closedS = isClosed obj s_num
+				local pts = for k = 1 to nk collect (getKnotPoint obj s_num k)
+				-- Таблица кумулятивных длин сегментов (встроенная здесь sqrt-квадратура
+				-- по касательной Безье, см. buildSplineCumLengths): cum[i] = длина дуги
+				-- до узла i. Длина сегмента seg = cum[seg+1] - cum[seg]. Сегмент считается
+				-- ПРЯМЫМ, если его Безье-длина равна хорде (ручки лежат на хорде). Если
+				-- ручки отогнуты (длина > хорды) — это дуга, её узлы НЕ трогаем, даже
+				-- когда хорды почти коллинеарны. Такая проверка не зависит от индексов
+				-- и сама защищает дуги.
+				local cum = buildSplineCumLengths obj s_num
+				local relTol = 1e-4
+				local epsL = 1e-9
+				local deletable = #()
+				local degenerate = #()
+				local degSave = #() -- #(prevPos, prevOut, nextPos, nextIn) — ручки Безье для восстановления
+				for k = 1 to nk do (
+					if not closedS and (k == 1 or k == nk) then continue
+					if selK != unsupplied and (finditem selK k) == 0 then continue
+					local prev = if k == 1 then nk else (k - 1)
+					local next = if k == nk then 1 else (k + 1)
+					local d1 = pts[k] - pts[prev]
+					local d2 = pts[next] - pts[k]
+					local l1 = length d1
+					local l2 = length d2
+					if l2 < epsL then (
+						-- вырожденный сегмент (дублирующиеся узлы): удаляем его узел,
+						-- но запоминаем ручки Безье соседей для восстановления кривой
+						if (finditem degenerate k) == 0 do append degenerate k
+						append degSave #(pts[prev], getOutVec obj s_num prev, pts[next], getInVec obj s_num next)
+					) else if l1 < epsL then (
+						continue -- дубль уже обработан как начало своего нулевого сегмента
+					) else (
+						local slIn = cum[prev + 1] - cum[prev]
+						local slOut = cum[k + 1] - cum[k]
+						local tolIn = amax #((l1 * relTol), 1e-6)
+						local tolOut = amax #((l2 * relTol), 1e-6)
+						if SS_DEBUG do (
+							format "  [point %] prev=% next=% (l1=% l2=%) dot=% slIn=% slOut=%\n" k d1 d2 l1 l2 (dot (d1 / l1) (d2 / l2)) slIn slOut
+						)
+						if slIn - l1 > tolIn then continue
+						if slOut - l2 > tolOut then continue
+						if (dot (d1 / l1) (d2 / l2)) < straightCos then continue
+						append deletable k
+					)
+				)
+				local todel = deletable + degenerate
+				if todel.count == 0 then continue
+				-- Замкнутый сплайн не должен схлопнуться менее чем до 3 узлов (иначе
+				-- кольцо вырождается): избыточные для этого узлы вычёркиваем из списка.
+				if closedS and (nk - todel.count) < 3 do (
+					local keep = todel.count - (nk - 3)
+					todel = for dd = 1 to (todel.count - keep) collect todel[dd]
+				)
+				if todel.count == 0 then continue
+				local sorted = sort todel
+				local nDel = 0
+				for dk = sorted.count to 1 by -1 do (
+					deleteKnot obj s_num sorted[dk]
+					nDel += 1
+				)
+				updateShape obj
+				-- Восстанавливаем ручки Безье, чтобы удаление вырожденных сегментов не
+				-- исказило кривую: границы находим по позициям (индексы уехали).
+				for rec in degSave do (
+					local nk2 = numKnots obj s_num
+					local idx = 0
+					local bestD = 1e30
+					for kk = 1 to nk2 do (
+						local dd = distance (getKnotPoint obj s_num kk) rec[1]
+						if dd < bestD do (bestD = dd; idx = kk)
+					)
+					if idx > 0 and bestD < epsL and (length rec[2]) > epsL do setOutVec obj s_num idx rec[2]
+					idx = 0; bestD = 1e30
+					for kk = 1 to nk2 do (
+						local dd = distance (getKnotPoint obj s_num kk) rec[3]
+						if dd < bestD do (bestD = dd; idx = kk)
+					)
+					if idx > 0 and bestD < epsL and (length rec[4]) > epsL do setInVec obj s_num idx rec[4]
+				)
+				updateShape obj
+				objDel += nDel
+				if nDel > 0 then format "Линии [сплайн %]: удалено узлов % (было %)\n" s_num nDel nk
+				if SS_DEBUG do (
+					format "  [lines s%] nKnots=% del=% deg=% (tol=%)\n" s_num nk nDel degenerate.count tolDeg
+					format "  [lines s%] deletedIndices=% degenerate=%\n" s_num sorted degenerate
+				)
+			)
+			processed += 1
+			if objDel > 0 then format "Всего [%]: слито узлов линий %\n" obj.name objDel
+		)
+
+		if savedSel.count > 0 then (
+			if savedSubObjLevel == 2 then (
+				local perSpline = #() -- #(#s_num, #segs)
+				for entry in savedSel do (
+					local s_num = entry[1]
+					local segs = ssReselectRange obj s_num entry[2] entry[3] mode:2
+					if segs.count > 0 then (
+						local bucket = undefined
+						for ps in perSpline do (
+							if ps[1] == s_num do bucket = ps
+						)
+						if bucket == undefined then (
+							bucket = #(s_num, #())
+							append perSpline bucket
+						)
+						for sg in segs do
+							if (finditem bucket[2] sg) == 0 do append bucket[2] sg
+					)
+				)
+				for ps in perSpline do setSegSelection obj ps[1] ps[2]
+			) else (
+				for entry in savedSel do (
+					local s_num = entry[1]
+					local positions = entry[2]
+					local newSel = #()
+					local nk = numknots obj s_num
+					for pos in positions do (
+						local bestIdx = 0
+						local bestDist = 1e30
+						for k = 1 to nk do (
+							local d = distance (getKnotPoint obj s_num k) pos
+							if d < bestDist do (bestDist = d; bestIdx = k)
+						)
+						if bestIdx > 0 and bestDist < 1.0 do (
+							if (finditem newSel bestIdx) == 0 do append newSel bestIdx
+						)
+					)
+					setKnotSelection obj s_num newSel
+				)
+			)
+		)
 	)
-	local sel = #()
-	if idxLo <= idxHi then (
-		for k = idxLo to idxHi do append sel k
-	) else (
-		for k = idxLo to nk do append sel k
-		for k = 1 to idxHi do append sel k
-	)
-	sel
+
+	if processed == 0 then format "Выберите форму, базовым объектом которой является сплайн (SplineShape/Line)\n"
+	OK
 )
+
+
 
 
 -- Логика выделения (идентична run_rebuildArcs):
@@ -2511,7 +3151,7 @@ fn ssReselectRange obj s_num pLo pHi mode:1 = (
 --                          упрощается только внутренность; после обработки диапазоны
 --                          повторно выделяются (по сохранённым позициям границ).
 --   subobject 3 (spline): только выделенные сплайны, автовыбор опорных
-fn run_simplifySpline = (
+fn run_rebuildBezier = (
 	global SS_ARC_PROTECTED
 	local savedSubObjLevel = subObjectLevel
 	if selection.count == 0 then (
@@ -2690,5 +3330,29 @@ fn run_simplifySpline = (
 
 	if processed == 0 then format "Выберите форму, базовым объектом которой является сплайн (SplineShape/Line)\n"
 	subobjectlevel = savedSubObjLevel
+	OK
+)
+
+
+/* --------------------
+--
+-- Единая точка входа (run_simplifySpline)
+--
+*/ --------------------
+
+-- Мастер всех проходов восстановления, вызывается ПО ПОРЯДКУ:
+--   1) линии   (run_rebuildLines)  — слияние коллинеарных сегментов, границы линий
+--                                    становятся точным ориентиром для дуг;
+--   2) дуги    (run_rebuildArcs)   — поиск и замена дискретизированных окружностей,
+--                                    узлы-границы защищаются (SS_ARC_PROTECTED);
+--   3) безье   (run_rebuildBezier) — сокращение избыточных вершин с учётом защиты дуг
+--                                    и выравнивание хендлов почти-прямых узлов.
+-- Каждый проход сохраняет и восстанавливает subobjectlevel и собственную выборку.
+-- Параметр skipArcs:true — для повторной попытки без этапа дуг (REMS_autoSimplify).
+fn run_simplifySpline skipArcs:false = (
+	run_rebuildLines()
+	if not skipArcs do
+		run_rebuildArcs()
+	run_rebuildBezier()
 	OK
 )
