@@ -179,7 +179,7 @@ macroScript ModPropsLister
 	autoUndoEnabled:false
 (
 local APP_TITLE = "ModProps Lister"
-local VERSION = "1.0.1 (2026-09-05)"
+local VERSION = "1.0.2 (2026-09-09)"
 
 local lbl_ver_caption = APP_TITLE + " " + VERSION
 
@@ -295,6 +295,7 @@ global ORM_resolveTarget
 global ORM_applyProperty
 global ORM_deleteModifier
 global ORM_toggleModifier
+global ORM_instancifyModifier
 global ORM_refreshModPanel
 global ORM_collectValues
 global ORM_isNumeric
@@ -336,6 +337,7 @@ global g_orm_incrUndoLabel = "ModPropsLister Edit"
 global g_orm_gestureActive = false
 global ORM_ctxPtype
 global ORM_onDeleteMod
+global ORM_onInstancifyMod
 global ORM_rebuildPropsRollout
 global ORM_addPropControls
 global ORM_refreshUI
@@ -930,6 +932,89 @@ fn ORM_toggleModifier modClass state =
 	applied
 )
 
+-- Конвертирует выбранный модификатор в ОБЩИЙ ИНСТАНС на всех объектах.
+-- Образец — «первый попавшийся» мод данного класса (верхний экземпляр на первом
+-- подходящем объекте). На каждом остальном объекте СВОЙ мод заменяется инстансом
+-- образца, причём место вставки ОБЯЗАНО совпасть: вставляем инстанс before:{ourIdx}
+-- (счёт от вершины стека, как индексируется obj.modifiers), затем удаляем СВОЙ мод
+-- (после вставки он сдвинут вниз на 1) — инстанс оказывается ровно на его месте.
+-- Итог: у всех объектов один и тот же экземпляр модификатора (курсив в списке).
+fn ORM_instancifyModifier modClass =
+(
+	if g_orm_debug do format "ModPropsLister[inst]: ORM_instancifyModifier modClass=%\n" (modClass as string)
+	if not (ORM_validTargets()) do ( if g_orm_debug do format "ModPropsLister[inst]: no valid targets\n"; ORM_refreshUI quiet:true; return false )
+	-- «Первый попавшийся»: образец — верхний мод класса на первом из объектов,
+	-- у которых этот класс вообще есть (идём по г_uniq в порядке списка).
+	local refObj = undefined
+	local refMod = undefined
+	for obj in g_orm_uniqueObjs do
+	(
+		if not (isValidNode obj) do continue
+		for m in obj.modifiers do
+			if classOf m == modClass do ( refObj = obj; refMod = m; exit )
+		if refMod != undefined do exit
+	)
+	if g_orm_debug do format "ModPropsLister[inst]: refObj=% refMod=%\n" (refObj as string) (refMod as string)
+	if refMod == undefined do return false
+
+	local applied = false
+	undo "ModPropsLister Convert To Instance" on
+	(
+		with redraw off
+		(
+			for obj in g_orm_uniqueObjs do
+			(
+				if obj == refObj do continue
+				if not (isValidNode obj) do continue
+				if g_orm_debug do format "ModPropsLister[inst]:   obj=% mods=%\n" (obj as string) obj.modifiers.count
+				-- Своя копия мода данного класса на этом объекте (верхняя) и её индекс
+				local ourMod = undefined
+				local ourIdx = 0
+				for i = 1 to obj.modifiers.count do
+					if classOf obj.modifiers[i] == modClass do ( ourMod = obj.modifiers[i]; ourIdx = i; exit )
+				if g_orm_debug do format "ModPropsLister[inst]:   ourMod=% ourIdx=%\n" (ourMod as string) ourIdx
+				if ourMod == undefined or ourMod == refMod do continue
+				if g_orm_debug do
+					format "ModPropsLister[inst]:   valid(ref)=% valid(instance)=% index=% mods.count=% base=%\n" \
+						(validModifier obj refMod) (validModifier obj (classOf refMod)) ourIdx obj.modifiers.count \
+						(classOf obj.baseObject)
+				try
+				(
+					-- Порядок КРИТИЧЕН: Extrude (shape-only) нельзя навесить поверх уже
+					-- заметоченного меша — «Modifier is not appropriate». Поэтому:
+					--  1) запоминаем состояние ВСЕХ вышестоящих модов (наша позиция = ourIdx),
+					--  2) отключаем их — тип под позицией вставки возвращается к базовому,
+					--  3) удаляем СВОЙ мод (индексы вышестоящих при этом не меняются),
+					--  4) вставляем инстанс образца НА ТО ЖЕ МЕСТО (before:{ourIdx}),
+					--  5) возвращаем состояние вышестоящих как было.
+					-- addModifier с уже применённым модом = инстанс (общие данные).
+					local upperStates = #()
+					for i = 1 to ourIdx - 1 do
+						try ( append upperStates #(i, obj.modifiers[i].enabled) ) \
+							catch ( append upperStates #(i, true) )
+					for i = 1 to ourIdx - 1 do
+						try ( obj.modifiers[i].enabled = false ) \
+							catch ()
+					deleteModifier obj ourMod
+					addModifier obj refMod before:ourIdx
+					applied = true
+					for d in upperStates do
+						try ( obj.modifiers[d[1]].enabled = d[2] ) \
+							catch ()
+				)
+				catch ( ORM_logExcept ("instancify " + (modClass as string)) (getCurrentException() as string) )
+				if g_orm_debug do format "ModPropsLister[inst]:   done applied=%\n" applied
+			)
+		)
+	)
+	-- Список (курсив инстанса) и Modify-панель обновляем, если что-то применили.
+	-- Панель переоткрываем на ОБЩЕМ инстансе образца (старые копии удалены, поэтому
+	-- владельца и объект задаём явно: setCurrentObject по удалённому моду не найдёт стек).
+	if applied do ORM_refreshModPanel show:refMod owner:refObj
+	if g_orm_debug do format "ModPropsLister[inst]: ORM_instancifyModifier returns %\n" applied
+	applied
+)
+
 -- Обновляет модификационную панель (Modify) после изменения стека скриптом.
 -- Callback'а на смену enabled в Max нет, поэтому панель повторно открываем на
 -- том же объекте/модификаторе. Документация (Command Panels, modPanel):
@@ -940,26 +1025,38 @@ fn ORM_toggleModifier modClass state =
 -- setCurrentObject сужает выделение до одного узла, поэтому исходный выбор
 -- восстанавливаем; на время этого прикрываемся g_orm_refreshing, чтобы колбэк
 -- selectionSetChanged не пересобрал наш список.
-fn ORM_refreshModPanel =
+-- show:/owner: — принудительно показать конкретный мод на конкретном узле
+-- (например, общий инстанс после конвертации, когда старые копии уже удалены).
+fn ORM_refreshModPanel show:undefined owner:undefined =
 (
-	if not (ORM_validTargets()) do return false
-	local curObj = modPanel.getCurrentObject()
-	if curObj == undefined do return false
+	if not (ORM_validTargets()) do ( if g_orm_debug do format "ModPropsLister[panel]: skip, no valid targets\n"; return false )
+	-- Панель Modify считается открытой, если командная панель в режиме #modify.
+	-- getCurrentObject() после удаления мода скриптом может вернуть undefined,
+	-- поэтому ориентируемся на режим, а не на текущий объект.
+	local taskMode = getCommandPanelTaskMode()
+	if taskMode != #modify do
+		( if g_orm_debug do format "ModPropsLister[panel]: skip, taskMode=% not #modify\n" (taskMode as string); return false )
 	local savedSel = selection as array
-	if savedSel.count == 0 do return false
+	if savedSel.count == 0 do ( if g_orm_debug do format "ModPropsLister[panel]: skip, empty selection\n"; return false )
 	-- Узел, которому принадлежит показываемый панелью объект. Узлы направленных
 	-- инстансов общие, но на всякий случай ищем владельца: иначе не рискуем
 	-- перещёлкивать панель на чужой стек.
-	local panelOwner = undefined
-	if isKindOf curObj Node do panelOwner = curObj
-	for obj in g_orm_uniqueObjs do
+	local curObj = show
+	local panelOwner = owner
+	if curObj == undefined do curObj = modPanel.getCurrentObject()
+	if panelOwner == undefined do
 	(
-		if panelOwner != undefined do exit
-		if curObj == obj.baseObject do ( panelOwner = obj; exit )
-		for m in obj.modifiers do
-			if m == curObj do ( panelOwner = obj; exit )
+		if isKindOf curObj Node do panelOwner = curObj
+		for obj in g_orm_uniqueObjs do
+		(
+			if panelOwner != undefined do exit
+			if curObj == obj.baseObject do ( panelOwner = obj; exit )
+			for m in obj.modifiers do
+				if m == curObj do ( panelOwner = obj; exit )
+		)
 	)
-	if panelOwner == undefined do return false
+	if panelOwner == undefined do ( if g_orm_debug do format "ModPropsLister[panel]: skip, no owner for %\n" (curObj as string); return false )
+	if g_orm_debug do format "ModPropsLister[panel]: setCurrentObject % on %\n" (curObj as string) (panelOwner as string)
 	g_orm_refreshing = true
 	try ( modPanel.setCurrentObject curObj node:panelOwner ui:true ) \
 		catch ( ORM_logExcept "setCurrentObject" (getCurrentException() as string) )
@@ -1147,6 +1244,14 @@ fn ORM_onDeleteMod idx =
 	if idx < 1 or idx > g_orm_modClasses.count do return false
 	ORM_deleteModifier g_orm_modClasses[idx]
 	true
+)
+
+-- Конвертировать выбранный модификатор в инстанс (обёртка кнопки)
+fn ORM_onInstancifyMod idx =
+(
+	if g_orm_debug do format "ModPropsLister[inst]: ORM_onInstancifyMod idx=% modClasses.count=%\n" idx g_orm_modClasses.count
+	if idx < 1 or idx > g_orm_modClasses.count do return false
+	ORM_instancifyModifier g_orm_modClasses[idx]
 )
 
 -- Активировать контрол и скрыть кнопку «Сделать общим» после применения
@@ -1611,12 +1716,14 @@ fn ORM_onListSelect idx =
 	(
 		g_orm_rollMods.btn_toggle.enabled = true
 		g_orm_rollMods.btn_delete.enabled = true
+		g_orm_rollMods.btn_inst.enabled   = true
 		ORM_setToggleUI (ORM_getLiveEnabled info[2]) mixedState:(ORM_isMixedEnabled info[2])
 	)
 	else
 	(
 		g_orm_rollMods.btn_toggle.enabled = false
 		g_orm_rollMods.btn_delete.enabled = false
+		g_orm_rollMods.btn_inst.enabled   = false
 		ORM_setToggleUI false
 	)
 	true
@@ -1734,6 +1841,7 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	ORM_setToggleUI false
 	g_orm_rollMods.btn_toggle.enabled = false
 	g_orm_rollMods.btn_delete.enabled = false
+	g_orm_rollMods.btn_inst.enabled = false
 	if g_orm_debug do
 		format "ModPropsLister[refresh]: STEP 2 rebuilt — g_orm_listItems.count=% listItems.count=% (SelectedIndex now %)\n" \
 			g_orm_listItems.count listItems.count g_orm_rollMods.lst_mods.SelectedIndex
@@ -2334,6 +2442,7 @@ fn ORM_listSelectChanged =
 		ORM_setToggleUI false
 		g_orm_rollMods.btn_toggle.enabled = false
 		g_orm_rollMods.btn_delete.enabled = false
+		g_orm_rollMods.btn_inst.enabled = false
 		true
 	)
 )
@@ -2416,8 +2525,13 @@ rollout rollout_mods "Modifiers"
 	-- глобал-функции читают число кадров из загруженной bitmap (см. ORM_loadIconFrames).
 	local locIconCount = 13
 
-	checkbutton btn_toggle "️" images:#(icon_path, undefined, locIconCount, 10, 9, 9, 9, true) align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
-	button btn_delete "" images:#(icon_path, undefined, locIconCount, 12, 12, 12, 12, true) width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,80]
+	checkbutton btn_toggle "️" images:#(icon_path, undefined, locIconCount, 10, 9, 9, 9, true) \
+		align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
+	button btn_inst "" images:#(icon_path, undefined, locIconCount, 7, 7, 7, 7, true) \
+		width:24 height:25 align:#right offset:[0,0] \
+		tooltip:"Convert selected modifier to instance.\nAll objects will share one instance of the first found modifier."
+	button btn_delete "" images:#(icon_path, undefined, locIconCount, 12, 12, 12, 12, true) \
+		width:24 height:25 align:#right tooltip:"Remove modifier from the stack" offset:[0,50]
 
 	label lbl_filter "Ignore:" align:#left offset:[-5,4] across:7
 	checkbutton chk_geom    "" images:#(icon_path, undefined, locIconCount, 2, 2, 2, 2, true) tooltip:"Geometry"
@@ -2425,7 +2539,8 @@ rollout rollout_mods "Modifiers"
 	checkbutton chk_light   "" images:#(icon_path, undefined, locIconCount, 4, 4, 4, 4, true) tooltip:"Light"
 	checkbutton chk_camera  "" images:#(icon_path, undefined, locIconCount, 5, 5, 5, 5, true) tooltip:"Camera"
 	checkbutton chk_helper  "" images:#(icon_path, undefined, locIconCount, 6, 6, 6, 6, true) tooltip:"Helpers"
-	button btn_refresh "" images:#(icon_path, undefined, locIconCount, 13, 13, 13, 13, true) align:#right tooltip:"Re-read the stack: update the list and properties"
+	button btn_refresh "" images:#(icon_path, undefined, locIconCount, 13, 13, 13, 13, true) \
+	align:#right tooltip:"Re-read the stack: update the list and properties"
 
 	on lst_mods DrawItem sender args do
 		ORM_drawListItem args fontND fontItalicND
@@ -2460,6 +2575,30 @@ rollout rollout_mods "Modifiers"
 		local modDataIdx = g_orm_selInfo[2]
 		if modDataIdx < 1 or modDataIdx > g_orm_modClasses.count do return false
 		if ORM_onDeleteMod modDataIdx do ORM_rebuildNow()
+	)
+
+	on btn_inst pressed do
+	(
+		if g_orm_debug do format "ModPropsLister[inst]: pressed, g_orm_selInfo=%\n" (g_orm_selInfo as string)
+		if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do
+		(
+			if g_orm_debug do format "ModPropsLister[inst]: selInfo invalid, bail\n"
+			return false
+		)
+		if g_orm_selInfo[1] != "mod" do
+		(
+			if g_orm_debug do format "ModPropsLister[inst]: selInfo[1]='%' not 'mod', bail\n" (g_orm_selInfo[1] as string)
+			messageBox "Base object cannot be converted to an instance." title:APP_TITLE
+			return false
+		)
+		local modDataIdx = g_orm_selInfo[2]
+		if g_orm_debug do format "ModPropsLister[inst]: modDataIdx=% modClasses.count=%\n" modDataIdx g_orm_modClasses.count
+		if modDataIdx < 1 or modDataIdx > g_orm_modClasses.count do
+		(
+			if g_orm_debug do format "ModPropsLister[inst]: modDataIdx out of range, bail\n"
+			return false
+		)
+		if ORM_onInstancifyMod modDataIdx do ORM_rebuildNow()
 	)
 
 	on chk_geom    changed st do ORM_onFilterChanged()
@@ -2621,6 +2760,7 @@ fn ORM_showUI result =
 	ORM_setToggleUI false
 	rollout_mods.btn_toggle.enabled = false
 	rollout_mods.btn_delete.enabled = false
+	rollout_mods.btn_inst.enabled = false
 
 	-- При открытии сразу выделяем первый элемент списка (верхний модификатор стека);
 	-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged → ORM_onListSelect
