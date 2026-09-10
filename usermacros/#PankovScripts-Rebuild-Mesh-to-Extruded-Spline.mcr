@@ -224,6 +224,17 @@ global REMS_minBBoxSymTol = 0.03
 -- false - всегда обычный Extrude (как раньше).
 global REMS_preserveMatIDs = true
 
+-- ФОЛБЭК «центры bbox крайних крышек»: уточнять ось, только если БАЗОВАЯ и
+-- ДАЛЬНЯЯ крышки ПАРАЛЛЕЛЬНЫ (плоскости) и КОНГРУЭНТНЫ (размеры профиля в
+-- плоскости сходятся в допуске). У составной/ступенчатой дальней крышки
+-- островки разных зон смещены, и центр их общего bbox даёт ДИАГОНАЛЬ
+-- вместо направления выдавки - тогда уточнение пропускается (как у балки 211_mip).
+-- Параллельность: |dot нормалей крышек| > REMS_capParallelTol.
+-- Конгруэнтность: относительная разница ширин bbox по обеим осям профиля
+-- не больше REMS_capCongruencyTol.
+global REMS_capParallelTol = 0.9999
+global REMS_capCongruencyTol = 0.05
+
 -- Формат ошибки: заголовок + ОГРАНИЧЕННЫЙ стек (N фреймов с локальными
 -- переменными) через переиспользуемый модуль scripts\ErrorDump.ms, чтобы при
 -- пакетной обработке десятков объектов не вываливать полный стек. Модуль
@@ -445,11 +456,14 @@ fn REMS_pickAxisByEdges m tolAng:0.9998 minCount:3 = (
 -- 2100 и 4550) означает: параллельные рёбра - это контуры ПРОФИЛЯ/ПРОЁМА, а не
 -- образующие, и голосование по ним уводит ось не туда (вверх вместо вдоль толщины).
 -- Возвращает true, если выбранная ось правдоподобна (длины согласованы).
-fn REMS_axisConsistentLengths m dir = (
+fn REMS_axisConsistentLengths m dir strict:false = (
     local lens = #()
     for e in REMS_collectVisibleEdges m do
         if (abs (dot e[2] dir)) >= 0.9 do append lens e[1]
-    if lens.count < 4 then true else (
+    -- strict: считать ОСЬ ПОДТВЕРЖДЁННОЙ только если параллельных рёбер ДОСТАТОЧНО
+    -- (>=4) И они одинаковой длины; иначе - не подтверждена. Неострoe поведение
+    -- (по умолчанию): слишком мало рёбер - не спорно, считаем подтверждённой.
+    if lens.count < 4 then (not strict) else (
         local mn = amin lens
         local mx = amax lens
         local ratio = mx / (if mn < 1e-6 then 1.0 else mn)
@@ -841,6 +855,30 @@ fn REMS_capBBoxCenter m sel = (
         )
     )
     if mn == undefined then [0,0,0] else (mn + mx) * 0.5
+)
+
+-- Размеры bbox вершин крышки в ПЛОСКОСТИ ПРОФИЛЯ (проекции на орты u,v этой
+-- плоскости, перпендикулярной оси выдавливания). Возвращает #(ширина, высота)
+-- или undefined, если sel пуст. Используется для проверки КОНГРУЭНТНОСТИ
+-- базовой и дальней крышек в фолбэке «центры bbox крайних крышек».
+fn REMS_capBBoxExtents m sel u v = (
+    local uMin = 1e30
+    local uMax = -1e30
+    local vMin = 1e30
+    local vMax = -1e30
+    for f in sel do (
+        local vs = polyop.getVertsUsingFace m #{f}
+        for vi in vs do (
+            local p = polyop.getVert m vi
+            local pu = dot p u
+            local pv = dot p v
+            if pu < uMin do uMin = pu
+            if pu > uMax do uMax = pu
+            if pv < vMin do vMin = pv
+            if pv > vMax do vMax = pv
+        )
+    )
+    if uMin > uMax then undefined else #(uMax - uMin, vMax - vMin)
 )
 
 -- Объединение состыкованных КОЛЛИНЕАРНЫХ «диффов» (рёбер периметра с ровно
@@ -1396,18 +1434,34 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
     -- (REMS_axisConsistentLengths), иначе - подсказка.
     local wallHint = wall
     local shiftImmediate = wallHint and REMS_shiftAxisImmediate
+    -- 1) ПЕРВИЧНЫЙ кандидат: подсказка стены (Shift = PCA-минор) или голосование
     local dir = if shiftImmediate then REMS_meshMinorAxis p else REMS_pickAxisByEdges p
-    local axisNote = if shiftImmediate then "подсказка стены (Shift)" else "подсказка"
-    if not shiftImmediate and dir != undefined then (
-        axisNote = "видимые рёбра"
-        if not (REMS_axisConsistentLengths p dir) do (
+    local axisNote = "подсказка"
+    -- 2) ПОДСКАЗКА (Shift) - только если её ПОДТВЕРЖДАЮТ РЁБРА: оси выдавки
+    --    параллельны рёбра одинаковой длины. У ступенчатой лестницы PCA-минор
+    --    уходит в ДИАГОНАЛЬ ([-0.34,-0.002,-0.94] вместо ширины ступеней Y),
+    --    рёбер одинаковой длины вдоль неё НЕТ - подсказка отменяется и
+    --    выбирается голосованием по рёбрам (как без Shift).
+    local shiftKept = false
+    if shiftImmediate and dir != undefined do (
+        shiftKept = REMS_axisConsistentLengths p dir strict:true
+        if shiftKept then axisNote = "подсказка стены (Shift)" else (
+            if REMS_debug do format "  [ось] подсказка стены (Shift) НЕ подтверждена рёбрами - откат к голосованию по рёбрам\n"
+            dir = REMS_pickAxisByEdges p
+        )
+    )
+    -- 3) ГОЛОСОВАНИЕ проверяется длинами рёбер: не образующие - долой (фолбэк)
+    if not shiftKept and dir != undefined do (
+        if REMS_axisConsistentLengths p dir then axisNote = "видимые рёбра" else (
             if REMS_debug do format "  [ось] голосование [%,%,%] НЕ согласовано по длинам - не образующие, ось по подсказке\n" dir.x dir.y dir.z
             dir = undefined
         )
     )
+    -- 4) ФОЛБЭК (вырождение/неудача): с подтверждённым Shift - толщина (PCA),
+    --    иначе - классика (мировая Z / PCA без подтверждения)
     if dir == undefined do (
-        dir = REMS_pickFallbackAxis p wall:wallHint
-        if REMS_debug do format "  [ось] подсказка: ось=[%,%,%] (стена(Shift)=%)\n" dir.x dir.y dir.z wallHint
+        dir = REMS_pickFallbackAxis p wall:shiftKept
+        if REMS_debug do format "  [ось] подсказка: ось=[%,%,%] (стена(Shift)=%)\n" dir.x dir.y dir.z shiftKept
     )
     if (length dir) < 1e-9 do dir = [0,0,1]   -- предохранитель: вырожденная ось PCA
     if REMS_debug do format "  [ось] итого: dir=[%,%,%] (%)\n" dir.x dir.y dir.z axisNote
@@ -1555,30 +1609,74 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
                     -- для прямых призматических тел это и есть направление
                     -- выдавливания. Иначе вниз/вверх уходило бы ровно по мировой
                     -- оси (баг: Alt=true на наклонённом объекте).
+                    -- ДАЛЬНЯЯ крышка - ВСЕ островки на дальней плоскости (tFar±tolCap),
+                    -- а не единственный с максимальной координатой: у ступенчатой/
+                    -- составной крышки островки на дальней стороне СМЕЩЕНЫ (каждая
+                    -- ступень лестницы), и центр одного углового островка даёт
+                    -- ДИАГОНАЛЬ вместо оси, хотя истинное направление выдавки
+                    -- проходит через центры СЛОЁВ.
                     if axisNote == "подсказка" do (
                         local ccB = REMS_capBBoxCenter p capSel
-                        local farIsl = undefined
                         local farT = -1e30
-                        for ib2 in (REMS_splitFaceIslands p capBits) do (
+                        for ib2 in allIslands do (
                             local ie2 = REMS_islandCentroidExtremes p ib2 dir
-                            if ie2[2] > farT do ( farT = ie2[2]; farIsl = ib2 )
+                            farT = amax farT ie2[2]
                         )
-                        if farIsl != undefined and (farT - tBase) > (diag * 0.01) do (
-                            -- центр BBOX крышки (а не центроид граней): завязываемся
-                            -- только на КРАЙНИЕ точки крышки, игнорируя её внутренности
-                            -- (проёмы/скосы/конструктивные элементы могли бы сместить
-                            -- центроид и наклонить ось у вертикальной стены).
-                            local ccF = REMS_capBBoxCenter p farIsl
-                            local ax2 = normalize (ccF - ccB)
-                            if (length ax2) > 1e-6 do (
-                                if (dot ax2 dir) < 0 do ax2 = -ax2
-                                if (dot ax2 dir) < 0.999999 do (
-                                    local dir0 = dir
-                                    dir = ax2
-                                    axisNote = "центры bbox крайних крышек"
-                                    if REMS_debug do (
-                                        format "  уточнение оси (центры bbox крайних крышек): [%,%,%] -> [%,%,%]\n" \
-                                            dir0.x dir0.y dir0.z dir.x dir.y dir.z
+                        local farCap = #{}
+                        farCap.count = nfAll
+                        for ib2 in allIslands do (
+                            local ie2 = REMS_islandCentroidExtremes p ib2 dir
+                            if (abs (ie2[1] - farT)) <= tolCap and (abs (ie2[2] - farT)) <= tolCap do farCap += ib2
+                        )
+                        if (not farCap.isEmpty) and (farT - tBase) > (diag * 0.01) do (
+                            -- КОНГРУЭНТНОСТЬ + ПАРАЛЛЕЛЬНОСТЬ крышек: направление по
+                            -- центрам bbox даёт СДВИГ, если дальняя крышка - составная
+                            -- (островки разных зон/уровней смещены и их общий bbox
+                            -- смещён относительно профиля выдавки: балка 211_mip ->
+                            -- диагональ [0.08,-0.38,0.92]). Поэтому уточняем ось
+                            -- ТОЛЬКО если нормали крышек параллельны и размеры их
+                            -- bbox в плоскости профиля совпадают в допуске.
+                            local nB = REMS_capNormal p capSel
+                            local nF = REMS_capNormal p farCap
+                            local parOk = (length nB) > 1e-9 and (length nF) > 1e-9 and \
+                                (abs (dot nB nF)) > REMS_capParallelTol
+                            local congOk = false
+                            if parOk do (
+                                local u0 = if (abs dir.z) < 0.9 then normalize (cross [0,0,1] dir) else (
+                                    if (abs dir.x) < 1e-6 and (abs dir.y) < 1e-6 then [1,0,0]
+                                    else normalize (cross [0,1,0] dir)
+                                )
+                                local v0 = normalize (cross dir u0)
+                                local extB = REMS_capBBoxExtents p capSel u0 v0
+                                local extF = REMS_capBBoxExtents p farCap u0 v0
+                                if extB != undefined and extF != undefined do (
+                                    congOk = \
+                                        (abs (extB[1] - extF[1])) <= REMS_capCongruencyTol * (amax #(extB[1], extF[1])) and \
+                                        (abs (extB[2] - extF[2])) <= REMS_capCongruencyTol * (amax #(extB[2], extF[2]))
+                                )
+                            )
+                            if not (parOk and congOk) then (
+                                if REMS_debug do (
+                                    format "  ФОЛБЭК bbox: крышки не параллельны/не конгруэнтны (parOk=%, congOk=%) - направление НЕ уточняется\n" \
+                                        parOk congOk
+                                )
+                            ) else (
+                                -- центр BBOX крышки (а не центроид граней): завязываемся
+                                -- только на КРАЙНИЕ точки крышки, игнорируя её внутренности
+                                -- (проёмы/скосы/конструктивные элементы могли бы сместить
+                                -- центроид и наклонить ось у вертикальной стены).
+                                local ccF = REMS_capBBoxCenter p farCap
+                                local ax2 = normalize (ccF - ccB)
+                                if (length ax2) > 1e-6 do (
+                                    if (dot ax2 dir) < 0 do ax2 = -ax2
+                                    if (dot ax2 dir) < 0.999999 do (
+                                        local dir0 = dir
+                                        dir = ax2
+                                        axisNote = "центры bbox крайних крышек"
+                                        if REMS_debug do (
+                                            format "  уточнение оси (центры bbox крайних крышек): [%,%,%] -> [%,%,%]\n" \
+                                                dir0.x dir0.y dir0.z dir.x dir.y dir.z
+                                        )
                                     )
                                 )
                             )
