@@ -156,7 +156,7 @@ realWorldMapSize on) - или, при своём наборе Material ID, Extru
 macroScript REMS_RebuildMeshToSpline
     category:"#PankovScripts"
     buttonText:"Rebuild Mesh to Spline"
-    tooltip:"Rebuild Mesh to Spline\n\nThe axis is determined automatically based on the edges of the polygons (generators).\nShift — wall hint when degenerating,\nAlt — extrusion direction,\nCtrl — simplification off"
+    tooltip:"Rebuild Mesh to Spline\n\nThe axis is determined automatically based on the edges of the polygons (generators).\nShift — wall hint when degenerating,\nAlt — extrusion direction,\nCtrl — settings menu"
     autoUndoEnabled:false
     icon: #("Standard_Modifiers", 13)
 (
@@ -234,6 +234,18 @@ global REMS_preserveMatIDs = true
 -- не больше REMS_capCongruencyTol.
 global REMS_capParallelTol = 0.9999
 global REMS_capCongruencyTol = 0.05
+
+-- УПРОЩЕНИЕ: ранее управлялось Ctrl (Ctrl отключал); теперь Ctrl открывает
+-- меню настроек, поэтому простота служки глобалом (меняется галочкой в меню).
+-- true - упрощать сплайн (Simplify-Spline), false - строить без упрощения.
+global REMS_simplify = true
+
+-- Modifier-клавиши как ТОГГЛЫ «по умолчанию»: галка в меню = поведение по
+-- умолчанию ВКЛ, сама клавиша временно переключает при исполнении (Shift/Alt
+-- нажаты = НЕ по умолчанию). При дефолтах false/false поведение идентично
+-- прошлой версии (Shift/Alt добавляют опцию при нажатии).
+global REMS_wallHintByDefault = false  -- Shift: подсказка стены (по умолчанию вкл = ось боком сразу)
+global REMS_maxSideByDefault = false   -- Alt: направление выдавки - база max (вниз) по умолчанию
 
 -- Формат ошибки: заголовок + ОГРАНИЧЕННЫЙ стек (N фреймов с локальными
 -- переменными) через переиспользуемый модуль scripts\ErrorDump.ms, чтобы при
@@ -2189,6 +2201,277 @@ fn REMS_processObject obj useMaxSide: doSimplify:true wall:false = (
 
 /* --------------------
 --
+-- НАСТРОЙКИ (Ctrl): dotNet ContextMenuStrip у курсора + INI-хранилище
+--
+*/ --------------------
+
+global REMS_settingsLoaded = false
+global REMS_settingsFile = (getDir #userScripts) + "\\REMS_Settings.ini"
+global REMS_tcmMenu = undefined   -- ссылка на живое меню (чтобы не собрал GC)
+dotNet.loadAssembly "System.Windows.Forms"
+dotNet.loadAssembly "System.Drawing"
+
+-- Цвет текущей палитры 3ds Max -> System.Drawing.Color.
+-- colorMan.getColor возвращает 0..255; защита от 0..1-источников.
+fn REMS_tcmColorDN idx defaultC = (
+    local c = undefined
+    try (c = colorMan.getColor idx) catch ()
+    local r = defaultC.x
+    local g = defaultC.y
+    local b = defaultC.z
+    if c != undefined do (r = c.x; g = c.y; b = c.z)
+    if r <= 1.0 and g <= 1.0 and b <= 1.0 do (r = r * 255; g = g * 255; b = b * 255)
+    (dotNetClass "System.Drawing.Color").fromArgb (r as integer) (g as integer) (b as integer)
+)
+
+fn REMS_getSettingBool section key def = (
+    local s = getINISetting REMS_settingsFile section key
+    if s == "" then def else if (toLower s) == "true" then true else false
+)
+
+fn REMS_getSettingFloat section key def = (
+    local s = getINISetting REMS_settingsFile section key
+    if s == "" then def else try (s as float) catch def
+)
+
+-- Загрузка настроек из INI (один раз за сессию; отсутствующий файл = дефолты).
+fn REMS_loadSettings = (
+    if REMS_settingsLoaded do return OK
+    if doesFileExist REMS_settingsFile then (
+        local b = "Behavior"
+        local n = "Numbers"
+        REMS_simplify = REMS_getSettingBool b "simplify" REMS_simplify
+        REMS_deleteSourceObjects = REMS_getSettingBool b "deleteSource" REMS_deleteSourceObjects
+        REMS_debug = REMS_getSettingBool b "debug" REMS_debug
+        REMS_shiftAxisImmediate = REMS_getSettingBool b "shiftAxisImmediate" REMS_shiftAxisImmediate
+        REMS_projectionThickness = REMS_getSettingBool b "projectionThickness" REMS_projectionThickness
+        REMS_subtractCapDepthFromThickness = REMS_getSettingBool b "subtractCapDepth" REMS_subtractCapDepthFromThickness
+        REMS_findMinimalBBox = REMS_getSettingBool b "findMinimalBBox" REMS_findMinimalBBox
+        REMS_preserveMatIDs = REMS_getSettingBool b "preserveMatIDs" REMS_preserveMatIDs
+        REMS_wallHintByDefault = REMS_getSettingBool b "wallHintByDefault" REMS_wallHintByDefault
+        REMS_maxSideByDefault = REMS_getSettingBool b "maxSideByDefault" REMS_maxSideByDefault
+        REMS_capDepthFrac = REMS_getSettingFloat n "capDepthFrac" REMS_capDepthFrac
+        REMS_minBBoxAxisSnapTol = REMS_getSettingFloat n "snapTol" REMS_minBBoxAxisSnapTol
+        REMS_minBBoxSymTol = REMS_getSettingFloat n "symTol" REMS_minBBoxSymTol
+        REMS_capParallelTol = REMS_getSettingFloat n "capParallelTol" REMS_capParallelTol
+        REMS_capCongruencyTol = REMS_getSettingFloat n "capCongruencyTol" REMS_capCongruencyTol
+    )
+    REMS_settingsLoaded = true
+    OK
+)
+
+-- Сохранение ВСЕХ настроек в INI (вызывается при каждом изменении в меню).
+fn REMS_saveSettings = (
+    local b = "Behavior"
+    local n = "Numbers"
+    setINISetting REMS_settingsFile b "simplify" (REMS_simplify as string)
+    setINISetting REMS_settingsFile b "deleteSource" (REMS_deleteSourceObjects as string)
+    setINISetting REMS_settingsFile b "debug" (REMS_debug as string)
+    setINISetting REMS_settingsFile b "shiftAxisImmediate" (REMS_shiftAxisImmediate as string)
+    setINISetting REMS_settingsFile b "projectionThickness" (REMS_projectionThickness as string)
+    setINISetting REMS_settingsFile b "subtractCapDepth" (REMS_subtractCapDepthFromThickness as string)
+    setINISetting REMS_settingsFile b "findMinimalBBox" (REMS_findMinimalBBox as string)
+    setINISetting REMS_settingsFile b "preserveMatIDs" (REMS_preserveMatIDs as string)
+    setINISetting REMS_settingsFile b "wallHintByDefault" (REMS_wallHintByDefault as string)
+    setINISetting REMS_settingsFile b "maxSideByDefault" (REMS_maxSideByDefault as string)
+    setINISetting REMS_settingsFile n "capDepthFrac" (REMS_capDepthFrac as string)
+    setINISetting REMS_settingsFile n "snapTol" (REMS_minBBoxAxisSnapTol as string)
+    setINISetting REMS_settingsFile n "symTol" (REMS_minBBoxSymTol as string)
+    setINISetting REMS_settingsFile n "capParallelTol" (REMS_capParallelTol as string)
+    setINISetting REMS_settingsFile n "capCongruencyTol" (REMS_capCongruencyTol as string)
+    OK
+)
+
+fn REMS_resetDefaults = (
+    REMS_simplify = true
+    REMS_deleteSourceObjects = true
+    REMS_debug = true
+    REMS_shiftAxisImmediate = true
+    REMS_projectionThickness = true
+    REMS_subtractCapDepthFromThickness = false
+    REMS_findMinimalBBox = true
+    REMS_preserveMatIDs = true
+    REMS_wallHintByDefault = false
+    REMS_maxSideByDefault = false
+    REMS_capDepthFrac = 0.15
+    REMS_minBBoxAxisSnapTol = 2.0
+    REMS_minBBoxSymTol = 0.03
+    REMS_capParallelTol = 0.9999
+    REMS_capCongruencyTol = 0.05
+    REMS_saveSettings()
+    OK
+)
+
+-- ТОГГЛ: клик сам не переворачивает галочку (CheckOnClick=false), поэтому
+-- флипаем вручную и переносим в глобал, затем сохраняем в INI.
+fn REMS_tcmOnToggle sender e = (
+    local newV = not (getProperty sender "Checked")
+    setProperty sender "Checked" newV
+    case (getProperty sender "Tag") as string of (
+        "simplify":    REMS_simplify = newV
+        "deleteSrc":   REMS_deleteSourceObjects = newV
+        "debug":       REMS_debug = newV
+        "shiftAxis":   REMS_shiftAxisImmediate = newV
+        "projThick":   REMS_projectionThickness = newV
+        "subCapDepth": REMS_subtractCapDepthFromThickness = newV
+        "minBB":       REMS_findMinimalBBox = newV
+        "presMat":     REMS_preserveMatIDs = newV
+        "wallDef":     REMS_wallHintByDefault = newV
+        "maxDef":      REMS_maxSideByDefault = newV
+    )
+    REMS_saveSettings()
+    OK
+)
+
+-- ЧИСЛОВОЙ спиннер: значение -> глобал + INI (Tag - имя настройки).
+fn REMS_tcmOnSpinnerChanged sender e = (
+    local v = try ((dotNetClass "System.Convert").ToDouble (getProperty sender "Value")) catch (0.0)
+    case (getProperty sender "Tag") as string of (
+        "capDepthFrac":   REMS_capDepthFrac = v
+        "snapTol":        REMS_minBBoxAxisSnapTol = v
+        "symTol":         REMS_minBBoxSymTol = v
+        "capParallelTol": REMS_capParallelTol = v
+        "capCongruencyTol": REMS_capCongruencyTol = v
+    )
+    REMS_saveSettings()
+    OK
+)
+
+fn REMS_tcmOnReset sender e = (
+    REMS_resetDefaults()
+    messageBox "Настройки сброшены к значениям по умолчанию." title:"Rebuild Mesh to Spline"
+    OK
+)
+
+fn REMS_tcmOnHelp sender e = (
+    REMS_helpWindow()
+    OK
+)
+
+-- Добавить пункт-тоггл (галочка слева) в контекстное меню.
+fn REMS_tcmAddToggle cms itemText key checked = (
+    local mi = cms.Items.Add itemText
+    mi.Checked = checked
+    mi.Tag = key
+    mi.BackColor = cms.BackColor
+    mi.ForeColor = cms.ForeColor
+    dotNet.AddEventHandler mi "Click" REMS_tcmOnToggle
+    mi
+)
+
+-- Добавить строку «подпись + NumericUpDown» (ToolStripControlHost) в меню.
+fn REMS_tcmNumRow cms lblText key val dec incr minv:0.0 maxv:1.0 = (
+    local bg = REMS_tcmColorDN #window [60,60,60]
+    local tx = REMS_tcmColorDN #windowText [230,230,230]
+    local pnl = dotNetObject "System.Windows.Forms.Panel"
+    pnl.Width = 340
+    pnl.Height = 32
+    pnl.BackColor = bg
+    local lbl = dotNetObject "System.Windows.Forms.Label"
+    lbl.Text = lblText
+    lbl.Left = 6
+    lbl.Top = 8
+    lbl.AutoSize = true
+    lbl.ForeColor = tx
+    local spn = dotNetObject "System.Windows.Forms.NumericUpDown"
+    spn.Width = 110
+    spn.Left = pnl.Width - spn.Width - 10
+    spn.Top = 5
+    spn.DecimalPlaces = dec
+    spn.Increment = incr
+    spn.Minimum = minv
+    spn.Maximum = maxv
+    spn.Value = val
+    spn.Tag = key
+    spn.BackColor = REMS_tcmColorDN #window [255,255,255]
+    spn.ForeColor = REMS_tcmColorDN #windowText [0,0,0]
+    spn.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").FixedSingle
+    dotNet.AddEventHandler spn "ValueChanged" REMS_tcmOnSpinnerChanged
+    pnl.Controls.Add lbl
+    pnl.Controls.Add spn
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripControlHost" pnl)
+    OK
+)
+
+/* --------------------
+--
+-- СПРАВКА: описание алгоритма (окно по последнему пункту меню)
+--
+*/ --------------------
+
+rollout REMS_helpRoll "Rebuild Mesh to Spline — алгоритм" (
+    label lbl_hdr "Как работает инструмент:" bold:true align:#left
+    label lbl_txt1 "1. ОСЬ выдавливания: голосование по видимым рёбрам (образующим).\n\
+Shift — подсказка «стена»: PCA-минор, если его подтверждают рёбра\nодинаковой длины; иначе возврат к голосованию." \
+        width:430 wrap:true offset:[0,4]
+    label lbl_txt2 "2. КРЫШКИ = все полигоны минус стены (стена = полигон\nс ребром ∥ оси и нормалью ⊥ оси). База = остров на крайней\nплоскости tMin (протяжённость ≤ допуску)." \
+        width:430 wrap:true offset:[0,4]
+    label lbl_txt3 "3. УТОЧНЕНИЕ оси по рёбрам выдавливания, затем по нормали крышки;\nфолбэк по центрам bbox база↔дальняя крышка — только если они\nпараллельны и конгруэнтны (иначе смещение → диагональ)." \
+        width:430 wrap:true offset:[0,4]
+    label lbl_txt4 "4. ПРОФИЛЬ: внешний контур (макс. площадь) + проёмы (обратный\nобход), локальные u/v перпендикулярны оси, оси XY ориентируются\nк минимальному bbox (выпуклая оболочка + rotating calipers).\nПивот — центр bbox базовой крышки." \
+        width:430 wrap:true offset:[0,4]
+    label lbl_txt5 "5. ВЫДАВЛИВАНИЕ: Extrude (или Shell+UVWMap для нестандартных\nMaterial ID), при необходимости толщина-проекцией;\nзатем упрощение сплайна (Simplify-Spline)." \
+        width:430 wrap:true offset:[0,4]
+    label lbl_txt6 "Горячие клавиши:  Ctrl — настройки (галочки + числа, INI в \nuserScripts\\REMS_Settings.ini).  Shift — подсказка стены,\nAlt — направление выдавки: обе клавиши инвертируют свои галочки\nв меню.  Упрощение включается галочкой (Ctrl больше не выключает)." \
+        width:430 wrap:true offset:[0,4]
+    button btn_ok "Закрыть" width:90 align:#right offset:[0,6]
+    on btn_ok pressed do destroyDialog REMS_helpRoll
+)
+
+fn REMS_helpWindow = (
+    if REMS_helpRoll != undefined and REMS_helpRoll.open do destroyDialog REMS_helpRoll
+    createDialog REMS_helpRoll pos:[200,200] width:470
+    OK
+)
+
+-- Главная точка меню: собрать ContextMenuStrip у курсора.
+fn REMS_showSettingsMenu = (
+    REMS_loadSettings()
+    local bg = REMS_tcmColorDN #window [60,60,60]
+    local tx = REMS_tcmColorDN #windowText [230,230,230]
+    local cms = dotNetObject "System.Windows.Forms.ContextMenuStrip"
+    cms.ShowImageMargin = false
+    cms.BackColor = bg
+    cms.ForeColor = tx
+    local hdr = cms.Items.Add "Rebuild Mesh to Spline — настройки"
+    hdr.BackColor = bg
+    hdr.ForeColor = tx
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripSeparator")
+    REMS_tcmAddToggle cms "Упрощение сплайна" "simplify" REMS_simplify
+    REMS_tcmAddToggle cms "Удалять исходники" "deleteSrc" REMS_deleteSourceObjects
+    REMS_tcmAddToggle cms "Подробный лог (debug)" "debug" REMS_debug
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripSeparator")
+    REMS_tcmAddToggle cms "Ось стены сразу (Shift)" "shiftAxis" REMS_shiftAxisImmediate
+    REMS_tcmAddToggle cms "Толщина проекцией" "projThick" REMS_projectionThickness
+    REMS_tcmAddToggle cms "Вычитать глубину крышки" "subCapDepth" REMS_subtractCapDepthFromThickness
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripSeparator")
+    REMS_tcmAddToggle cms "Минимальный bbox профиля" "minBB" REMS_findMinimalBBox
+    REMS_tcmAddToggle cms "Сохранять Material ID" "presMat" REMS_preserveMatIDs
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripSeparator")
+    REMS_tcmAddToggle cms "Стена по умолчанию (Shift инвертирует)" "wallDef" REMS_wallHintByDefault
+    REMS_tcmAddToggle cms "База max по умолчанию (Alt инвертирует)" "maxDef" REMS_maxSideByDefault
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripSeparator")
+    REMS_tcmNumRow cms "capDepthFrac — глубина захвата крышек" "capDepthFrac" REMS_capDepthFrac 2 0.01 maxv:1.0
+    REMS_tcmNumRow cms "minBBoxAxisSnapTol — допуск прилипания, град" "snapTol" REMS_minBBoxAxisSnapTol 1 0.5 maxv:10.0
+    REMS_tcmNumRow cms "minBBoxSymTol — симметричность профиля" "symTol" REMS_minBBoxSymTol 3 0.001 maxv:0.5
+    REMS_tcmNumRow cms "capParallelTol — параллельность крышек (bbbox)" "capParallelTol" REMS_capParallelTol 4 0.0001 minv:0.9 maxv:1.0
+    REMS_tcmNumRow cms "capCongruencyTol — конгруэнтность крышек" "capCongruencyTol" REMS_capCongruencyTol 3 0.005 maxv:0.5
+    cms.Items.Add (dotNetObject "System.Windows.Forms.ToolStripSeparator")
+    local rset = cms.Items.Add "Сбросить настройки по умолчанию"
+    rset.BackColor = bg
+    rset.ForeColor = tx
+    dotNet.AddEventHandler rset "Click" REMS_tcmOnReset
+    local help = cms.Items.Add "Справка: алгоритм работы"
+    help.BackColor = bg
+    help.ForeColor = tx
+    dotNet.AddEventHandler help "Click" REMS_tcmOnHelp
+    REMS_tcmMenu = cms
+    cms.Show (dotNetClass "System.Windows.Forms.Cursor").Position
+    OK
+)
+
+/* --------------------
+--
 -- Точка входа
 --
 */ --------------------
@@ -2209,9 +2492,13 @@ fn run_rebuildExtrudedMeshToSpline = (
     if geoObjs.count == 0 then (
         messageBox "Выделите объекты-геометрию для обработки." title:"Rebuild Mesh to Spline"
     ) else (
-        local useWallHint = keyboard.shiftPressed      -- Shift: подсказка оси (фолбэк): стена
-        local useMaxSide = keyboard.altPressed         -- Alt: направление выдавливания (база max)
-        local useSimple = not keyboard.controlPressed  -- Ctrl: упрощение вкл/выкл
+        REMS_loadSettings()
+        -- Modifier-клавиши как тогглы от галки (SHIFT/ALT нажаты = временно НЕ по
+        -- умолчанию): галка задаёт поведение по умолчанию, клавиша инвертирует
+        -- на время прогона. Ctrl больше не трогает упрощение (открывает меню).
+        local useWallHint = if REMS_wallHintByDefault then not keyboard.shiftPressed else keyboard.shiftPressed
+        local useMaxSide  = if REMS_maxSideByDefault then not keyboard.altPressed else keyboard.altPressed
+        local useSimple   = REMS_simplify
         format "REMS: ось автоматическая% упрощение=%, объектов: %, REMS_deleteSourceObjects=%\n" \
             ((if useWallHint then " + подсказка стены (Shift)" else "") + \
                 (if useMaxSide then ": база max (экструзия вниз)" else ": база min (экструзия вверх)")) \
@@ -2261,5 +2548,12 @@ fn run_rebuildExtrudedMeshToSpline = (
 )
 
     on isEnabled do selection.count > 0
-    on execute do run_rebuildExtrudedMeshToSpline()
+    -- Ctrl: меню настроек (вместо прежнего отключения упрощения)
+    on execute do (
+        if keyboard.controlPressed then (
+            REMS_showSettingsMenu()
+        ) else (
+            run_rebuildExtrudedMeshToSpline()
+        )
+    )
 )
