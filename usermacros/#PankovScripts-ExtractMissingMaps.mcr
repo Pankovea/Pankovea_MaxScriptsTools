@@ -32,6 +32,14 @@
 		"msgErrNoDest", "Specify the destination folder!") #(
 		"msgErrEmptyList", "The list of missing files is empty.") #(
 		"msgWarnNo7zip", "7-Zip not found. Expected: {0}\nArchives will be skipped.\nDownload: {1}") #(
+		"extractRollout.btnDeleteSelected", "Delete selected objects") #(
+		"extractRollout.btnDeleteSelected.tooltip", "Delete selected objects and their textures from scene and disk. Undo restores objects (textures on disk are not restored).") #(
+		"msgDelConfirmHeader", "Delete {0} objects and their textures?") #(
+		"msgDelItems", "Delete") #(
+		"msgDelObjCount", "Objects deleted: {0}") #(
+		"msgDelMatCleared", "Cleared unused multi-material slots: {0} (in {1} materials)") #(
+		"msgDelUndoName", "Delete selected objects and their textures") #(
+		"msgDelDone", "Deleted: {0} objects, {1} textures from disk.") #(
 		"msgBtnRunNo7z", "FIND → RELINK") #(
 		"msgInfoSelectObj", "Select objects in the scene.") #(
 		"msgInfoNoMatMissing", "No missing files found in the materials of the selected objects.") #(
@@ -228,6 +236,9 @@
 			local net = #()
 			ATSOps.GetFilesByFileSystemStatus #NetworkPath &net
 			for f in net do if not (isSceneMaxFile f) then appendIfUnique files f
+			local fnd = #()
+			ATSOps.GetFilesByFileSystemStatus #Found &fnd
+			for f in fnd do if not (isSceneMaxFile f) then appendIfUnique files f
 		) catch ()
 		files
 	)
@@ -345,6 +356,78 @@
 			)
 		undefined
 	)
+	-- Собрать имена файлов текстур из материала (рекурсивно)
+	fn collectTexturesFromMaterial mat &outTex =
+	(
+		if mat == undefined then return undefined
+		if isKindOf mat BitmapTexture then
+		(
+			local bmap = mat.filename
+			if bmap != undefined then appendIfUnique outTex bmap
+			return undefined
+		)
+		local n = getNumSubTexmaps mat
+		for i = 1 to n do
+		(
+			local sub = getSubTexmap mat i
+			if sub != undefined then collectTexturesFromMaterial sub outTex
+		)
+		if isKindOf mat MultiMaterial then
+			for i = 1 to mat.numsubs do
+				if mat[i] != undefined then collectTexturesFromMaterial mat[i] outTex
+	)
+
+	-- Слоты мультиматериала, реально задействованные объектом (по MatID граней).
+	-- Используем <node>.mesh — TriMesh после всех модификаторов у любого объекта геометрии.
+	-- Возвращает индексы слотов (1..numsubs): matID граней — 1-based, слот = matID.
+	-- #() означает «не удалось прочитать меш» — тогда слоты не трогаем.
+	fn collectNodeUsedSlotIds node =
+	(
+		local ids = #()
+		if node == undefined then return ids
+		local m = try ( node.mesh ) catch ()
+		if m != undefined then
+			for f = 1 to getNumFaces m do appendIfUnique ids (getFaceMatID m f)
+		ids
+	)
+
+	-- Синхронный набор карт сцены по материалам, назначенным на объекты сцены.
+	-- Материал, висящий только в слоте Material Editor, файл с диска НЕ защищает.
+	-- Возвращает массив нормализованных имён.
+	fn collectSceneTextureNames =
+	(
+		local names = #()
+		for o in objects do
+			if o.material != undefined then collectTexturesFromMaterial o.material &names
+		for s in names collect (toLower (cleanFilename s))
+	)
+
+	-- Контекст для rcmenu удаления (popUpMenu не блокирует: on picked срабатывает после возврата)
+	global g_extractMA_roll = undefined
+	global g_extractMA_delCtx = #()
+
+	-- Контекстное меню подтверждения удаления выделенных объектов с текстурами.
+	-- popUpMenu не блокирует выполнение: on <item> picked срабатывает после возврата из popUpMenu.
+	-- Отмена = клик вне меню (ни один picked не сработает — операция безопасно не выполнится).
+	rcmenu rmc_confirm_delete (
+		menuItem mi_header "" enabled:false
+		separator sep_del
+		menuItem mi_delete ""
+
+		on rmc_confirm_delete open do (
+			mi_header.text = L10N.trMsg "msgDelConfirmHeader" args:#(g_extractMA_delCtx.count)
+			mi_delete.text = L10N.trMsg "msgDelItems"
+		)
+		on mi_delete picked do (
+			local objList = g_extractMA_delCtx
+			g_extractMA_delCtx = #()
+			-- undo: восстанавливает удалённые объекты и очищенные слоты (файлы с диска — нет)
+			undo label:(L10N.trMsg "msgDelUndoName") on
+			(
+				g_extractMA_roll.deleteSelectedObjectsAndTextures objList
+			)
+		)
+	)
 	rollout extractRollout "Extract Missing Assets from Archive" width:500
 	(
 		group "Missing assets" (
@@ -377,13 +460,16 @@
 			checkbox chkKeepPath "Keep found folder/archive" align:#left checked:true \
 				tooltip:"On: keep the parent folder/archive of the found texture. Off: put everything into the destination root."
 		)
+
+		button btnDeleteSelected "Delete selected objects with textures" height:20 width:210 align:#right \
+			tooltip:"Delete selected objects and their textures from scene (with undo) and from disk (no undo)"
 		button btnRun "FIND → EXTRACT → RELINK" height:40 width:475 align:#center
 		
 		button btnCancel "Cancel" height:20 width:140 align:#right visible:false offset:[0,-43]
 		progressBar pbar width:475 height:14 visible:false color:(color 30 120 200)
 
 		label lblStatus "Ready" height:16
-
+		
 		label lblLog "Log:" align:#left
 		dotNetControl edtLog "System.Windows.Forms.RichTextBox" height:110 width:475
 
@@ -482,8 +568,129 @@
 		(
 			if sevenZipPath() == "" then btnRun.text = L10N.trMsg "msgBtnRunNo7z"
 		)
+
+		-- Удаление выделенных объектов и их текстур (без отмены, вызывается из rcmenu)
+		fn deleteSelectedObjectsAndTextures objList =
+		(
+			if objList == undefined or objList.count == 0 do return false
+			-- 1) собрать текстуры и материалы выделенных объектов
+			local textures = #()
+			local materials = #()
+			for obj in objList do
+			(
+				local m = obj.material
+				if m != undefined then
+				(
+					collectTexturesFromMaterial m &textures
+					appendIfUnique materials m
+				)
+			)
+
+			-- 2) удалить объекты из сцены
+			for obj in objList do delete obj
+			logText ((L10N.trMsg "msgDelObjCount" args:#(objList.count)) + "\n")
+
+			-- 3) очистить слоты мультиматериала, субматериалы которых больше не используются
+			--    оставшимися пользователями. Решение — ТОЛЬКО по геометрии: слот нужен, если его
+			--    индекс встречается в matID граней оставшихся пользователей (как в эталоне
+			--    Clean_MultiMaterial.MMCleanActions.CleanMaterailsAll). Наличие карты «где-то в
+			--    сцене/ME» слот НЕ защищает (только не даёт удалить сам файл — шаг 4 отдельно).
+			--    Мультиматериал без оставшихся пользователей НЕ трогаем (даже если висит в ME).
+			--    Дебаг — в listener.
+			local clearedSlots = 0
+			local clearedMats = 0
+			for m in materials do
+				if isKindOf m MultiMaterial then
+				(
+					local users = #()
+					for o in objects do if o.material == m then appendIfUnique users o
+					local clearedIn = 0
+					print ("[Cleanup] MultiMaterial \"" + m.name + "\" (slots: " + (m.numsubs as string) + "), still used by " + (users.count as string) + " object(s)")
+					if users.count == 0 then
+						-- материал без пользователей не трогаем (даже если остался в ME)
+						print "[Cleanup]   no users left — leaving material untouched"
+					else
+					(
+						-- один скан геометрии по всем оставшимся пользователям
+						local usedIds = #()
+						local keepAll = false
+						print "[Cleanup]   polygon scan of remaining users (used slot IDs):"
+						for o in users do
+						(
+							local ids = collectNodeUsedSlotIds o
+							if ids.count == 0 then
+							(
+								keepAll = true
+								print ("[Cleanup]     " + o.name + ": mesh unreadable → keep all slots")
+							)
+							else
+							(
+								for id in ids do if (findItem usedIds id) == 0 do append usedIds id
+								print ("[Cleanup]     " + o.name + ": matIDs " + (ids as string))
+							)
+						)
+						for i = 1 to m.numsubs do
+						(
+							if m[i] == undefined then
+								print ("[Cleanup]   slot " + (i as string) + ": <empty>")
+							else
+							(
+								local keep = keepAll or (findItem usedIds i) != 0
+								print ("[Cleanup]   slot " + (i as string) + ": used slot IDs " + (usedIds as string) + " → " + (if keep then "KEEP" else "CLEARED"))
+								if not keep then
+								(
+									m[i] = undefined
+									clearedIn += 1
+								)
+							)
+						)
+					)
+					if clearedIn > 0 then
+					(
+						clearedSlots += clearedIn
+						clearedMats += 1
+					)
+				)
+				else
+					print ("[Cleanup] material \"" + m.name + "\" is not a MultiMaterial — skipped")
+			if clearedMats > 0 then
+				logText ((L10N.trMsg "msgDelMatCleared" args:#(clearedSlots, clearedMats)) + "\n")
+
+			-- 4) неиспользуемые текстуры. Текстура «используется», только если есть у материала,
+			--    назначенного на объект сцены. Материал, висящий в слоте ME (map-library), а также
+			--    очищенные слоты мультиматериалов, файлы с диска НЕ защищают.
+			local sceneTexFinal = collectSceneTextureNames ()
+			print ("[Cleanup] step4: candidate textures from deleted objects = " + ((for t in textures collect (cleanFilename t)) as string))
+			print ("[Cleanup] step4: scene objects-only assets (" + (sceneTexFinal.count as string) + "): " + (sceneTexFinal as string))
+			local unused = #()
+			for t in textures do
+				if (findItem sceneTexFinal (toLower (cleanFilename t))) == 0 then appendIfUnique unused t
+			print ("[Cleanup] step4: unused (to delete) = " + ((for t in unused collect (cleanFilename t)) as string))
+
+			-- 5) удалить неиспользуемые текстуры с диска
+			local deletedCount = 0
+			for t in unused do
+			(
+				if doesFileExist t then
+				(
+					local ok = false
+					try ( ok = deleteFile t ) catch ()
+					if ok then deletedCount += 1
+					print ("[Cleanup] step4: deleteFile \"" + (cleanFilename t) + "\" → " + (if ok then "OK" else "FAILED") + " (exists after=" + (doesFileExist t as string) + ")")
+				)
+				else
+					print ("[Cleanup] step4: \"" + (cleanFilename t) + "\" already missing on disk")
+			)
+
+			logText ((L10N.trMsg "msgDelDone" args:#(objList.count, deletedCount)) + "\n")
+			lblStatus.text = L10N.trMsg "stReady"
+			true
+		)
+
 		on extractRollout open do
 		(
+			-- ccылка на rollout для rcmenu (обработчики rcmenu — члены скоупа макроса)
+			global g_extractMA_roll = extractRollout
 			-- настройка dotNet-лога: свойства применяются только после создания окна
 			edtLog.ReadOnly = true
 			edtLog.Multiline = true
@@ -684,6 +891,17 @@
 			for i in rev do deleteItem extractMA_missingFiles i
 			refreshMissingList extractMA_missingFiles
 			lblStatus.text = L10N.trMsg "stExcluded" args:#(idxs.count)
+		)
+		on btnDeleteSelected pressed do
+		(
+			local selObjs = selection as array
+			if selObjs.count == 0 then
+			(
+				logText (L10N.trMsg "msgInfoSelectObj" + "\n")
+				return false
+			)
+			g_extractMA_delCtx = deepCopy selObjs
+			popUpMenu rmc_confirm_delete
 		)
 		on btnCancel pressed do
 			(extractMA_cancel = true)
