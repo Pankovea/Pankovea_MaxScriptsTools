@@ -203,6 +203,9 @@ macroScript Pankovea_BatchViewsManager
 			"createdBatchViews", "Created batch views: {0}") #(
 			"viewExists", "View already exists.\nChange name and try again.") #(
 			"dirNotExist", "Directory doesn't exist") #(
+			"nameFileTooLong", "Combined length of the view name and file name (encoded form {0}) exceeds the Backburner limit {1}.\nMaximum is {2}. Shorten the view name or file name.") #(
+			"fileSpecialChars", "The file name contained invalid characters — they were replaced:\n{0}") #(
+			"netNameTooLongList", "Net render (Backburner) is on, but these views exceed the 256 name limit:{0}\nThey may fail when submitted to Backburner. Shorten the names or file names.") #(
 			"applyAsBase", "Apply {0}x{1} as base for this view?") #(
 			"batchViewsInfoMsg", "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state (checkbox unchanged).\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all.") #(
 			"deleteView", "Delete this view(s)?") #(
@@ -667,6 +670,22 @@ macroScript Pankovea_BatchViewsManager
 		)
 	)
 
+	-- Привязать целый процент из имени вида к ближайшему ТОЧНОМУ состоянию
+	-- g_scaleValues (если рядом, иначе оставить как есть): "66" -> 2/3=0.6667,
+	-- "33" -> 1/3=0.3333. Даёт обратную совместимость с viewNameFor, где в имя
+	-- пишется целый процент, а применять/отображать надо точную дробь.
+	fn snapScalePercentFromName pct = (
+		local s = (pct as float) / 100.0
+		if g_scaleValues == undefined or g_scaleValues.count == 0 then return s
+		local best = s
+		local bestDiff = 1.0e9
+		for v in g_scaleValues do (
+			local d = abs(v - s)
+			if d < bestDiff then (bestDiff = d; best = v)
+		)
+		if bestDiff <= 0.05 then best else s
+	)
+
 	-- Разобрать имя вида: #(cleanName, w, h, scale). w/h = 0 если базы нет,
 	-- scale = 1.0 если масштаб в имени не указан.
 	-- Поддерживает форматы "CamA (1920x1080)" и "CamA (50% of 1920x1080)".
@@ -680,7 +699,7 @@ macroScript Pankovea_BatchViewsManager
 			local w = m.Groups.Item[2].Value as integer
 			local h = m.Groups.Item[3].Value as integer
 			local clean = regexPercent.Replace viewName ""
-			#(trimRight clean, w, h, (pct as float) / 100.0)
+			#(trimRight clean, w, h, snapScalePercentFromName pct)
 		) else (
 			local pattern = "\\(\\s*(\\d+)\\s*x\\s*(\\d+)\\s*\\)\\s*$"
 			local regex = dotNetObject "System.Text.RegularExpressions.Regex" pattern
@@ -702,6 +721,34 @@ macroScript Pankovea_BatchViewsManager
 		if data[1] == "" then "View" else data[1]
 	)
 
+	-- Убрать из имени файла символы, запрещённые Windows: \ / : * ? " < > | и
+	-- управляющие; срезать хвостовые точки/пробелы (их Windows тоже не даёт).
+	fn sanitizeFileName fname = (
+		if fname == undefined then return ""
+		local rx = dotNetObject "System.Text.RegularExpressions.Regex" \
+			("[\\\\/:*?\"<>|" + (bit.intAsChar 0) + "-" + (bit.intAsChar 31) + "]")
+		local cleaned = rx.Replace fname "_"
+		while cleaned.count > 0 do (
+			local last = substring cleaned cleaned.count 1
+			if last == "." or last == " " then cleaned = substring cleaned 1 (cleaned.count - 1) else exit
+		)
+		cleaned
+	)
+
+	-- Длина строки В ТОМ ВИДЕ, КАК ЕЁ ХРАНИТ batch render: если в строке есть
+	-- не-ASCII символ (кириллица и т.п.), вся строка кодируется как
+	-- "UTF16_" + base64(UTF-16LE строки) — имя "КЛ К 11.000" становится
+	-- "UTF16_GgQbBCAAGgQgADEA...". Лимит 256 символов действует именно на
+	-- эту кодированную форму, поэтому считаем её длину.
+	fn storedStringLen s = (
+		if s == undefined or s == "" then return 0
+		local rx = dotNetObject "System.Text.RegularExpressions.Regex" "[^\u0000-\u007F]"
+		if not (rx.IsMatch s) then return s.count
+		local enc = (dotNetClass "System.Text.Encoding").Unicode
+		local b64 = (dotNetClass "System.Convert").ToBase64String (enc.GetBytes s)
+		6 + b64.Length
+	)
+
 	-- База вида: из имени (приоритет), иначе из его разрешения, иначе из render.
 	fn getViewBase the_view = (
 		if the_view == undefined then return #(0, 0)
@@ -711,12 +758,15 @@ macroScript Pankovea_BatchViewsManager
 		#(renderWidth, renderHeight)
 	)
 	
-	-- Фактическое разрешение = база x глобальный масштаб (с умным округлением)
+	-- Фактическое разрешение = база x глобальный масштаб. Умножение и деление
+	-- масштабируются с ОКРУГЛЕНИЕМ (не floor): floor теряет пиксель при дробном
+	-- масштабе (напр. 1280/1.5=853.33->853, показ 853*1.5=1279.5->1279),
+	-- а round(853*1.5)=round(1279.5)=1280 — введённое значение сохраняется.
 	fn resFromBase w h = (
 		local scale = if g_globalScale == undefined then 1.0 else g_globalScale
 		if abs(scale - 1.0) < 0.001 then #(w as integer, h as integer) else (
-			local rawW = (w as float * scale) as integer
-			local rawH = (h as float * scale) as integer
+			local rawW = (floor ((w as float * scale) + 0.5)) as integer
+			local rawH = (floor ((h as float * scale) + 0.5)) as integer
  			local smart = snapResolution rawW rawH
 			#(smart[1], smart[2])
 		)
@@ -1205,7 +1255,7 @@ macroScript Pankovea_BatchViewsManager
 		if uiName == "" then return undefined
 		for i = 1 to batchRenderMgr.NumViews do (
 			local v = batchRenderMgr.GetView i
-			if v != undefined and not (isGroupView v) and (stripCollapsePrefix v.name) == uiName do return v
+			if v != undefined and not (isGroupView v) and (getCleanViewName v.name) == uiName do return v
 		)
 		undefined
 	)
@@ -1222,8 +1272,8 @@ macroScript Pankovea_BatchViewsManager
 		local baseW = srcBase[1] as integer
 		local baseH = srcBase[2] as integer
 		if not g_roll_batch.chk_edit_base.checked and abs(scale - 1.0) > 0.001 then (
-			baseW = (srcCur[1] as float / scale) as integer
-			baseH = (srcCur[2] as float / scale) as integer
+			baseW = (floor ((srcCur[1] as float / scale) + 0.5)) as integer
+			baseH = (floor ((srcCur[2] as float / scale) + 0.5)) as integer
 			if baseW <= 0 or baseH <= 0 do return 0
 		)
 		local count = 0
@@ -1320,7 +1370,7 @@ macroScript Pankovea_BatchViewsManager
 			new_view.name = viewNameFor (getUniqueBaseName (getCleanViewName cam.name) new_view) base[1] base[2]
 			new_view.pixelAspect = 1
 			if new_view.outputFilename == undefined or new_view.outputFilename == "" do (
-				local outName = (getCleanViewName new_view.name) + ".jpg"
+				local outName = (sanitizeFileName (getCleanViewName new_view.name)) + ".jpg"
 				-- Путь по умолчанию: папка текущего max-файла,
 				-- а если в ней есть подпапка "Render" — то в неё.
 				local basePath = maxFilePath
@@ -2529,7 +2579,10 @@ macroScript Pankovea_BatchViewsManager
 			if the_view == undefined then return undefined
 
 			disableSceneRedraw()
-			txt_view_name.text = stripCollapsePrefix the_view.name
+			-- В поле имени показываем ЧИСТОЕ имя без суффикса базы/масштаба
+			-- ("CamA" вместо "CamA (50% of 1920x1080)"). Масштаб и база — отдельные
+			-- автоматические подсказки ниже; пользователь видит только название.
+			txt_view_name.text = getCleanViewName the_view.name
 
 			local cam = the_view.camera
 			if isValidNode cam then (
@@ -3000,8 +3053,11 @@ macroScript Pankovea_BatchViewsManager
 				baseW = w as integer
 				baseH = h as integer
 			) else (
-				baseW = (w as float / scale) as integer
-				baseH = (h as float / scale) as integer
+				-- Округление (не floor): введённая пара должна точно восстановиться
+				-- обратным масштабированием в resFromBase (floor давал 1919x1277
+				-- при дробном scale из-за потери пикселя на каждой стороне).
+				baseW = (floor ((w as float / scale) + 0.5)) as integer
+				baseH = (floor ((h as float / scale) + 0.5)) as integer
 				if baseW <= 0 or baseH <= 0 do return false
 			)
 			local singleMode = idxs.count == 1
@@ -3149,8 +3205,8 @@ macroScript Pankovea_BatchViewsManager
 				local baseW = t[1]
 				local baseH = t[2]
 				if not baseMode and abs(scale - 1.0) > 0.001 then (
-					baseW = (t[1] as float / scale) as integer
-					baseH = (t[2] as float / scale) as integer
+					baseW = (floor ((t[1] as float / scale) + 0.5)) as integer
+					baseH = (floor ((t[2] as float / scale) + 0.5)) as integer
 					if baseW <= 0 or baseH <= 0 do continue
 				)
 				setViewBase item[2] baseW baseH
@@ -3161,6 +3217,53 @@ macroScript Pankovea_BatchViewsManager
 			restoreSelectionByReal idxs
 			updateOverrideUI()
 			true
+		)
+
+		-- Лимит Backburner: кодированная длина (имя файла без расширения + " " +
+		-- Имя вида в UTF16-форме) не должна превышать 256. BaseW/baseH — база
+		-- вида: из лимита вычитается запас под "разрешение" + 3 символа + 1.
+		-- Проверка актуальна ТОЛЬКО при включённом net render (Backburner).
+		fn backburnerBudget baseW baseH = (
+			local wLen = (baseW as string).count
+			local hLen = (baseH as string).count
+			256 - (8 + wLen + hLen) -- резерв: " (WxH)" без цифр (4) + 3 символа + 1
+		)
+
+		fn checkNameFileLen nameStr baseW baseH = (
+			if not batchRenderMgr.netRender then return true
+			local budget = backburnerBudget baseW baseH
+			local fileBase = txt_view_file.text
+			if fileBase != "" do
+				fileBase = getFilenameBase (filenameFromPath fileBase)
+			local total = (storedStringLen nameStr) + (storedStringLen fileBase)
+			if total > budget then (
+				messageBox (L10N.trMsg "nameFileTooLong" args:#((total as string), (budget as string), (256 as string))) \
+					title:(L10N.trMsg "titleError")
+				if getSel() > 0 do getViewParams (getRealIndex (getSel()))
+				return false
+			)
+			true
+		)
+
+		-- Пройтись по ВСЕМ видам и проверить лимит Backburner (при включении net
+		-- render). Возвращает список нарушителей: #(#(имя, длина, лимит), ...)
+		fn netRenderNameCheck = (
+			local bad = #()
+			for i = 1 to batchRenderMgr.NumViews do (
+				local v = batchRenderMgr.GetView i
+				if v != undefined and not (isGroupView v) do (
+					local b = getViewBase v
+					if b[1] > 0 and b[2] > 0 do (
+						local budget = backburnerBudget b[1] b[2]
+						local fname = filenameFromPath v.outputFilename
+						if fname != "" do fname = getFilenameBase fname
+						local total = (storedStringLen v.name) + (storedStringLen fname)
+						if total > budget then
+							append bad #(getCleanViewName v.name, total, budget)
+					)
+				)
+			)
+			bad
 		)
 
 		-- Обновить batch view из UI (txt_view_name/2/3, drdwn_state, база)
@@ -3185,6 +3288,7 @@ macroScript Pankovea_BatchViewsManager
 				local prefix = substring bv.name 1 1
 				local newName = txt_view_name.text
 				if prefix == PROP_COLLAPSED or prefix == PROP_EXPANDED do newName = prefix + newName
+				if not (checkNameFileLen newName baseW baseH) do return undefined
 				if bv.name != newName then (
 					if batchRenderMgr.FindView newName then (
 						messageBox (L10N.trMsg "viewExists")
@@ -3206,6 +3310,7 @@ macroScript Pankovea_BatchViewsManager
 				) else (
 					finalName = if baseW > 0 and baseH > 0 then viewNameFor clean baseW baseH else clean
 				)
+				if not (checkNameFileLen finalName baseW baseH) do return undefined
 				if bv.name != finalName then (
 					if batchRenderMgr.FindView finalName and bv.name != finalName then (
 						messageBox (L10N.trMsg "viewExists")
@@ -3224,7 +3329,12 @@ macroScript Pankovea_BatchViewsManager
 				txt_view_file.text = ""
 				any_changed = true
 			) else if doesfileexist txt_view_path.text then (
-				g_view_path = txt_view_path.text + txt_view_file.text
+				local cleanFile = sanitizeFileName txt_view_file.text
+				if cleanFile != txt_view_file.text do (
+					txt_view_file.text = cleanFile
+					messageBox (L10N.trMsg "fileSpecialChars" args:#(cleanFile)) title:(L10N.trMsg "titleError")
+				)
+				g_view_path = txt_view_path.text + cleanFile
 				bv.outputFilename = g_view_path
 				any_changed = true
 			) else (
@@ -3478,8 +3588,8 @@ macroScript Pankovea_BatchViewsManager
 					local baseW = r[1]
 					local baseH = r[2]
 					if not baseMode and abs(scale - 1.0) > 0.001 then (
-						baseW = (r[1] as float / scale) as integer
-						baseH = (r[2] as float / scale) as integer
+						baseW = (floor ((r[1] as float / scale) + 0.5)) as integer
+						baseH = (floor ((r[2] as float / scale) + 0.5)) as integer
 						if baseW <= 0 or baseH <= 0 do continue
 					)
 					setViewBase v baseW baseH
@@ -3636,10 +3746,40 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
-		on btn_render pressed do ( batchRenderMgr.render() )
+		-- Запустить batch render. Если есть Render Elements — перед запуском
+		-- временно ставим Time Output = Range (иначе RE-каналы перезаписывают
+		-- друг друга, не подставляя в имя кадра номера), после — возвращаем.
+		fn runRender = (
+			local rem = try (maxOps.GetCurRenderElementMgr()) catch undefined
+			local hasRE = rem != undefined and rem.NumRenderElements() > 0
+			local oldType = if hasRE then renderType else #single
+			if hasRE do renderType = #range
+			try (
+				batchRenderMgr.render()
+			) catch (
+				if hasRE do renderType = oldType
+				throw
+			)
+			if hasRE do renderType = oldType
+		)
+
+		on btn_render pressed do runRender()
 		on btn_net_render changed state do (
 			closeBatchWindow()
 			batchRenderMgr.netRender = state
+			if state do (
+				-- Лимит 256 действует именно в Backburner — при включении
+				-- net render проверяем ВСЕ виды, чтобы предупредить заранее.
+				local bad = netRenderNameCheck()
+				if bad.count > 0 then (
+					local listText = ""
+					for k = 1 to bad.count do (
+						listText += "\n" + bad[k][1] + " — " + (bad[k][2] as string) + "/" + (bad[k][3] as string)
+						if k == 5 do ( listText += "\n… ещё " + ((bad.count - k) as string); exit )
+					)
+					messageBox (L10N.trMsg "netNameTooLongList" args:#(listText)) title:(L10N.trMsg "titleError")
+				)
+			)
 		)
 
 
@@ -4498,7 +4638,8 @@ macroScript Pankovea_BatchViewsManager
 		local updating_scale = false
 		--------------------------------
 
-		-- Получить процент по индексу слайдера
+		-- Получить процент по индексу слайдера. Возвращает ТОЧНОЕ состояние из
+		-- g_scaleValues (в т.ч. дробные 1/3, 2/3) — именно оно применяется к видам.
 		fn getPercentFromSlider = (
 			local idx = sld_global_res.value as integer
 			if idx < 1 then idx = 1
@@ -4689,11 +4830,13 @@ macroScript Pankovea_BatchViewsManager
 		dotNetControl lst_states "System.Windows.Forms.ListBox" height:265 offset:[-10, -22] \
 		button btn_states_del "❌" width:24 height:25 align:#right offset:[14,-30] \
 			tooltip:"Delete the selected state"
-		edittext txt_states_new "State name" fieldWidth:(roll_w - 40) labelOnTop:true offset:[-10, 0]\
+		button btn_rename "Rename" width:(roll_w / 2 - 20) height:18 align:#right offset:[-10, 0] \
+			tooltip:"Remane Scene Stane"
+		edittext txt_states_new "State name" fieldWidth:(roll_w - 40) labelOnTop:true offset:[-10, -20] \
 			tooltip:"Enter — rename the selected state.\nNew — used when no state is selected."
-		button btn_states_new "➕ New" width:(roll_w / 2 - 20) height:22 across:2 offset:[-10, 0]\
+		button btn_states_new "➕ New" width:(roll_w / 2 - 20) height:22 across:2 offset:[-10, 0] \
 			tooltip:"Create a state from the selected one,\nappending a sequence number.\nSelects the new state for editing."
-		button btn_states_update "Update" width:(roll_w / 2 - 20) height:22 offset:[-10, 0]\
+		button btn_states_update "Update" width:(roll_w / 2 - 20) height:22 offset:[-10, 0] \
 			tooltip:"Overwrite the selected state\nwith the current scene"
 
 		group "Parts to capture" (
@@ -4926,10 +5069,10 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		-- RENAME по событию Enter в поле имени (без кнопки)
-		on txt_states_new entered val do (
+		on btn_rename pressed do (
 			if getStatesSel() <= 0 do return false
 			local oldName = lst_states.SelectedItem as string
-			local newName = trimLeft (trimRight val)
+			local newName = trimLeft (trimRight txt_states_new.text)
 			if newName == "" do ( messageBox (L10N.trMsg "enterNewName") title:(L10N.trMsg "titleRenameState"); return false )
 			if newName == oldName do return false
 			if findItem (stateNames()) newName != 0 do ( messageBox (L10N.trMsg "stateExists") title:(L10N.trMsg "titleRenameState"); return false )
