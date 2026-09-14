@@ -188,6 +188,14 @@ local lbl_ver_caption = APP_TITLE + " " + VERSION
 --   11 — смешанный, 12 — удаление, 13 — обновить (Refresh)
 local icon_path = (getDir #usericons) + "\\ModProps_16i.bmp"
 
+-- Максимальная высота floater: не более 3/4 высоты рабочего стола.
+-- Расчёт при старте скрипта; локальная переменная живёт только в main-теле,
+-- наружу уносим через глобальный g_orm_maxFloaterH — он нужен и динамическим
+-- свиткам (rolloutCreator), и функциям автовысоты.
+local orm_scaleDpi = ((dotNetClass "System.Drawing.Graphics").fromHwnd 0).dpiX / 100
+local orm_maxH = ((sysInfo.DesktopSize)[2] * 3.0 / 4.0) / orm_scaleDpi
+g_orm_maxFloaterH = orm_maxH
+
 
 -- ======================================================================
 -- СТРУКТУРЫ ДАННЫХ
@@ -233,6 +241,10 @@ global g_orm_result         = undefined
 global g_orm_uniqueObjs     = #()
 global g_orm_modClasses     = #()
 global g_orm_floater        = undefined
+-- Максимальная высота floater: не более 3/4 высоты рабочего стола (в логических
+-- единицах, с учётом DPI). Глобал, а не local, чтобы был доступен и из
+-- динамически генерируемых свитков (rolloutCreator), и из ORM_updateFloaterHeight.
+global g_orm_maxFloaterH    = undefined
 global g_orm_rlProps        = undefined  -- динамический rollout свойств
 -- Глобальные псевдонимы статических rollout'ов (паттерн доступа из global-функций)
 global g_orm_rollMods       = undefined
@@ -2224,6 +2236,22 @@ fn ORM_rebuildPropsRollout =
 	-- показываем свиток-заглушку. Прочие моды без свойств — без свитка (ничего не показываем).
 	if props.count == 0 and not isBaseObj and not (ORM_isEditableGeomMod modDataIdx) do return false
 
+	-- Защита от ДУБЛЕЙ ИМЁН: getPropNames у некоторых объектов возвращает одно имя
+	-- несколько раз — иначе rolloutCreator падает «control already defined». Оставляем
+	-- первый случай каждого имени (сохраняя порядок), остальные дубли отбрасываем.
+	local seenNames = #()
+	local uniqProps = #()
+	for p in props do
+	(
+		local pn = p.name as string
+		if (findItem seenNames pn) == 0 do
+		(
+			append seenNames pn
+			append uniqProps p
+		)
+	)
+	props = uniqProps
+
 	-- Средняя величина числовых параметров свитка (см. глобал g_orm_avgMag):
 	-- только ненулевые значения, точка3 считается по компонентам; всё нулевое → 1.0,
 	-- чтобы шаг спиннеров не схлопывался в 0.01 на пустых (нулевых) контролах.
@@ -2248,6 +2276,10 @@ fn ORM_rebuildPropsRollout =
 
 	local rc = rolloutCreator "g_orm_rlProps" sectionTitle
 	rc.begin()
+	-- Пересчёт автовысоты floater при разворачивании/сворачивании свитка.
+	-- ORM_updateFloaterHeight и g_orm_maxFloaterH глобальны, поэтому видны
+	-- из сгенерированного (safeExecute) rollout'а. (см. архитектура п.7)
+	rc.addText "on g_orm_rlProps rolledUp state do ORM_updateFloaterHeight()" filter:false
 
 	local h = 10
 	if props.count == 0 then
@@ -2574,7 +2606,16 @@ rollout rollout_mods "Modifiers"
 		)
 		local modDataIdx = g_orm_selInfo[2]
 		if modDataIdx < 1 or modDataIdx > g_orm_modClasses.count do return false
-		if ORM_onDeleteMod modDataIdx do ORM_rebuildNow()
+		-- Запоминаем позицию строки в списке, чтобы после удаления выделение
+		-- осталось на активном модификаторе под тем же индексом (следующем в стеке).
+		local prevIdx0 = rollout_mods.lst_mods.SelectedIndex   -- 0-based
+		if ORM_onDeleteMod modDataIdx do
+		(
+			ORM_rebuildNow()
+			local cnt = rollout_mods.lst_mods.Items.Count
+			if cnt > 0 and prevIdx0 >= 0 do
+				rollout_mods.lst_mods.SelectedIndex = amin prevIdx0 (cnt - 1)
+		)
 	)
 
 	on btn_inst pressed do
@@ -2687,7 +2728,8 @@ fn ORM_updateFloaterHeight =
 		if g_orm_floater.rollouts[i].open do h += g_orm_floater.rollouts[i].height
 	local scale_dpi = ((dotNetClass "System.Drawing.Graphics").fromHwnd 0).dpiX / 100
 	local newH = h / scale_dpi
-	local maxH = (sysInfo.DesktopSize)[2] / scale_dpi
+	-- Ограничение: не выше 3/4 высоты рабочего стола (глобал считается на старте)
+	local maxH = g_orm_maxFloaterH
 	if newH > maxH do newH = maxH
 	if newH < 200 do newH = 200
 	try ( g_orm_floater.size = [g_orm_floater.size[1], newH] ) \
