@@ -10,8 +10,10 @@ UI:
       кнопка Delete. Состояние enabled показывается ИКОНКОЙ глаза в начале строки
       (owner-draw, кадры 9/10/11 BMP): открытый — все вкл, закрытый — все выкл,
       смешанный — часть объектов вкл, часть выкл.
-  Rollout "Properties" — динамический свиток контролов выбранного элемента
-      (генерируется rolloutCreator'ом на лету, пересоздаётся при смене выбора).
+  Rollout "Properties" — свиток контролов выбранного элемента. Строится один раз
+      на КЛАСС модификатора (rolloutCreator) и живёт во floater: при переключении
+      модов разворачивается/сворачивается (open/close), при смене выборки объектов
+      переиспользуется из кэша — без пересоздания и без моргания списка (архитектура п. 4).
   Rollout "About" — инфо (сворачивается при выборе элемента, всегда последний).
 
 Поведение:
@@ -69,8 +71,10 @@ UI:
    «Сделать общим») тоже global (вызываются из global-функции ORM_onMakeCommon
    через popUpMenu без pos: — меню появляется у курсора).
 
-2. LOOKUP — НЕ ХЕШ. g_orm_propLookup — линейный массив кортежей
-   #(key, modIdx, propNameStr, prefix), поиск через ORM_lookupFind.
+2. LOOKUP — СЛОВАРЬ. g_orm_propLookup — Dictionary lookupKey -> запись
+   ORM_PropEntry (lookupKey, modIdx, propName, prefix); поиск через
+   ORM_lookupFind = g_orm_propLookup[lookupKey]. g_orm_rlCache — то же:
+   Dictionary clsKey -> ORM_RlEntry (см. п. 4).
    Хеш-доступ arr["key"]=... к глобальному #() в MAXScript НЕ работает
    ("array index must be positive number") — не менять на hash.
    ИНДЕКС 0 И ЗА ПРЕДЕЛЫ: g_orm_listItems[0] бросает "array index must be
@@ -81,9 +85,33 @@ UI:
 3. codeStr БЕЗ @...@. Вложенные @ ломают парсинг ("Call needs function or
    class"). Имена/значения подставляются конкатенацией строк.
 
-4. УДАЛЕНИЕ ДИНАМИЧЕСКОГО ROLLOUT. destroyDialog НЕ убирает rollout из
-   floater'а — накапливаются копии. Обязательно removeRollout + destroyDialog.
-   Пересоздание — только при смене выбора (g_orm_lastSelKey).
+4. КЭШ СВИТКОВ СВОЙСТВ. Свиток свойств строится ОДИН раз на класс (clsKey — имя
+   класса мода, для базы — "base:<Класс>" / "base:mixed:<Super>", т.к. набор свойств
+   базы зависит от класса) и ЖИВЁТ во floater: при переключении модов открытый
+   сворачивается, новый разворачивается (open/close) — без removeRollout/
+   addRollout/destroyDialog, поэтому список модов не перелэйаутается и не моргает.
+   Кэш — g_orm_rlCache: Dictionary clsKey -> ORM_RlEntry (struct-запись, поля именами).
+   destroyDialog
+   РАЗРУШАЕТ определение (rollout-значение), поэтому применяется ТОЛЬКО при закрытии
+   окна (ORM_closeDialog). При смене ВЫБОРКИ объектов свитки убираются из floater'а
+   removeRollout (без destroyDialog — определения переиспользуются), кэш сохраняется.
+ВСТРОЕННЫЕ СВИТКИ: для класса может быть задан РУЧНОЙ макет строк вместо автоанализа
+    getPropNames (глобал g_orm_builtinDefs; тестовый Extrude): порядок, НАСТОЯЩИЕ ГРУППЫ
+    (group-блоки rollout'а — рамка вокруг контролов, формат #(":group", "Заголовок",
+    #(дети...)), дети — те же строки) и radiobuttons (state маппится на значение свойства
+    через ORM_radioApply). Значения ВСЕГДА берутся из props анализа — макет определяет
+    только раскладку; для синка/проверки доступности группы разворачиваются
+    (ORM_rlFlattenLayout). radiobuttons Unify-кнопки НЕ имеют: в ORM_rlUsable для строк-радио
+    проверяется только наличие контрола (иначе — ресббинговый цикл drop→rebuild).
+   Префиксы контролов СТАБИЛЬНЫ ("c<uid>_") — не зависят от modDataIdx, поэтому codeStr
+   одного свитка работает для любого мода того же класса; g_orm_propLookup пересобирается
+   с актуальным modIdx при каждом открытии (ORM_rlSyncValues). Заголовок свитка
+   (Base: MIXED, "N lower duplicates") зависит от выборки и переустанавливается
+   в ORM_rlOpenForSel (rl.title). Исключение из «не пересобирать»: кнопка Unify (_mk)
+   создаётся только для различавшегося при ПОСТРОЕНИИ свойства (см. ORM_addPropControls);
+   если в новой выборке различается свойство, созданное «одинаковым», свиток класса
+   пересобирается на месте (ORM_rlUsable → ORM_rlDrop) — редкий случай, допустимый
+   ценой небольшого релэйаута.
 
 5. МОДИФИКАТОРЫ — ПО КЛАССУ, НЕ ПО ИНДЕКСУ. ORM_resolveTarget ищет верхний
    модификатор нужного класса (g_orm_modClasses[modIdx]) на каждом объекте.
@@ -97,8 +125,8 @@ UI:
    глазу открывает popupmenu rmc_toggle (Enable / Disable), пункты которого
    сами применяют выбор через ORM_toggleSelected. Мод без поддерживаемых
    свойств в список ВКЛЮЧАЕТСЯ (props.count == 0 не отбрасывает) — иначе
-   выключенный мод мог молча пропасть из списка. Иконка глаза: 9 — открытый,
-   10 — закрытый, 11 — смешанный (ORM_setToggleUI подменяет images по mixedState).
+   выключенный мод мог молча пропасть из списка. Глаз в строке списка:
+   9 — открытый, 10 — закрытый, 11 — смешанный (BMP-иконка в ImageColumn).
    Отдельного колбэка на смену enabled в Max нет (только pre/postModifierAdded|Deleted),
    поэтому после toggle строки списка пересобираются явно (ORM_refreshList).
    МАССОВЫЕ ПРАВКИ СТЕКА: циклы .enabled= / deleteModifier по всем объектам оборачиваются
@@ -188,14 +216,6 @@ local lbl_ver_caption = APP_TITLE + " " + VERSION
 --   11 — смешанный, 12 — удаление, 13 — обновить (Refresh)
 local icon_path = (getDir #usericons) + "\\ModProps_16i.bmp"
 
--- Максимальная высота floater: не более 3/4 высоты рабочего стола.
--- Расчёт при старте скрипта; локальная переменная живёт только в main-теле,
--- наружу уносим через глобальный g_orm_maxFloaterH — он нужен и динамическим
--- свиткам (rolloutCreator), и функциям автовысоты.
-local orm_scaleDpi = ((dotNetClass "System.Drawing.Graphics").fromHwnd 0).dpiX / 100
-local orm_maxH = ((sysInfo.DesktopSize)[2] * 3.0 / 4.0) / orm_scaleDpi
-g_orm_maxFloaterH = orm_maxH
-
 
 -- ======================================================================
 -- СТРУКТУРЫ ДАННЫХ
@@ -241,25 +261,17 @@ global g_orm_result         = undefined
 global g_orm_uniqueObjs     = #()
 global g_orm_modClasses     = #()
 global g_orm_floater        = undefined
--- Максимальная высота floater: не более 3/4 высоты рабочего стола (в логических
--- единицах, с учётом DPI). Глобал, а не local, чтобы был доступен и из
--- динамически генерируемых свитков (rolloutCreator), и из ORM_updateFloaterHeight.
-global g_orm_maxFloaterH    = undefined
-global g_orm_rlProps        = undefined  -- динамический rollout свойств
--- Глобальные псевдонимы статических rollout'ов (паттерн доступа из global-функций)
-global g_orm_rollMods       = undefined
-global g_orm_rollAbout      = undefined
 
--- Lookup: #(#(key, modIdx, propNameStr, prefix), ...)
-global g_orm_propLookup     = #()
+-- Lookup контролов: Dictionary lookupKey -> ORM_PropEntry (lookupKey, modIdx, propName, prefix)
+global g_orm_propLookup     = Dictionary #string
 -- Выбранный элемент: #(type, modDataIdx) ; тип "base" | "mod" (пустой = нет выбора)
 global g_orm_selInfo        = #()
--- Соответствие строк listbox -> #("base"|"mod", modDataIdx)
+-- Соответствие строк DataGridView -> #("base"|"mod", modDataIdx)
 global g_orm_listItems      = #()
--- dotNet списка: иконки и флаги инстанса по индексам строк (см. ORM_buildListItems/ORM_drawListItem)
+-- dotNet списка: состояние глаза и флаги инстанса по индексам строк (см. ORM_buildListItems/ORM_listSetItems)
 global g_orm_listIcons      = #()
 global g_orm_listFlags      = #()
--- Кадры ModProps_16i.bmp для owner-draw (загружаются в ORM_initModList)
+-- Кадры ModProps_16i.bmp (загружаются в ORM_initModList); g_orm_eyeFrames — 3 глаза для ImageColumn
 global g_orm_iconFrames     = #()
 -- Размер иконки/высоты строки списка (px) — простая переменная в коде
 global g_orm_iconSize        = 16
@@ -284,6 +296,13 @@ global g_orm_ctxKey         = ""
 global g_orm_lastSelKey     = ""
 -- Защита от рекурсии колбэков (см. архитектура п. 3)
 global g_orm_refreshing     = false
+-- Приостановка callback-refresh'ей на время многошаговой операции (конвертация
+-- в инстанс): промежуточные postModifier* пересобирали бы UI многократно и теряли
+-- текущее выделение сетки. Финальный пересбор делает сам обработчик операции.
+global g_orm_suspendRefresh = false
+-- Форс-рестор выделения после такой операции: #(wasSel, wasLabel). Потребляется
+-- ОДИН раз следующим ORM_refreshUI с autoSel:false (см. btn_inst / ORM_refreshUI).
+global g_orm_forceRestore   = #()
 -- Групповой режим спиннера (см. «Сделать общим»): lookupKey ->
 --   #( #(obj, baseVal, modIdx, realName), ... , mode ) где mode = #incr | #scale.
 --   #incr:  контрол стартует с 0, изменение ПРИБАВЛЯЕТ дельту к запомненной базе
@@ -293,6 +312,92 @@ global g_orm_refreshing     = false
 --   И в том, и в другом случае показанное число — фактор (дельту/процент),
 --   НЕ абсолютное значение свойства.
 global g_orm_incrMap        = #()
+
+
+-- Максимальная высота floater: не более 3/4 высоты рабочего стола (в логических
+-- единицах, с учётом DPI). Вычисляется при каждой загрузке макроса. Глобал, а не
+-- local, чтобы был доступен и из динамически генерируемых свитков (rolloutCreator),
+-- и из ORM_updateFloaterHeight.
+global g_orm_maxFloaterH = \
+	((sysInfo.DesktopSize)[2] * 3.0 / 4.0) / (((dotNetClass "System.Drawing.Graphics").fromHwnd 0).dpiX / 100)
+global g_orm_rlProps        = undefined  -- активный (развёрнутый) rollout свойств
+-- Структуры-записи (вместо позиционных кортежей #(...) с доступом по индексу).
+struct ORM_RlEntry (
+	clsKey,         -- ключ набора свойств (см. g_orm_rlCache ниже)
+	rl,             -- значение rollout'а свитка (кэш-запись)
+	prefix,         -- стабильный префикс контролов "c<uid>_"
+	lookupTemplate, -- #(ORM_PropTemplate) БЕЗ modIdx (подставляется при открытии)
+	uid,            -- монотонный номер (имя rollout'а "g_orm_rlProps_<uid>")
+	layout          -- строки встроенного макета (rows) или undefined (см. g_orm_builtinDefs)
+)
+
+struct ORM_PropTemplate (
+	lookupKey,      -- стабильный ключ контрола ("c<uid>_<prop>")
+	propName,       -- имя свойства Max (строка)
+	prefix          -- префикс контрола (для повторной сборки lookup)
+)
+
+struct ORM_PropEntry (
+	lookupKey,      -- стабильный ключ контрола ("c<uid>_<prop>")
+	modIdx,         -- ЖИВОЙ индекс мода (0 = база) при текущем открытии свитка
+	propName,       -- имя свойства Max (строка)
+	prefix          -- префикс контрола
+)
+
+struct ORM_BuiltinLayout (
+	rows            -- строки встроенного макета свитка (см. g_orm_builtinDefs)
+)
+
+-- Кэш свитков свойств по классу модификатора (см. архитектура п. 4):
+-- Dictionary clsKey -> ORM_RlEntry, где
+--   clsKey         — ключ набора свойств: "base:<Класс>" / "base:mixed:<Super>" /
+--                    имя класса мода (Bend, Edit_Poly, ...)
+--   rl             — значение rollout'а (переживает removeRollout, НЕ destroyDialog)
+--   prefix         — стабильный префикс контролов ("c"+uid+"_"), не зависит от modDataIdx
+--   lookupTemplate — #(ORM_PropTemplate) БЕЗ modIdx (подставляется при открытии)
+--   uid            — монотонный номер (имя rollout'а "g_orm_rlProps_<uid>")
+--   layout         — строки ВСТРОЕННОГО (ручного) свитка класса или undefined:
+--                    #( #(accessorKey, kind, label), #(key, #radio, label, labels, mappings),
+--                       #(":group", "Заголовок", #(дети...)) ... ) — см. g_orm_builtinDefs
+-- Свитки ЖИВУТ во floater при переключении модов (open/close); при смене выборки
+-- объектов все removeRollout (без destroyDialog) — определения из кэша переиспользуются.
+global g_orm_rlCache        = Dictionary #string
+global g_orm_rlUid          = 0
+-- Встроенные (ручные) свитки свойств для классов: структурированный макет вместо
+-- автоанализа getPropNames. Dictionary имяКласса -> ORM_BuiltinLayout #rows.
+-- Пока — тестовый свиток Extrude. Формат строк rows:
+--   #(accessorKey, ptype, "Подпись")            — обычное свойство (ptype: #float/#integer/
+--                                                 #boolean/#color/#point3)
+--   #(accessorKey, #radio, "Подпись", labels,   — radiobuttons; labels — #("A","B",...),
+--                                                 mappings — #(значение->индекс) (напр. #(1,2))
+--                                                 для capType 1=Morph 2=Grid, #(0,1,2) для output)
+--   #(":group", "Заголовок", #(дети...))        — настоящая группа (group-блок rollout'а:
+--                                                 рамка вокруг контролов); дети — те же строки,
+--                                                 значения и колбэки, но внутри блока
+--   #(":group", "Заголовок")                    — старый формат: label-разделитель
+global g_orm_builtinDefs = Dictionary #string
+g_orm_builtinDefs["Extrude"] = ORM_BuiltinLayout rows:#(
+	#("amount",  #float,    "Amount"),
+	#("segs",    #integer,  "Segments"),
+	#(":group",  "Capping", #(
+		#("capStart", #boolean, "Cap Start"),
+		#("capEnd",   #boolean, "Cap End"),
+		#("capType",  #radio,   "Cap Type",    #("Morph", "Grid"),            #(0, 1))
+	)),
+	#(":group",  "Output", #(
+		#("output",   #radio,   "Output Type", #("Patch", "Mesh", "NURBS"),   #(0, 1, 2))
+	)),
+	#("mapcoords",       #boolean, "Generate Mapping Coordinates"),
+	#("realWorldMapSize",#boolean, "Real-World Map Size"),
+	#("matIDs",  #boolean, "Generate Material ID"),
+	#("useShapeIDs", #boolean, "Use Shape IDs"),
+	#("smooth",  #boolean, "Smooth")
+)
+-- Какой rollout сейчас развёрнут (значение rollout'а, не clsKey)
+global g_orm_rlOpen         = undefined
+-- Глобальные псевдонимы статических rollout'ов (паттерн доступа из global-функций)
+global g_orm_rollMods       = undefined
+global g_orm_rollAbout      = undefined
 
 
 -- Функции, вызываемые из статических rollout-обработчиков и codeStr
@@ -324,7 +429,6 @@ global ORM_validTargets
 global ORM_getLiveEnabled
 global ORM_onListSelect
 global ORM_toggleSelected
-global ORM_setToggleUI
 global ORM_setFilterUI
 global ORM_onFilterChanged
 global ORM_onMakeCommon
@@ -352,6 +456,17 @@ global ORM_onDeleteMod
 global ORM_onInstancifyMod
 global ORM_rebuildPropsRollout
 global ORM_addPropControls
+global ORM_rlFindByClass
+global ORM_rlBuild
+global ORM_rlSyncValues
+global ORM_rlOpenForSel
+global ORM_rlRemoveAll
+global ORM_rlAddIfMissing
+global ORM_builtinLayoutFor
+global ORM_rlFindProp
+global ORM_rlAddLayoutRow
+global ORM_radioApply
+global ORM_rlFlattenLayout
 global ORM_refreshUI
 global ORM_clearUI
 global ORM_rebuildNow
@@ -362,7 +477,7 @@ global ORM_updateFloaterHeight
 global ORM_saveFloaterState
 global ORM_showUI
 global ORM_closeDialog
--- Функции owner-draw списка вызываются из dotNet-событий (DrawItem, SelectedIndexChanged)
+-- Функции grid-списка вызываются из dotNet-событий (SelectionChanged, CellMouseClick)
 -- и из глобальных ORM_*-функций, т.е. из скоупа, ОТДЕЛЬНОГО от макроса. В .mcr обычный
 -- fn локален макроскоупу — без этого предобъявления global dotNet-событие увидело бы
 -- имя как Global:undefined.
@@ -371,8 +486,11 @@ global ORM_loadIconFrames
 global ORM_initModList
 global ORM_listSetItems
 global ORM_listSelectChanged
-global ORM_drawListItem
+global ORM_selectRow
 global ORM_refreshList
+global ORM_refreshEyeRow
+global ORM_eyeBitmapFor
+global ORM_eyeIdxForStates
 -- Точность спиннеров и подавление программных `changed`. Тоже global по той же
 -- причине (оживает в codeStr динамического rollout'а — он вне scope макроса,
 -- поэтому без global из события переменная рисуется как undefined).
@@ -796,6 +914,25 @@ fn ORM_isMixedEnabled modIdx =
 	false
 )
 
+-- Номер кадра глаза по состояниям enabled: 9 — все вкл, 10 — все выкл, 11 — смешанное.
+-- Общая логика для ORM_buildListItems и точечного обновления строки (ORM_refreshEyeRow).
+fn ORM_eyeIdxForStates sts =
+(
+	local eyeIdx = 9
+	local refEn = undefined
+	local isMixed = false
+	local allOff = true
+	for e in sts do
+	(
+		if refEn == undefined do refEn = e
+		if e != refEn do isMixed = true
+		if e do allOff = false
+	)
+	if sts.count > 0 and allOff do eyeIdx = 10
+	if isMixed do eyeIdx = 11
+	eyeIdx
+)
+
 fn ORM_applyProperty modIdx propNameStr value =
 (
 	if not (ORM_validTargets()) do ( ORM_refreshUI quiet:true; return false )
@@ -824,19 +961,7 @@ fn ORM_buildListItems result =
 	(
 		local md = result.modDataList[mi2]
 		-- Иконка глаза: 9 — открытый (все вкл), 10 — закрытый (все выкл), 11 — смешанный
-		local eyeIdx = 9
-		local sts = ORM_getEnabledStates mi2
-		local refEn = undefined
-		local isMixed = false
-		local allOff = true
-		for e in sts do
-		(
-			if refEn == undefined do refEn = e
-			if e != refEn do isMixed = true
-			if e do allOff = false
-		)
-		if sts.count > 0 and allOff do eyeIdx = 10
-		if isMixed do eyeIdx = 11
+		local eyeIdx = ORM_eyeIdxForStates (ORM_getEnabledStates mi2)
 		-- Инстанс: у всех выделенных объектов это один и тот же общий инстанс модификатора
 		local isInst = false
 		if g_orm_uniqueObjs.count > 1 then
@@ -888,11 +1013,13 @@ fn ORM_buildListItems result =
 fn ORM_refreshList =
 (
 	if g_orm_rollMods == undefined or g_orm_result == undefined do return false
-	local lb = g_orm_rollMods.lst_mods
-	local selIdx0 = lb.SelectedIndex
+	local gd = g_orm_rollMods.lst_mods
+	local selIdx0 = -1
+	try ( selIdx0 = gd.CurrentRow.Index ) \
+		catch ( ORM_logExcept "refreshListSel" (getCurrentException() as string) )
 	ORM_listSetItems (ORM_buildListItems g_orm_result)
-	if selIdx0 >= 0 and selIdx0 < lb.Items.Count do
-		lb.SelectedIndex = selIdx0
+	if selIdx0 >= 0 and selIdx0 < gd.Rows.Count do
+		ORM_selectRow selIdx0
 	true
 )
 
@@ -969,7 +1096,14 @@ fn ORM_instancifyModifier modClass =
 	if g_orm_debug do format "ModPropsLister[inst]: refObj=% refMod=%\n" (refObj as string) (refMod as string)
 	if refMod == undefined do return false
 
+	-- Конвертация идёт на ЖИВОМ стеке, и каждый deleteModifier/addModifier стреляет
+	-- postModifierDeleted|Added → ORM_cbRefresh. Промежуточные пересборы UI не нужны
+	-- (и ломали бы текущее выделение сетки), поэтому приостанавливаем callbacks на всю
+	-- операцию; финальный пересбор делает обработчик кнопки (ORM_rebuildNow).
+	g_orm_suspendRefresh = true
 	local applied = false
+	try
+	(
 	undo "ModPropsLister Convert To Instance" on
 	(
 		with redraw off
@@ -1022,7 +1156,13 @@ fn ORM_instancifyModifier modClass =
 	-- Список (курсив инстанса) и Modify-панель обновляем, если что-то применили.
 	-- Панель переоткрываем на ОБЩЕМ инстансе образца (старые копии удалены, поэтому
 	-- владельца и объект задаём явно: setCurrentObject по удалённому моду не найдёт стек).
-	if applied do ORM_refreshModPanel show:refMod owner:refObj
+		if applied do ORM_refreshModPanel show:refMod owner:refObj
+	)
+	catch
+	(
+		ORM_logExcept "instancifyOuter" (getCurrentException() as string)
+	)
+	g_orm_suspendRefresh = false
 	if g_orm_debug do format "ModPropsLister[inst]: ORM_instancifyModifier returns %\n" applied
 	applied
 )
@@ -1184,9 +1324,7 @@ fn ORM_commonValue modIdx propName mode =
 
 fn ORM_lookupFind propNameStr =
 (
-	for item in g_orm_propLookup do
-		if item[1] == propNameStr do return item
-	undefined
+	g_orm_propLookup[propNameStr]
 )
 
 -- Групповой undo: первый changed открывает theHold (ORM_gestureBegin), значение
@@ -1201,8 +1339,8 @@ fn ORM_propChanged propNameStr val =
 	if ORM_incrFind propNameStr != undefined do return (ORM_applyTick propNameStr val)
 	local lookup = ORM_lookupFind propNameStr
 	if lookup == undefined do return false
-	local modIdx    = lookup[2]
-	local realName  = lookup[3]
+	local modIdx    = lookup.modIdx
+	local realName  = lookup.propName
 	if classOf val == BooleanClass do
 	(
 		undo "ModPropsLister Toggle" on ( ORM_applyProperty modIdx realName val )
@@ -1222,7 +1360,7 @@ fn ORM_propColorChanged propNameStr val =
 (
 	local lookup = ORM_lookupFind propNameStr
 	if lookup == undefined do return false
-	undo "ModPropsLister Color" on ( ORM_applyProperty lookup[2] lookup[3] val )
+	undo "ModPropsLister Color" on ( ORM_applyProperty lookup.modIdx lookup.propName val )
 	true
 )
 
@@ -1230,8 +1368,8 @@ fn ORM_propPoint3Changed propNameStr component val =
 (
 	local lookup = ORM_lookupFind propNameStr
 	if lookup == undefined do return false
-	local modIdx   = lookup[2]
-	local realName = lookup[3]
+	local modIdx   = lookup.modIdx
+	local realName = lookup.propName
 
 	local currentVal = undefined
 	local target = ORM_resolveTarget g_orm_uniqueObjs[1] modIdx
@@ -1334,9 +1472,9 @@ fn ORM_applyCommon lookupKey mode =
 (
 	local lookup = ORM_lookupFind lookupKey
 	if lookup == undefined do return false
-	local modIdx   = lookup[2]
-	local realName = lookup[3]
-	local prefix   = lookup[4]
+	local modIdx   = lookup.modIdx
+	local realName = lookup.propName
+	local prefix   = lookup.prefix
 
 	local val = case mode of
 	(
@@ -1424,9 +1562,9 @@ fn ORM_incrBegin lookupKey mode:#incr =
 (
 	local lookup = ORM_lookupFind lookupKey
 	if lookup == undefined do return false
-	local modIdx   = lookup[2]
-	local realName = lookup[3]
-	local prefix   = lookup[4]
+	local modIdx   = lookup.modIdx
+	local realName = lookup.propName
+	local prefix   = lookup.prefix
 
 	local pairs = #()
 	for obj in g_orm_uniqueObjs do
@@ -1527,8 +1665,8 @@ fn ORM_ctxPtype lookupKey =
 (
 	local lookup = ORM_lookupFind lookupKey
 	if lookup == undefined do return undefined
-	local modIdx   = lookup[2]
-	local realName = lookup[3]
+	local modIdx   = lookup.modIdx
+	local realName = lookup.propName
 	local theProps = undefined
 	if modIdx == 0 then
 	(
@@ -1647,32 +1785,6 @@ fn ORM_onMakeCommon lookupKey =
 -- UI: ВЫБОР ЭЛЕМЕНТА СПИСКА / REBUILD
 -- ======================================================================
 
--- Синхронизация кнопки On: состояние (checked) + иконка (caption).
--- Вызывается везде, где меняется checked, чтобы интерфейс не расходился
--- с реальным состоянием модификатора.
-fn ORM_setToggleUI state mixedState:false =
-(
-	if g_orm_rollMods == undefined do return false
-	local bt = g_orm_rollMods.btn_toggle
-	-- Иконка глаза: 9 (открытый, вкл) / 10 (закрытый, выкл) / 11 (смешанный).
-	-- При mixedState меняем images всех состояний на кадр смешанного глаза.
-	-- Число кадров берём из загруженных g_orm_iconFrames (путь: ORM_initModList
-	-- грузит и режет bmp ДО первого вызова setToggleUI); если кадры не загружены —
-	-- не трогаем images (контрол создан с корректным locIconCount в rollout-определении).
-	local cnt = 0
-	if g_orm_iconFrames != undefined do
-		try ( cnt = g_orm_iconFrames.count ) catch ( ORM_logExcept "iconFrames" (getCurrentException() as string) )
-	if cnt >= 1 then try (
-		bt.images = if mixedState then \
-			#(icon_path, undefined, cnt, 11, 11, 11, 11, true) \
-		else \
-			#(icon_path, undefined, cnt, 10, 9, 9, 9, true)
-	)
-	catch ( ORM_logExcept "setImages" (getCurrentException() as string) )
-	bt.checked = state
-	true
-)
-
 -- Фильтр по типам (галочки под списком). Синхронизация UI <-> глобальное состояние.
 fn ORM_setFilterUI =
 (
@@ -1715,28 +1827,25 @@ fn ORM_onFilterChanged =
 
 fn ORM_onListSelect idx =
 (
-	-- guard ДО индексации: listbox может прислать idx=0 (сброс при смене items),
+	-- guard ДО индексации: сетка может прислать idx=0 (сброс при смене rows),
 	-- а g_orm_listItems[0] бросает "array index must be positive number" (см. архитектура п. 2)
 	if classOf idx != Integer or idx < 1 do return false
 	local info = g_orm_listItems[idx]
 	if classOf info != Array do return false
 	g_orm_selInfo = info
 	ORM_rebuildPropsRollout()
-	-- Кнопки On и Delete активны ТОЛЬКО для модификатора,
-	-- для baseobject — неактивны (см. архитектура п. 2): базу нельзя ни выключить, ни удалить
+	-- Кнопки Inst и Delete активны ТОЛЬКО для модификатора, для baseobject — неактивны
+	-- (см. архитектура п. 2): базу нельзя ни удалить, ни конвертировать в инстанс.
+	-- Состояние enabled для мода меняется галочкой в колонке сетки, кнопки тут нет.
 	if info[1] == "mod" and info[2] <= g_orm_result.modDataList.count then
 	(
-		g_orm_rollMods.btn_toggle.enabled = true
 		g_orm_rollMods.btn_delete.enabled = true
 		g_orm_rollMods.btn_inst.enabled   = true
-		ORM_setToggleUI (ORM_getLiveEnabled info[2]) mixedState:(ORM_isMixedEnabled info[2])
 	)
 	else
 	(
-		g_orm_rollMods.btn_toggle.enabled = false
 		g_orm_rollMods.btn_delete.enabled = false
 		g_orm_rollMods.btn_inst.enabled   = false
-		ORM_setToggleUI false
 	)
 	true
 )
@@ -1751,8 +1860,31 @@ fn ORM_toggleSelected st =
 	if modDataIdx < 1 or modDataIdx > g_orm_result.modDataList.count do return false
 	local cls = g_orm_result.modDataList[modDataIdx].modClass
 	ORM_toggleModifier cls st
-	-- Колбэка на смену enabled в Max нет — пересобираем метки списка явно
-	ORM_refreshList()
+	-- Колбэка на смену enabled в Max нет, но пересобирать весь список не нужно:
+	-- меняется только картинка глаза тогглнутой строки (обновляем одну ячейку —
+	-- никакого моргания/пересборки остальных строк).
+	local idx0 = -1
+	try ( idx0 = g_orm_rollMods.lst_mods.CurrentRow.Index ) \
+		catch ( ORM_logExcept "toggleRow" (getCurrentException() as string) )
+	if idx0 < 0 or idx0 >= g_orm_listItems.count then ( ORM_refreshList(); return true )
+	local fixed = false
+	-- Текущий выделенный мод == тот, что переключаем (внешняя синхронизация); если вдруг
+	-- CurrentRow отстаёт от g_orm_selInfo — ищем по modDataIdx и обновляем его строку.
+	if g_orm_listItems[idx0 + 1] == g_orm_selInfo then
+		fixed = ORM_refreshEyeRow idx0 g_orm_listItems[idx0 + 1]
+	else
+	(
+		for i = 1 to g_orm_listItems.count do
+		(
+			local it = g_orm_listItems[i]
+			if classOf it == Array and it.count >= 2 and it[1] == "mod" and it[2] == modDataIdx do
+			(
+				fixed = ORM_refreshEyeRow (i - 1) it
+				exit
+			)
+		)
+	)
+	if not fixed do ORM_refreshList()
 	true
 )
 
@@ -1762,19 +1894,20 @@ fn ORM_clearUI msg:"No selection." =
 	local changed = false
 	if g_orm_rollMods != undefined do
 	(
-		local lb = g_orm_rollMods.lst_mods
-		local oldCnt = lb.Items.Count
+		local gd = g_orm_rollMods.lst_mods
+		local oldCnt = gd.Rows.Count
 		local oldText = ""
-		if oldCnt == 1 do try ( oldText = lb.Items.Item[0] as string ) \
+		if oldCnt == 1 do try ( oldText = gd.Rows.Item[0].Cells.Item[1].Value as string ) \
 			catch ( ORM_logExcept "listItemRead" (getCurrentException() as string) )
 		if oldCnt != 1 or oldText != msg do
 		(
 			ORM_listSetItems #(msg)
 			changed = true
 		)
-		g_orm_rollMods.lst_mods.SelectedIndex = -1
-		ORM_setToggleUI false
-		g_orm_rollMods.btn_toggle.enabled = false
+		-- Сброс выделения: SelectionChanged неиндексирует пустой список,
+		-- просто отключает кнопки удаления/инстанса.
+		gd.ClearSelection()
+		gd.CurrentCell = undefined
 		g_orm_rollMods.btn_delete.enabled = false
 	)
 	g_orm_listItems = #()
@@ -1786,15 +1919,9 @@ fn ORM_clearUI msg:"No selection." =
 	ORM_gestureCommit()
 	g_orm_incrMap = #()
 
-	if g_orm_rlProps != undefined and g_orm_floater != undefined do
-	(
-		try ( removeRollout g_orm_rlProps g_orm_floater ) \
-			catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
-		try ( destroyDialog g_orm_rlProps ) \
-			catch ( ORM_logExcept "destroyProps" (getCurrentException() as string) )
-		g_orm_rlProps = undefined
-		changed = true
-	)
+	-- Убираем свитки свойств из floater'а (кэш сохраняется, см. архитектура п. 4)
+	ORM_rlRemoveAll()
+	changed = true
 	changed
 )
 
@@ -1809,16 +1936,36 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	-- wasLabel: текст строки — она и будет критерием «имя совпадает» при восстановлении.
 	-- wasSel: кортеж (#("mod", mi) / #("base", 0)) берём напрямую из ЖИВОГО списка
 	-- (глобал g_orm_selInfo оказался ненадёжным — в дебаге держал ok вместо массива).
-	local prevIdx0 = g_orm_rollMods.lst_mods.SelectedIndex   -- 0-based, -1 = ничего не выбрано
+	local prevIdx0 = -1
+	try ( prevIdx0 = g_orm_rollMods.lst_mods.CurrentRow.Index ) \
+		catch ( ORM_logExcept "refreshPrevRow" (getCurrentException() as string) )
 	local wasSel = undefined
 	local wasLabel = ""
-	if prevIdx0 >= 0 and prevIdx0 < g_orm_listItems.count do
-		wasSel = deepcopy g_orm_listItems[prevIdx0 + 1]
-	if prevIdx0 >= 0 and prevIdx0 < g_orm_rollMods.lst_mods.Items.Count do
-		wasLabel = try ( g_orm_rollMods.lst_mods.Items.Item[prevIdx0] as string ) catch ( "" )
+	-- Форс-рестор из операции с приостановкой callbacks (конвертация в инстанс):
+	-- стек после неё изменился, поэтому берём сохранённый label/тип, а не grid-захват.
+	-- Потребляется ОДИН раз (autoSel:false), дальше работает обычный механизм.
+	local forceRestore = (not autoSel and g_orm_forceRestore.count == 2 and classOf g_orm_forceRestore[1] == Array)
+	if forceRestore do
+	(
+		wasSel = deepcopy g_orm_forceRestore[1]
+		wasLabel = try ( g_orm_forceRestore[2] as string ) catch ( "" )
+		g_orm_forceRestore = #()
+	)
+	-- Строка, которую мы выбираем в этом refresh (для повторного подтверждения подсветки
+	-- ПОСЛЕ релэйаута автовысоты floater'а — релэйаут может погасить видимое выделение
+	-- dotNet-сетки; повторный select идемпотентен (guarded по g_orm_lastSelKey) и
+	-- только восстанавливает подсветку, свойства не пересобирает).
+	local targetSelRow = -1
+	if not forceRestore do
+	(
+		if prevIdx0 >= 0 and prevIdx0 < g_orm_listItems.count do
+			wasSel = deepcopy g_orm_listItems[prevIdx0 + 1]
+		if prevIdx0 >= 0 and prevIdx0 < g_orm_rollMods.lst_mods.Rows.Count do
+			wasLabel = try ( g_orm_rollMods.lst_mods.Rows.Item[prevIdx0].Cells.Item[1].Value as string ) catch ( "" )
+	)
 	if g_orm_debug do
-		format "ModPropsLister[refresh]: STEP 1 capture — prevIdx0=% Items.Count=% wasLabel='%' wasSel=% wasSelCnt=% g_orm_selInfo=%\n" \
-			prevIdx0 g_orm_rollMods.lst_mods.Items.Count wasLabel wasSel \
+		format "ModPropsLister[refresh]: STEP 1 capture — prevIdx0=% Rows=% wasLabel='%' wasSel=% wasSelCnt=% g_orm_selInfo=%\n" \
+			prevIdx0 g_orm_rollMods.lst_mods.Rows.Count wasLabel wasSel \
 			(if classOf wasSel == Array then wasSel.count else 0) (g_orm_selInfo as string)
 
 	local sel = selection as array
@@ -1850,32 +1997,26 @@ fn ORM_refreshUI quiet:false autoSel:false =
 
 	-- Обновляем listbox без пересоздания floater
 	ORM_listSetItems listItems
-	ORM_setToggleUI false
-	g_orm_rollMods.btn_toggle.enabled = false
 	g_orm_rollMods.btn_delete.enabled = false
 	g_orm_rollMods.btn_inst.enabled = false
 	if g_orm_debug do
-		format "ModPropsLister[refresh]: STEP 2 rebuilt — g_orm_listItems.count=% listItems.count=% (SelectedIndex now %)\n" \
-			g_orm_listItems.count listItems.count g_orm_rollMods.lst_mods.SelectedIndex
+		format "ModPropsLister[refresh]: STEP 2 rebuilt — g_orm_listItems.count=% listItems.count=% (Rows now %)\n" \
+			g_orm_listItems.count listItems.count g_orm_rollMods.lst_mods.Rows.Count
 
-	-- Убираем rollout свойств из floaterа, если он был (removeRollout, а не только destroyDialog)
-	if g_orm_rlProps != undefined and g_orm_floater != undefined do
-	(
-		try ( removeRollout g_orm_rlProps g_orm_floater ) \
-			catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
-		try ( destroyDialog g_orm_rlProps ) \
-			catch ( ORM_logExcept "destroyProps" (getCurrentException() as string) )
-		g_orm_rlProps = undefined
-	)
+	-- Убираем свитки свойств из floater'а (кэш сохраняется, см. архитектура п. 4)
+	ORM_rlRemoveAll()
 	g_orm_lastSelKey = ""
 
 	-- При изменении выделения сразу выделяем первый элемент списка:
 	-- это верхний модификатор стека, его свойства открываются сразу (см. архитектура п. 2).
-	-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged → ORM_onListSelect.
+	-- Выбор строки вызывает SelectionChanged → ORM_listSelectChanged → ORM_onListSelect.
 	if autoSel then
 	(
 		if g_orm_listItems.count > 0 do
-			g_orm_rollMods.lst_mods.SelectedIndex = 0
+		(
+			targetSelRow = 0
+			ORM_selectRow 0
+		)
 	)
 	else if classOf wasSel == Array and wasSel.count > 0 then
 	(
@@ -1887,9 +2028,10 @@ fn ORM_refreshUI quiet:false autoSel:false =
 			if g_orm_listItems[i][1] == wasSel[1] and g_orm_listItems[i][2] == wasSel[2] \
 				and listItems[i] == wasLabel do
 			(
-				-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged →
+				-- Выбор строки вызывает SelectionChanged → ORM_listSelectChanged →
 				-- ORM_onListSelect → ORM_rebuildPropsRollout (свойства выбранного модификатора).
-				g_orm_rollMods.lst_mods.SelectedIndex = i - 1
+				targetSelRow = i - 1
+				ORM_selectRow (i - 1)
 				restored = true
 				if g_orm_debug do
 					format "ModPropsLister[refresh]: RESTORED row=% label='%'\n" (i - 1) listItems[i]
@@ -1920,8 +2062,15 @@ fn ORM_refreshUI quiet:false autoSel:false =
 	-- Автовысота под текущий набор свитков
 	ORM_updateFloaterHeight()
 	if g_orm_debug do
-		format "ModPropsLister[refresh]: STEP 4 final — SelectedIndex=% Items.Count=%\n" \
-			g_orm_rollMods.lst_mods.SelectedIndex g_orm_rollMods.lst_mods.Items.Count
+		format "ModPropsLister[refresh]: STEP 4 final — CurrentRow=% Rows.Count=%\n" \
+			(try ( g_orm_rollMods.lst_mods.CurrentRow.Index ) catch ( -1 )) g_orm_rollMods.lst_mods.Rows.Count
+
+	-- Повторное подтверждение выделения ПОСЛЕ релэйаута автовысоты: если relayout
+	-- погасил подсветку net-сетки, ещё раз выставляем ту же строку. Идемпотентно:
+	-- свойство уже открыто (g_orm_lastSelKey совпадает) — SelectionChanged→onListSelect
+	-- сделает ранний return и ничего не перестроит (см. архитектура п. 4).
+	if targetSelRow >= 0 and targetSelRow < g_orm_rollMods.lst_mods.Rows.Count do
+		ORM_selectRow targetSelRow
 
 	true
 )
@@ -1941,6 +2090,10 @@ fn ORM_rebuildNow =
 fn ORM_cbRefresh autoSel:false =
 (
 	if g_orm_refreshing do return false
+	-- Приостановка на время многошаговой операции (конвертация в инстанс): финальный
+	-- пересбор делает сам обработчик, а промежуточные postModifier* только портят
+	-- выделение сетки (см. g_orm_suspendRefresh).
+	if g_orm_suspendRefresh do return false
 	g_orm_refreshing = true
 	try
 	(
@@ -1985,8 +2138,15 @@ fn ORM_closeDialog =
 (
 	ORM_gestureCommit()
 	ORM_unregisterCallbacks()
-	try ( destroyDialog g_orm_rlProps ) \
-		catch ( ORM_logExcept "destroyPropsClose" (getCurrentException() as string) )
+	-- Закрытие окна — единственное место, где кэш свитков свойств РАЗРУШАЕТСЯ
+	-- (destroyDialog). В любом другом переходе определения переиспользуются
+	-- (см. архитектура п. 4).
+	for k in g_orm_rlCache.keys do
+		try ( destroyDialog g_orm_rlCache[k].rl ) \
+			catch ( ORM_logExcept "destroyPropsClose" (getCurrentException() as string) )
+	g_orm_rlCache = Dictionary #string
+	g_orm_rlUid = 0
+	g_orm_rlOpen = undefined
 	g_orm_rlProps = undefined
 	try ( closeRolloutFloater g_orm_floater ) \
 		catch ( ORM_logExcept "closeFloater" (getCurrentException() as string) )
@@ -2001,13 +2161,17 @@ fn ORM_closeDialog =
 -- Генерирует контролы для одного свойства в rolloutCreator
 --   modIdx: 0 = базовый объект, 1..N = модификатор
 --   prefix: префикс для имён контроллов ("v_" или "m1_")
-fn ORM_addPropControls rc modIdx prefix propInfo &height =
+fn ORM_addPropControls rc modIdx prefix propInfo &height labelOverride:undefined =
 (
 	local pNameStr = propInfo.name as string
 	local ctrlName = prefix + pNameStr
 	local lookupKey = prefix + pNameStr
+	g_orm_propLookup[lookupKey] = ORM_PropEntry lookupKey:lookupKey modIdx:modIdx propName:pNameStr prefix:prefix
 
-	append g_orm_propLookup #(lookupKey, modIdx, pNameStr, prefix)
+	-- Подпись контрола: для встроенных свитков (g_orm_builtinDefs) — человеческое имя
+	-- из макета, иначе — имя свойства Max. Спиннеры/цвет — с двоеточием, checkbox — без.
+	local labelStr = (if labelOverride != undefined then (labelOverride as string) else pNameStr) + ":"
+	local labelChk = if labelOverride != undefined then (labelOverride as string) else pNameStr
 
 	local differing = not propInfo.allSame
 	local disStr = if differing then " enabled:false" else ""
@@ -2028,7 +2192,7 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 		local typeFlag = if propInfo.ptype == #float then "#float" else "#integer"
 		local acrossStr = if differing then " across:2" else ""
 
-		rc.addControl #spinner ctrlName (pNameStr + ":") paramStr:(
+		rc.addControl #spinner ctrlName labelStr paramStr:(
 			"range:[" + rangeMin as string + "," + rangeMax as string + "," + initVal as string + "] " \
 			+ "type:" + typeFlag + " scale:" + step as string + " fieldWidth:75 align:#left" + disStr + acrossStr
 		)
@@ -2080,7 +2244,7 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 		local acrossStr = if differing then " across:2" else ""
 		-- иницилизация checkbox — декларационный ключ checked: (state: игнорируется,
 		-- из-за этого галочка не ставилась даже при true)
-		rc.addControl #checkbox ctrlName pNameStr paramStr:(
+		rc.addControl #checkbox ctrlName labelChk paramStr:(
 			"checked:" + initVal as string + " align:#left" + disStr + acrossStr
 		)
 		height += 22
@@ -2097,7 +2261,7 @@ fn ORM_addPropControls rc modIdx prefix propInfo &height =
 	(
 		local initVal = if propInfo.value != undefined then propInfo.value else (color 128 128 180)
 		local acrossStr = if differing then " across:2" else ""
-		rc.addControl #colorpicker ctrlName (pNameStr + ":") paramStr:(
+		rc.addControl #colorpicker ctrlName labelStr paramStr:(
 			"color:" + initVal as string + " fieldWidth:75 height:18 title:\"\"" + disStr + acrossStr
 		)
 		height += 22
@@ -2172,89 +2336,12 @@ fn ORM_isEditableGeomMod modDataIdx =
 		or matchpattern cs pattern:"*Edit*Poly*"
 )
 
--- Создаёт/пересоздаёт динамический rollout со свойствами выбранного элемента
-fn ORM_rebuildPropsRollout =
+-- Средняя ВЕЛИЧИНА числовых параметров свитка (см. глобал g_orm_avgMag): только
+-- ненулевые значения, точка3 считается по компонентам; всё нулевое → 1.0, чтобы шаг
+-- спиннеров не схлопывался в 0.01 на пустых (нулевых) контролах. Пересчитывается при
+-- каждом ОТКРЫТИИ свитка (значения выборки меняются), не только при построении.
+fn ORM_calcAvgMag props =
 (
-	-- guard по типу: g_orm_selInfo может оказаться НЕ массивом (OK), см. архитектура п. 2
-	if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do return false
-	ORM_gestureCommit()
-	g_orm_incrMap = #()
-
-	-- Только пересоздавать, если выбранная запись реально поменялась (см. архитектура п. 4)
-	local curKey = (g_orm_selInfo[1] as string) + "_" + (g_orm_selInfo[2] as string)
-	if curKey == g_orm_lastSelKey and g_orm_rlProps != undefined do
-		return true
-
-	-- Удаляем старый rollout из floaterа (именно removeRollout, destroyDialog его не убирает из floaterа)
-	if g_orm_rlProps != undefined and g_orm_floater != undefined do
-	(
-		try ( removeRollout g_orm_rlProps g_orm_floater ) \
-			catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
-		try ( destroyDialog g_orm_rlProps ) \
-			catch ( ORM_logExcept "destroyProps" (getCurrentException() as string) )
-		g_orm_rlProps = undefined
-	)
-
-	if g_orm_selInfo.count == 0 do return false
-	if g_orm_result == undefined do return false
-
-	g_orm_propLookup = #()
-
-	local isBaseObj = (g_orm_selInfo[1] == "base")
-	local modDataIdx = g_orm_selInfo[2]
-
-	local sectionTitle = ""
-	local props = #()
-	local modIdx = 0
-	local prefix = ""
-
-	if isBaseObj then
-	(
-		if g_orm_result.baseObjData == undefined do return false
-		local bd = g_orm_result.baseObjData
-		sectionTitle = if bd.isMixed then
-			"Base: MIXED" + (if bd.commonSuper != undefined then " (" + bd.commonSuper + ")" else "")
-		else
-			("Base: " + (bd.objClass as string))
-		props = bd.props
-		modIdx = 0
-		prefix = "v_"
-	)
-	else
-	(
-		if modDataIdx < 1 or modDataIdx > g_orm_result.modDataList.count do return false
-		local md = g_orm_result.modDataList[modDataIdx]
-		sectionTitle = md.displayName
-		if md.lowerCount > 0 do
-			sectionTitle += "  (" + md.lowerCount as string + " lower duplicates)"
-		props = md.props
-		modIdx = modDataIdx
-		prefix = "m" + modDataIdx as string + "_"
-	)
-
-	-- База и «редакторы геометрии» (Edit Mesh/Spline/Poly) без поддерживаемых свойств
-	-- показываем свиток-заглушку. Прочие моды без свойств — без свитка (ничего не показываем).
-	if props.count == 0 and not isBaseObj and not (ORM_isEditableGeomMod modDataIdx) do return false
-
-	-- Защита от ДУБЛЕЙ ИМЁН: getPropNames у некоторых объектов возвращает одно имя
-	-- несколько раз — иначе rolloutCreator падает «control already defined». Оставляем
-	-- первый случай каждого имени (сохраняя порядок), остальные дубли отбрасываем.
-	local seenNames = #()
-	local uniqProps = #()
-	for p in props do
-	(
-		local pn = p.name as string
-		if (findItem seenNames pn) == 0 do
-		(
-			append seenNames pn
-			append uniqProps p
-		)
-	)
-	props = uniqProps
-
-	-- Средняя величина числовых параметров свитка (см. глобал g_orm_avgMag):
-	-- только ненулевые значения, точка3 считается по компонентам; всё нулевое → 1.0,
-	-- чтобы шаг спиннеров не схлопывался в 0.01 на пустых (нулевых) контролах.
 	g_orm_avgMag = 1.0
 	local avgAcc = 0.0
 	local avgCnt = 0
@@ -2273,16 +2360,206 @@ fn ORM_rebuildPropsRollout =
 			( avgAcc += abs (vv as float); avgCnt += 1 )
 	)
 	if avgCnt > 0 do g_orm_avgMag = avgAcc / avgCnt
+	true
+)
 
-	local rc = rolloutCreator "g_orm_rlProps" sectionTitle
+-- Поиск PropInfo в массиве props по ИМЕНИ свойства (имя как строка; для строк макета
+-- встроенного свитка — его accessorKey, совпадающий с именем свойства Max).
+fn ORM_rlFindProp props key =
+(
+	for p in props do
+		if (p.name as string) == (key as string) do return p
+	undefined
+)
+
+-- Макет встроенного свитка для класса (строки g_orm_builtinDefs) или undefined,
+-- если для класса ручной свиток не задан (см. архитектура п. 4 / g_orm_builtinDefs).
+fn ORM_builtinLayoutFor clsKey =
+(
+	local b = g_orm_builtinDefs[clsKey]
+	if b == undefined do return undefined
+	b.rows
+)
+
+-- Применение выбора radiobuttons встроенного свитка: state (1-based) маппится на ЗНАЧЕНИЕ
+-- свойства (vals) и уходит в общий ORM_propChanged (тот же путь, что спиннер/checkbox).
+fn ORM_radioApply lookupKey vals st =
+(
+	if g_orm_uiSuppress do return false
+	if st < 1 or st > vals.count do return false
+	local v = vals[st]
+	if v == undefined do return false
+	ORM_propChanged lookupKey v
+	true
+)
+
+-- Разворачивает строки макета встроенного свитка: группы (контейнеры #(":group", "..",
+-- #(дети))) отдают своих детей — для синхронизации и проверки доступности важен только
+-- набор ЛИСТЬЕВЫХ строк (группа — чистый визуальный блок, своего контрола в ней нет).
+fn ORM_rlFlattenLayout rows =
+(
+	local out = #()
+	for row in rows do
+	(
+		if (row[1] as string)[1] == ":" and row.count > 2 then
+		(
+			local kids = ORM_rlFlattenLayout row[3]
+			for k in kids do append out k
+		)
+		else
+			append out row
+	)
+	out
+)
+
+-- Генерирует в rolloutCreator контролы ОДНОЙ строки встроенного свитка (g_orm_builtinDefs).
+-- Строк может быть: группа #(":group", "Заголовок", #(дети...)) — НАСТОЯЩИЙ group-блок
+-- rollout'а (рамка вокруг контролов; children вставляются внутрь между "(" и ")"), или
+-- radiobutton, или обычное свойство (#(":group", "Заголовок") без детей — старый
+-- label-разделитель).
+--   gi — счётчик заголовков групп (имя label-контрола должно быть уникальным)
+fn ORM_rlAddLayoutRow rc modIdx prefix row &height propList &gi =
+(
+	local key = row[1]
+	if (key as string)[1] == ":" and row.count > 2 do -- ГРУППА: group "Заголовок" (дети)
+	(
+		rc.addText ("group \"" + (row[2] as string) + "\" (") filter:false
+		height += 22
+		for child in row[3] do
+			ORM_rlAddLayoutRow rc modIdx prefix child &height propList &gi
+		rc.addText (")") filter:false
+		height += 20
+		return true
+	)
+	if (key as string)[1] == ":" do -- заголовок группы: label-разделитель
+	(
+		gi += 1
+		rc.addControl #label ("grp_" + (gi as string)) (row[2] as string) paramStr:"align:#left"
+		height += 18
+		return true
+	)
+	local p = ORM_rlFindProp propList key
+	if p == undefined do return false
+
+	if row[2] == #radio then
+	(
+		local ctrlName = prefix + (key as string)
+		local lookupKey = ctrlName
+		g_orm_propLookup[lookupKey] = ORM_PropEntry lookupKey:lookupKey modIdx:modIdx propName:(key as string) prefix:prefix
+		local labels = row[4]
+		local vals   = row[5]
+		local defIdx = if p.value != undefined then (findItem vals (p.value as integer)) else 0
+		if defIdx < 1 do defIdx = 1
+		local disStr = if not p.allSame then " enabled:false" else ""
+		local cols = 2
+		local rows = ((labels.count + cols - 1) / cols)
+		-- caption: поддерживается у radiobuttons; при сбое создания контрола (например,
+		-- нестандартный параметр в этой версии Max) — откатываемся к радиокнопкам без
+		-- подписи-колонтитула, чтобы не уронить построение всего свитка.
+		local ok = true
+		try
+		(
+			rc.addControl #radiobuttons ctrlName "" paramStr:(
+				"caption:\"" + (row[3] as string) + "\" " \
+				+ "labels:" + (labels as string) + " default:" + defIdx as string \
+				+ " columns:" + cols as string + " align:#left height:" + (rows * 22) as string + disStr
+			)
+			ok = true
+		)
+		catch ( ok = false )
+		if not ok do
+		(
+			try
+				rc.addControl #radiobuttons ctrlName "" paramStr:(
+					"labels:" + (labels as string) + " default:" + defIdx as string \
+					+ " columns:" + cols as string + " align:#left height:" + (rows * 22) as string + disStr
+				)
+			catch
+			(
+				ORM_logExcept "rlRadioCtrl" (getCurrentException() as string)
+				return false
+			)
+		)
+		height += rows * 22 + 6
+		local valsExpr = ""
+		for v in vals do valsExpr += v as string + ","
+		valsExpr = substring valsExpr 1 (valsExpr.count-1)
+		rc.addHandler ctrlName #changed paramStr:"st" \
+			codeStr:("if not g_orm_uiSuppress and ORM_radioApply \"" + lookupKey + "\" #(" + valsExpr + ") st do ()")
+		return true
+	)
+
+	-- Прочие типы — переиспользуем генератор обычных контролов (спиннер/checkbox/цвет/point3)
+	local info = ORM_PropInfo name:p.name value:p.value allSame:p.allSame ptype:row[2]
+	ORM_addPropControls rc modIdx prefix info &height labelOverride:(row[3] as string)
+	true
+)
+
+-- Поиск кэш-записи свитка свойств по классу: словарь, клас-ключ (см. архитектура п. 4)
+fn ORM_rlFindByClass clsKey =
+(
+	g_orm_rlCache[clsKey]
+)
+
+-- СТРОИТ СВИТОК СВОЙСТВ для класса (один раз на класс, затем кэшируется, см. архитектура п. 4).
+--   clsKey    — имя класса мода (Bend, Edit_Poly, ...) или "base"
+--   bakeTitle — заголовок, запекаемый при построении (стабильный: имя класса). Живой
+--               заголовок (Base: MIXED, "N lower duplicates") зависит от выборки и
+--               переустанавливается при каждом открытии (ORM_rlOpenForSel) — в кэше его нет.
+--   props     — #(ORM_PropInfo) этого класса (из выборки, где класс встретился первым)
+--   modIdx    — modIdx первой выборки; в lookupTemplate НЕ попадает — при открытии
+--               свитка g_orm_propLookup пересобирается АКТУАЛЬНЫМ modIdx.
+-- Возврат — кэш-запись ORM_RlEntry (структура, поля именами):
+--   rl             — значение rollout'а (переживает removeRollout, НЕ destroyDialog)
+--   prefix         — СТАБИЛЬНЫЙ префикс контролов "c<uid>_" (НЕ зависит от modDataIdx —
+--                    поэтому codeStr этого свитка работает для любого мода того же класса)
+--   lookupTemplate — #(ORM_PropTemplate) БЕЗ modIdx (см. архитектура п. 4)
+--   layout         — строки встроенного макета или undefined (см. g_orm_builtinDefs)
+fn ORM_rlBuild clsKey bakeTitle props modIdx =
+(
+	local uid = g_orm_rlUid + 1
+	g_orm_rlUid = uid
+	local rolloutName = "g_orm_rlProps_" + (uid as string)
+	local prefix = "c" + (uid as string) + "_"
+	-- Для класса может быть задан ВСТРОЕННЫЙ (ручной) макет свитка — строки
+	-- g_orm_builtinDefs (тестовый Extrude, см. глобал выше). Макет определяет ПОРЯДОК,
+	-- группы (блоки-рамки) и radiobuttons; значения всегда берутся из props анализа.
+	local layout = ORM_builtinLayoutFor clsKey
+
+	-- Защита от ДУБЛЕЙ ИМЁН: getPropNames у некоторых объектов возвращает одно имя
+	-- несколько раз — иначе rolloutCreator падает «control already defined». Оставляем
+	-- первый случай каждого имени (сохраняя порядок), остальные дубли отбрасываем.
+	local seenNames = #()
+	local uniqProps = #()
+	for p in props do
+	(
+		local pn = p.name as string
+		if (findItem seenNames pn) == 0 do
+		(
+			append seenNames pn
+			append uniqProps p
+		)
+	)
+	props = uniqProps
+
+	ORM_calcAvgMag props
+	g_orm_propLookup = Dictionary #string
+
+	local rc = rolloutCreator rolloutName bakeTitle
 	rc.begin()
 	-- Пересчёт автовысоты floater при разворачивании/сворачивании свитка.
 	-- ORM_updateFloaterHeight и g_orm_maxFloaterH глобальны, поэтому видны
 	-- из сгенерированного (safeExecute) rollout'а. (см. архитектура п.7)
-	rc.addText "on g_orm_rlProps rolledUp state do ORM_updateFloaterHeight()" filter:false
+	rc.addText ("on " + rolloutName + " rolledUp state do ORM_updateFloaterHeight()") filter:false
 
 	local h = 10
-	if props.count == 0 then
+	if layout != undefined then
+	(
+		local gi = 0
+		for row in layout do
+			ORM_rlAddLayoutRow rc modIdx prefix row &h props &gi
+	)
+	else if props.count == 0 then
 	(
 		-- Объекты/редакторы геометрии распознаны, но у них нет «простых»
 		-- параметров (float/integer/boolean/color/point3) — править нечего.
@@ -2298,42 +2575,411 @@ fn ORM_rebuildPropsRollout =
 	h += 10
 	if h < 40 do h = 40
 
-	g_orm_rlProps = rc.end()
+	local rl = rc.end()
 
-	-- Переставляем свиток так, чтобы About оставался ПОСЛЕДНИМ (см. архитектура п. 4)
-	local hasAbout = (findItem g_orm_floater.rollouts g_orm_rollAbout) != 0
-	if hasAbout do removeRollout g_orm_rollAbout g_orm_floater
+	-- lookupTemplate: без modIdx (подставляется живой modIdx при открытии, см. архитектура п. 4)
+	local lookupTemplate = for k in g_orm_propLookup.keys collect
+		ORM_PropTemplate lookupKey:(g_orm_propLookup[k].lookupKey) \
+			propName:(g_orm_propLookup[k].propName) prefix:(g_orm_propLookup[k].prefix)
 
-	addRollout g_orm_rlProps g_orm_floater
+	ORM_RlEntry clsKey:clsKey rl:rl prefix:prefix lookupTemplate:lookupTemplate uid:uid layout:layout
+)
 
-	if hasAbout do addRollout g_orm_rollAbout g_orm_floater
+-- Возвращает кэш-запись для класса, построив её при отсутствии, и КЛАДЁТ свиток во
+-- floater так, чтобы About оставался ПОСЛЕДНИМ (см. архитектура п. 4). Повторный
+-- вызов для уже добавленного свитка ничего не переносит — переключение модов идёт
+-- open/close (без removeRollout/addRollout, без моргания списка модов).
+fn ORM_rlAddIfMissing clsKey bakeTitle props modIdx =
+(
+	local entry = ORM_rlFindByClass clsKey
+	if entry == undefined do
+	(
+		entry = ORM_rlBuild clsKey bakeTitle props modIdx
+		if entry == undefined do return undefined
+		g_orm_rlCache[clsKey] = entry
+	)
+	local rl = entry.rl
+	-- Во floater кладём ОДИН раз: findItem учитывает уже добавленные свитки
+	if g_orm_floater != undefined and (findItem g_orm_floater.rollouts rl) == 0 do
+	(
+		local hasAbout = (findItem g_orm_floater.rollouts g_orm_rollAbout) != 0
+		if hasAbout do removeRollout g_orm_rollAbout g_orm_floater
+		addRollout rl g_orm_floater
+		if hasAbout do addRollout g_orm_rollAbout g_orm_floater
+	)
+	entry
+)
+
+-- Пересинхронизация контролов кэшированного свитка под текущую выборку (см. архитектура п. 4):
+-- пересборка g_orm_propLookup с ЖИВЫМ modIdx (codeStr ходит в lookup по стабильному
+-- ключу), значения из props, enabled=allSame (различие показывает Unify), диапазоны
+-- спиннеров под величину значения. Программные установки — под g_orm_uiSuppress,
+-- чтобы не стрельнули changed (см. архитектура п. 3).
+fn ORM_rlSyncValues entry props modIdx =
+(
+	local rl       = entry.rl
+	local prefix   = entry.prefix
+	local template = entry.lookupTemplate
+	local layout   = entry.layout
+	g_orm_propLookup = Dictionary #string
+	for t in template do
+		g_orm_propLookup[t.lookupKey] = ORM_PropEntry lookupKey:t.lookupKey modIdx:modIdx \
+			propName:t.propName prefix:t.prefix
+	ORM_calcAvgMag props
+
+	-- Синхронизируем «строки» свитка: для встроенного макета — его строки (группы,
+	-- radiobuttons и т.п.), иначе — свойства анализа (обычный автоанализ).
+	local rows = if layout != undefined then ORM_rlFlattenLayout layout else for p in props collect #(p.name, p.ptype)
+	g_orm_uiSuppress = true
+	for row in rows do
+	(
+		local key = row[1]
+		if (key as string)[1] == ":" do continue -- заголовок группы: значений нет
+		local kind = row[2]
+		local p = ORM_rlFindProp props key
+		local ctrlName = prefix + (key as string)
+		if kind == #radio then
+		(
+			local c = ORM_ctrlByName rl ctrlName
+			if c == undefined do continue
+			local differing = (p != undefined and not p.allSame)
+			c.enabled = not differing
+			if p != undefined and p.value != undefined do
+			(
+				local vals = row[5]
+				local idx = findItem vals (p.value as integer)
+				if idx < 1 do idx = 1
+				try ( c.state = idx ) \
+					catch ( ORM_logExcept "rlSyncRadio" (getCurrentException() as string) )
+			)
+			continue
+		)
+		-- Строка макета, у которой нет свойства в текущем анализе — контрол не трогаем.
+		if p == undefined do continue
+		local differing = not p.allSame
+		-- point3 НЕ имеет главного контрола: компоненты называются "<имя>_x/y/z"
+		-- (см. ORM_addPropControls) — синхронизируем их отдельно.
+		if p.ptype == #point3 then
+		(
+			local mk = ORM_ctrlByName rl (ctrlName + "_mk")
+			if mk != undefined do mk.visible = differing
+			if p.value != undefined do
+			(
+				local v = p.value
+				for ci in #("x", "y", "z") do
+				(
+					local cc = ORM_ctrlByName rl (ctrlName + "_" + ci)
+					if cc != undefined do
+					(
+						cc.enabled = not differing
+						local nv = case ci of ( "x": v.x; "y": v.y; "z": v.z )
+						if cc.value != nv do
+							try ( cc.value = nv ) \
+								catch ( ORM_logExcept "rlSyncP3" (getCurrentException() as string) )
+					)
+				)
+			)
+			continue
+		)
+		local c = ORM_ctrlByName rl ctrlName
+		if c == undefined do continue
+		c.enabled = not differing
+		local mk = ORM_ctrlByName rl (ctrlName + "_mk")
+		if mk != undefined do mk.visible = differing
+		local ptype = if layout != undefined then kind else p.ptype
+		case ptype of
+		(
+			#boolean:
+			(
+				if p.value != undefined do
+					try ( c.checked = p.value ) \
+						catch ( ORM_logExcept "rlSyncChk" (getCurrentException() as string) )
+			)
+			#integer:
+			(
+				if p.value != undefined do
+				(
+					local v = p.value as integer
+					try ( if c.value != v do c.value = v ) \
+						catch ( ORM_logExcept "rlSyncInt" (getCurrentException() as string) )
+				)
+			)
+			#float:
+			(
+				if p.value != undefined do
+				(
+					local v = p.value as float
+					try ( if c.value != v do c.value = v ) \
+						catch ( ORM_logExcept "rlSyncFlt" (getCurrentException() as string) )
+				)
+			)
+			#color:
+			(
+				if p.value != undefined do
+					try ( c.color = p.value ) \
+						catch ( ORM_logExcept "rlSyncCol" (getCurrentException() as string) )
+			)
+		)
+	)
+	g_orm_uiSuppress = false
+	true
+)
+
+-- Открывает свиток свойств выбранного элемента: сворачивает прежний развёрнутый,
+-- разворачивает нужный и пересинхронизирует значения под текущую выборку.
+fn ORM_rlOpenForSel entry sectionTitle props modIdx =
+(
+	local rl = entry.rl
+	ORM_rlSyncValues entry props modIdx
+
+	if g_orm_rlOpen != undefined and g_orm_rlOpen != rl do
+		g_orm_rlOpen.open = false
+	rl.open = true
+	g_orm_rlOpen = rl
+	g_orm_rlProps = rl
+
+	-- Живой заголовок зависит от выборки (Base: <Класс> / Base: MIXED (...), у модов —
+	-- счётчик lower duplicates); в кэше заголовок «заморожен» на первое построение
+	-- класса — перезаписываем при каждом открытии.
+	try ( rl.title = sectionTitle ) catch ( ORM_logExcept "rlTitle" (getCurrentException() as string) )
 
 	-- Сворачиваем About при выборе элемента (см. архитектура п. 2)
 	if g_orm_rollAbout != undefined do g_orm_rollAbout.open = false
 
-	-- Автовысота под новый набор свитков
+	-- Автовысота под новый набор открытых свитков
 	ORM_updateFloaterHeight()
+	true
+)
 
-	-- Запоминаем, для какого выбора построен rollout, чтобы не дублировать (см. архитектура п. 4)
-	g_orm_lastSelKey = (g_orm_selInfo[1] as string) + "_" + (g_orm_selInfo[2] as string)
+-- Убирает ВСЕ свитки свойств из floater'а (смена выборки объектов). Кэш ПРИ ЭТОМ
+-- СОХРАНЯЕТСЯ — определения переиспользуются при следующем выборе (см. архитектура п. 4).
+fn ORM_rlRemoveAll =
+(
+	if g_orm_floater != undefined then
+		for k in g_orm_rlCache.keys do
+		(
+			local rl = g_orm_rlCache[k].rl
+			try ( removeRollout rl g_orm_floater ) \
+				catch ( ORM_logExcept "removeRollout" (getCurrentException() as string) )
+			rl.open = false
+		)
+	g_orm_rlOpen = undefined
+	g_orm_rlProps = undefined
+	g_orm_propLookup = Dictionary #string
+	true
+)
+
+-- Доступен ли кэш-свиток класса для текущего набора свойств: у каждого свойства
+-- должен быть его КОНТРОЛ, а у РАЗЛИЧАЮЩЕГОСЯ — ещё и кнопка «Сделать общим» (_mk).
+-- Заметка: _mk создаётся только когда на момент построения свойство различалось
+-- (см. ORM_addPropControls). Если позже то же свойство различается в новой выборке,
+-- а _mk в свитке нет — Unify недоступен, свиток нужно пересобрать (ORM_rlDrop).
+fn ORM_rlUsable entry props =
+(
+	local rl = entry.rl
+	local prefix = entry.prefix
+	local layout = entry.layout
+	if layout != undefined then
+	(
+		-- Встроенный свиток: проверяем ТОЛЬКО строки макета, у которых есть свойство в
+		-- анализе (строки без свойства не созданы). radiobuttons Unify НЕ имеют (см.
+		-- ORM_rlAddLayoutRow) — для них проверяем только наличие контрола.
+		-- Группы разворачиваем (ORM_rlFlattenLayout) — важен набор листьевых строк.
+		for row in (ORM_rlFlattenLayout layout) do
+		(
+			local key = row[1]
+			if (key as string)[1] == ":" do continue
+			local p = ORM_rlFindProp props key
+			if p == undefined do continue
+			local ctrlName = prefix + (key as string)
+			if row[2] == #radio then
+			(
+				if ORM_ctrlByName rl ctrlName == undefined do return false
+				continue
+			)
+			local hasCtrl = if row[2] == #point3 then
+				(ORM_ctrlByName rl (ctrlName + "_x") != undefined)
+			else
+				(ORM_ctrlByName rl ctrlName != undefined)
+			if not hasCtrl do return false
+			if not p.allSame and ORM_ctrlByName rl (ctrlName + "_mk") == undefined do return false
+		)
+		true
+	)
+	else
+	(
+		for p in props do
+		(
+			local ctrlName = prefix + (p.name as string)
+			local hasCtrl = if p.ptype == #point3 then
+				(ORM_ctrlByName rl (ctrlName + "_x") != undefined)
+			else
+				(ORM_ctrlByName rl ctrlName != undefined)
+			if not hasCtrl do return false
+			if not p.allSame and ORM_ctrlByName rl (ctrlName + "_mk") == undefined do return false
+		)
+		true
+	)
+)
+
+-- Разрушает кэш-запись класса ПОЛНОСТЬЮ (removeRollout + destroyDialog + удаление из
+-- кэша). Используется только когда кэш-свиток не покрывает текущее состояние класса
+-- (см. ORM_rlUsable) — после этого ORM_rlAddIfMissing построит свиток заново.
+fn ORM_rlDrop clsKey =
+(
+	local entry = ORM_rlFindByClass clsKey
+	if entry == undefined do return false
+	local rl = entry.rl
+	if g_orm_floater != undefined do
+		try ( removeRollout rl g_orm_floater ) \
+			catch ( ORM_logExcept "rlDropRm" (getCurrentException() as string) )
+	try ( destroyDialog rl ) \
+		catch ( ORM_logExcept "rlDropDst" (getCurrentException() as string) )
+	try ( g_orm_rlCache.remove clsKey ) \
+		catch ( ORM_logExcept "rlDropRmKey" (getCurrentException() as string) )
+	if g_orm_rlOpen == rl do
+	(
+		g_orm_rlOpen = undefined
+		g_orm_rlProps = undefined
+	)
+	true
+)
+
+-- Открывает свиток свойств выбранного элемента (кэш по классу, см. архитектура п. 4):
+-- свиток строится один раз на класс и при переключении модов разворачивается/
+-- сворачивается без removeRollout/addRollout/destroyDialog — список модов не
+-- перелэйаутается и не моргает.
+fn ORM_rebuildPropsRollout =
+(
+	-- guard по типу: g_orm_selInfo может оказаться НЕ массивом (OK), см. архитектура п. 2
+	if classOf g_orm_selInfo != Array or g_orm_selInfo.count == 0 do return false
+	ORM_gestureCommit()
+	g_orm_incrMap = #()
+
+	-- Только переоткрывать, если выбранная запись реально поменялась (см. архитектура п. 4)
+	local curKey = (g_orm_selInfo[1] as string) + "_" + (g_orm_selInfo[2] as string)
+	if curKey == g_orm_lastSelKey and g_orm_rlProps != undefined do
+		return true
+
+	if g_orm_result == undefined do return false
+
+	local isBaseObj = (g_orm_selInfo[1] == "base")
+	local modDataIdx = g_orm_selInfo[2]
+
+	local clsKey = ""
+	local bakeTitle = ""
+	local sectionTitle = ""
+	local props = #()
+	local modIdx = 0
+
+	if isBaseObj then
+	(
+		if g_orm_result.baseObjData == undefined do return false
+		local bd = g_orm_result.baseObjData
+		-- Ключ базы УНИКАЛЕН по классу: у разных баз (Box, Sphere, ...) РАЗНЫЙ набор
+		-- свойств, "base" сам по себе смешал бы их. Для MIXED — по общему суперклассу.
+		clsKey = if bd.isMixed then
+			"base:mixed:" + (if bd.commonSuper != undefined then bd.commonSuper else "*")
+		else
+			("base:" + (bd.objClass as string))
+		bakeTitle = "Base"
+		sectionTitle = if bd.isMixed then
+			"Base: MIXED" + (if bd.commonSuper != undefined then " (" + bd.commonSuper + ")" else "")
+		else
+			("Base: " + (bd.objClass as string))
+		props = bd.props
+		modIdx = 0
+	)
+	else
+	(
+		if modDataIdx < 1 or modDataIdx > g_orm_result.modDataList.count do return false
+		local md = g_orm_result.modDataList[modDataIdx]
+		clsKey = md.modClass as string
+		bakeTitle = md.displayName
+		sectionTitle = md.displayName
+		if md.lowerCount > 0 do
+			sectionTitle += "  (" + md.lowerCount as string + " lower duplicates)"
+		props = md.props
+		modIdx = modDataIdx
+	)
+
+	-- База и «редакторы геометрии» (Edit Mesh/Spline/Poly) без поддерживаемых свойств
+	-- показывают свиток-заглушку. Прочие моды без свойств — свиток НЕ показываем:
+	-- сворачиваем прежний (он остаётся в кэше, см. архитектура п. 4), чтобы в floater
+	-- не висели свойства НЕвыбранного мода.
+	if props.count == 0 and not isBaseObj and not (ORM_isEditableGeomMod modDataIdx) do
+	(
+		if g_orm_rlOpen != undefined do g_orm_rlOpen.open = false
+		g_orm_rlOpen = undefined
+		g_orm_rlProps = undefined
+		g_orm_propLookup = Dictionary #string
+		g_orm_lastSelKey = curKey
+		ORM_updateFloaterHeight()
+		return false
+	)
+
+	local entry = ORM_rlAddIfMissing clsKey bakeTitle props modIdx
+	if entry == undefined do return false
+
+	-- Кэш-свиток построен с ДРУГОЙ картой различий (свойство различается, а _mk в
+	-- свитке нет — см. ORM_rlUsable): пересобираем класс на месте. Это редкий случай
+	-- (первая выборка класса была полностью «одинаковой»), обычное переключение модов
+	-- остаётся open/close без пересборки (см. архитектура п. 4).
+	if not (ORM_rlUsable entry props) do
+	(
+		ORM_rlDrop clsKey
+		entry = ORM_rlAddIfMissing clsKey bakeTitle props modIdx
+		if entry == undefined do return false
+	)
+
+	ORM_rlOpenForSel entry sectionTitle props modIdx
+
+	-- Запоминаем, для какого выбора открыт свиток, чтобы не дублировать (см. архитектура п. 4)
+	g_orm_lastSelKey = curKey
 
 	true
 )
 
 
 -- ======================================================================
--- DOTNET LIST (owner-draw ListBox): иконки-глаза из BMP + курсив для инстансов
--- Паттерн взят из BatchViewsManager (initListBox/DrawItem/DoubleBuffered).
+-- DOTNET LIST (DataGridView): BMP-глаз (кликабельный) + имя
 -- ======================================================================
 
 global g_orm_iconFrames = #()   -- кадры ModProps_16i.bmp (1..locIconCount), резаные по g_orm_iconSize px
-global g_orm_listIcons   = #()   -- параллельно g_orm_listItems: индекс иконки для строки (9/10/11; base = 0)
+global g_orm_eyeFrames  = #()   -- #(open, closed, mixed) — shared Bitmap для ImageColumn (кадры 9/10/11)
+global g_orm_eyeBlank   = undefined  -- прозрачная заглушка глаза (base строка, нет иконок)
+global g_orm_listIcons   = #()   -- параллельно g_orm_listItems: состояние глаза (9 вкл / 10 выкл / 11 mixed; base = 0)
 global g_orm_listFlags   = #()   -- параллельно g_orm_listItems: true = инстанс (курсив)
 global g_orm_debug       = false -- включить для логирования всех catch в Listener
 -- ПРИМЕЧАНИЕ: шрифты (plain/italic) хранит сам rollout rollout_mods как локальные переменные
--- и рисует ими в DrawItem (closure, как в рабочем примере). Глобалов не нужно.
+-- (fontND на DefaultCellStyle, fontItalicND — на ячейки-инстансы в ORM_listSetItems).
 
--- Двойная буферизация owner-draw ListBox (свойство защищённое, доступ через рефлексию)
+-- Программный выбор строки сетки (0-based). SelectionChanged вызовется автоматически
+-- и отработает ORM_onListSelect. idx0 вне диапазона — сбрасываем выделение.
+fn ORM_selectRow idx0 =
+(
+	if g_orm_rollMods == undefined do return false
+	local gd = g_orm_rollMods.lst_mods
+	try
+	(
+		gd.ClearSelection()
+		if idx0 >= 0 and idx0 < gd.Rows.Count do
+		(
+			-- Сначала CurrentCell, ПОТОМ Selected: если в момент программного выделения
+			-- сработает SelectionChanged, CurrentRow уже будет валидным (иначе при
+			-- пустом CurrentCell grid.CurrentRow — null и handler проглатывает выбор).
+			gd.CurrentCell = gd.Rows.Item[idx0].Cells.Item[1]
+			gd.Rows.Item[idx0].Selected = true
+		)
+	)
+	catch
+	(
+		if g_orm_debug do format "ModPropsLister: selectRow % failed: %\n" idx0 (getCurrentException() as string)
+	)
+	true
+)
+
+-- Двойная буферизация DataGridView (свойство защищённое, доступ через рефлексию)
 fn ORM_enableDoubleBuffered ctrl =
 (
 	try
@@ -2416,128 +3062,176 @@ fn ORM_loadIconFrames path =
 	frames
 )
 
--- Инициализация dotNet-списка (owner-draw, тёмная тема, загрузка иконок)
+-- Инициализация dotNet-сетки (DataGridView): 2 колонки (иконка глаза / имя),
+-- тёмная тема, курсив для инстансов. BMP-фреймы загружаются из ModProps_16i.bmp.
 fn ORM_initModList =
 (
 	if g_orm_rollMods == undefined do return false
-	local lb = g_orm_rollMods.lst_mods
+	local gd = g_orm_rollMods.lst_mods
 	try
 	(
-		lb.BeginUpdate()
-		lb.Items.Clear()
-		lb.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").One
-		lb.DrawMode = (dotNetClass "System.Windows.Forms.DrawMode").OwnerDrawFixed
-		lb.IntegralHeight = false
 		-- Размер иконок/высоты строк — просто глобал в коде (по умолчанию маленькие 16px)
 		if g_orm_iconSize == undefined do g_orm_iconSize = 16
-		lb.ItemHeight = g_orm_iconSize + 6
-		lb.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
-		lb.ForeColor = (dotNetClass "System.Drawing.Color").White
-		-- Шрифт задаётся в on rollout_mods open (lst_mods.Font = fontND): эта привязка
-		-- к контролу оставляет и plain, и italic шрифт живыми для GDI+ (см. DrawItem).
-		lb.EndUpdate()
+		local C  = dotNetClass "System.Drawing.Color"
+		local DGVSel = dotNetClass "System.Windows.Forms.DataGridViewSelectionMode"
+		local BST = dotNetClass "System.Windows.Forms.BorderStyle"
+		local CB  = dotNetClass "System.Windows.Forms.DataGridViewCellBorderStyle"
+		local SM  = dotNetClass "System.Windows.Forms.DataGridViewColumnSortMode"
+
+		gd.AllowUserToAddRows = false
+		gd.AllowUserToDeleteRows = false
+		gd.AllowUserToResizeRows = false
+		gd.AllowUserToResizeColumns = false
+		gd.ReadOnly = true
+		gd.MultiSelect = true
+		gd.SelectionMode = DGVSel.FullRowSelect
+		gd.ColumnHeadersVisible = false
+		gd.RowHeadersVisible = false
+		gd.BorderStyle = BST.None
+		gd.BackgroundColor = C.FromARGB 68 68 68
+		gd.GridColor = C.FromARGB 68 68 68
+		gd.RowTemplate.Height = g_orm_iconSize + 6
+		try ( gd.CellBorderStyle = CB.None ) catch ( ORM_logExcept "gridBorder" (getCurrentException() as string) )
+		try ( gd.EnableHeadersVisualStyles = false ) catch ( ORM_logExcept "gridHeaders" (getCurrentException() as string) )
+		-- Шрифт задаётся в on rollout_mods open (lst_mods.DefaultCellStyle.Font = fontND):
+		-- эта привязка оставляет plain/italic шрифты живыми для GDI+ (см. ORM_listSetItems).
+		gd.DefaultCellStyle.BackColor = C.FromARGB 68 68 68
+		gd.DefaultCellStyle.ForeColor = C.White
+		gd.DefaultCellStyle.SelectionBackColor = (dotNetClass "System.Drawing.SystemColors").Highlight
+		gd.DefaultCellStyle.SelectionForeColor = (dotNetClass "System.Drawing.SystemColors").HighlightText
+
+		-- Колонки: 0 — иконка глаза (ImageColumn, кадры 9/10/11 из BMP),
+		-- 1 — имя мода (курсив для инстансов), всех свободная ширина.
+		gd.Columns.Clear()
+		local colIcon = dotNetObject "System.Windows.Forms.DataGridViewColumn"
+		colIcon.Name = "Eye"
+		colIcon.Width = g_orm_iconSize + 4
+		colIcon.ReadOnly = true
+		try ( colIcon.SortMode = SM.NotSortable ) catch ( ORM_logExcept "eyeSort" (getCurrentException() as string) )
+		local icoCell = dotNetObject "System.Windows.Forms.DataGridViewImageCell"
+		-- ImageLayout = Zoom (3): масштабирует иконку на ячейку с сохранением пропорций.
+		-- Enum DataGridViewImageCellLayout: NotSet=0, Normal=1, Stretch=2, Zoom=3.
+		try ( icoCell.ImageLayout = (dotNetClass "System.Windows.Forms.DataGridViewImageCellLayout").Zoom ) \
+			catch ( try ( icoCell.ImageLayout = 3 ) catch ( ORM_logExcept "eyeLayout" (getCurrentException() as string) ) )
+		colIcon.CellTemplate = icoCell
+		local colName = dotNetObject "System.Windows.Forms.DataGridViewTextBoxColumn"
+		colName.Name = "Name"
+		colName.ReadOnly = true
+		colName.AutoSizeMode = (dotNetClass "System.Windows.Forms.DataGridViewAutoSizeColumnMode").Fill
+		gd.Columns.Add colIcon
+		gd.Columns.Add colName
 	)
 	catch
 	(
 		if g_orm_debug do format "ModPropsLister: initModList setup failed: %\n" (getCurrentException() as string)
 	)
-	ORM_enableDoubleBuffered lb
+	ORM_enableDoubleBuffered gd
+	-- Загружаем кадры BMP и извлекаем 3 состояния глаза для ImageColumn
 	g_orm_iconFrames = ORM_loadIconFrames icon_path
-	lb.Invalidate()
+	if g_orm_iconFrames.count >= 11 then
+		g_orm_eyeFrames = #( g_orm_iconFrames[9], g_orm_iconFrames[10], g_orm_iconFrames[11] )
+	else
+	(
+		g_orm_eyeFrames = #()
+		if g_orm_debug do format "ModPropsLister: initModList: iconFrames only % (need 11), eye icons disabled\n" g_orm_iconFrames.count
+	)
+	-- Прозрачная заглушка глаза: 1x1 с нулевой альфой — в ячейку baseobject ничего не рисует,
+	-- при этом не превращает ячейку в «битую картинку» (DataGridViewImageCell с null value рисует
+	-- крестик ошибки, поэтому используем явный transparent Bitmap).
+	try
+	(
+		g_orm_eyeBlank = dotNetObject "System.Drawing.Bitmap" 1 1 (dotNetClass "System.Drawing.Imaging.PixelFormat").Format32bppArgb
+		g_orm_eyeBlank.SetPixel 0 0 ((dotNetClass "System.Drawing.Color").FromARGB 0 0 0 0)
+	)
+	catch
+	(
+		g_orm_eyeBlank = undefined
+		if g_orm_debug do format "ModPropsLister: initModList: eyeBlank create failed: %\n" (getCurrentException() as string)
+	)
+	gd.Invalidate()
 	true
 )
 
--- Полная замена содержимого списка (сборка строк — ORM_buildListItems)
+-- Bitmap глаза для строки по состоянию eyeIdx (9/10/11); base и «нет иконок» — прозрачная заглушка.
+-- Единая точка: используется в ORM_listSetItems (полная пересборка) и ORM_refreshEyeRow (точечная).
+fn ORM_eyeBitmapFor eyeIdx =
+(
+	if g_orm_eyeFrames.count >= 3 then
+		case eyeIdx of
+		(
+			9:  return g_orm_eyeFrames[1]
+			10: return g_orm_eyeFrames[2]
+			11: return g_orm_eyeFrames[3]
+		)
+	if g_orm_eyeBlank != undefined then g_orm_eyeBlank
+	else undefined
+)
+
+-- Точечное обновление глаза ОДНОЙ строки (без пересборки всего списка — нет моргания).
+-- idx0 — 0-based индекс строки; элемент должен быть #("mod", mi).
+-- После ORM_toggleModifier меняется только картинка глаза, текст/курсив не трогаем.
+fn ORM_refreshEyeRow idx0 info =
+(
+	if g_orm_rollMods == undefined or g_orm_eyeFrames.count < 3 do return false
+	local gd = g_orm_rollMods.lst_mods
+	if idx0 < 0 or idx0 >= gd.Rows.Count do return false
+	if classOf info != Array or info.count < 2 or info[1] != "mod" do return false
+	local modIdx = info[2]
+	if modIdx < 1 or modIdx > g_orm_result.modDataList.count do return false
+	local eyeIdx = ORM_eyeIdxForStates (ORM_getEnabledStates modIdx)
+	g_orm_listIcons[idx0 + 1] = eyeIdx
+	gd.Rows.Item[idx0].Cells.Item[0].Value = ORM_eyeBitmapFor eyeIdx
+	true
+)
+
+-- Полная замена содержимого списка (сборка строк — ORM_buildListItems).
+-- В ячейки колонки 0 кладутся BMP-иконки из g_orm_eyeFrames (open/closed/mixed),
+-- в колонку 1 — текст модификатора с курсивом для инстансов.
 fn ORM_listSetItems listItems =
 (
 	if g_orm_rollMods == undefined do return false
-	local lb = g_orm_rollMods.lst_mods
-	lb.BeginUpdate()
-	lb.Items.Clear()
-	for s in listItems do lb.Items.Add s
-	lb.SelectedIndex = -1
-	lb.EndUpdate()
-	lb.Invalidate()
+	local gd = g_orm_rollMods.lst_mods
+	gd.SuspendLayout()
+	gd.Rows.Clear()
+	-- BMP-иконки глаза: open (9), closed (10), mixed (11) — через shared-функцию;
+	-- baseobject (eyeIdx 0/иной) и отсутствие иконок → прозрачная заглушка (пустой фон).
+	local hasEyes = (g_orm_eyeFrames.count >= 3)
+	for i = 1 to listItems.count do
+	(
+		local r = gd.Rows.Add()
+		local eyeIdx = if i <= g_orm_listIcons.count then g_orm_listIcons[i] else 0
+		local iconCell = gd.Rows.Item[r].Cells.Item[0]
+		iconCell.Value = if hasEyes then ORM_eyeBitmapFor eyeIdx else undefined
+		gd.Rows.Item[r].Cells.Item[1].Value = listItems[i]
+		-- Курсив для инстансов
+		if i <= g_orm_listFlags.count and g_orm_listFlags[i] do
+			gd.Rows.Item[r].Cells.Item[1].Style.Font = g_orm_rollMods.fontItalicND
+	)
+	-- Снимаем выделение, чтобы SelectionChanged не сработал на перезаполнении
+	gd.ClearSelection()
+	gd.CurrentCell = undefined
+	gd.ResumeLayout()
+	gd.Invalidate()
 	true
 )
 
--- Реакция на смену выделения dotNet-списка (0-based SelectedIndex):
+-- Реакция на смену выделения dotNet-сетки (0-based CurrentRow.Index):
 -- idx>=1 → как старый on lst_mods selected; иначе — сброс (кнопки неактивны)
 fn ORM_listSelectChanged =
 (
 	if g_orm_rollMods == undefined do return false
-	local idx = g_orm_rollMods.lst_mods.SelectedIndex + 1
+	local gd = g_orm_rollMods.lst_mods
+	local idx = -1
+	try ( idx = gd.CurrentRow.Index + 1 ) \
+		catch ( ORM_logExcept "currentRow" (getCurrentException() as string) )
 	if idx >= 1 then
 		ORM_onListSelect idx
 	else
 	(
-		ORM_setToggleUI false
-		g_orm_rollMods.btn_toggle.enabled = false
 		g_orm_rollMods.btn_delete.enabled = false
 		g_orm_rollMods.btn_inst.enabled = false
 		true
 	)
-)
-
--- Owner-draw строки: иконка глаза (кадр 9/10/11), текст (курсив = инстанс).
--- fPlain/fItalic — rollout-локальные шрифты (как в рабочей Italic-версии).
-fn ORM_drawListItem args fPlain fItalic =
-(
-	local idx = args.Index
-	if idx < 0 do return false
-	local lb = g_orm_rollMods.lst_mods
-	local rect = args.Bounds
-	local g = args.Graphics
-	local isSelected = lb.GetSelected idx
-
-	local backBrush = try
-		dotNetObject "System.Drawing.SolidBrush" (
-			if isSelected then (dotNetClass "System.Drawing.SystemColors").Highlight else lb.BackColor
-		)
-		catch ( undefined )
-	if backBrush != undefined do
-	(
-		try ( g.FillRectangle backBrush rect ) \
-			catch ( ORM_logExcept "fillRect" (getCurrentException() as string) )
-		backBrush.Dispose()
-	)
-
-	local x = rect.X + 2
-	local iconIdx = if idx + 1 <= g_orm_listIcons.count then g_orm_listIcons[idx + 1] else 0
-	if classOf iconIdx == Integer and iconIdx >= 1 and iconIdx <= g_orm_iconFrames.count then
-	(
-		local s = g_orm_iconSize
-		if s < 1 do s = 16
-		local dst = dotNetObject "System.Drawing.Rectangle" x (rect.Y + ((rect.Height - s) / 2)) s s
-		try ( g.DrawImage g_orm_iconFrames[iconIdx] dst )
-		catch
-		(
-			if g_orm_debug do
-				format "ModPropsLister: DrawImage idx=% iconIdx=% error=%\n" idx iconIdx (getCurrentException() as string)
-		)
-		x += s + 5
-	)
-	else
-		if iconIdx >= 1 and g_orm_debug do
-			format "ModPropsLister: icon frame missing iconIdx=% frames=%\n" iconIdx g_orm_iconFrames.count
-
-	local isInst = (idx + 1 <= g_orm_listFlags.count) and g_orm_listFlags[idx + 1]
-	local textColor = if isSelected then (dotNetClass "System.Drawing.SystemColors").HighlightText else lb.ForeColor
-	local textBrush = dotNetObject "System.Drawing.SolidBrush" textColor
-	local txt = lb.Items.Item[idx] as string
-	local pt = dotNetObject "System.Drawing.PointF" (x as float) (rect.Y as float)
-	-- Текст: обычные строки — fPlain (== lst_mods.Font), инстансы — fItalic
-	-- (шрифты закреплены за контролом, поэтому живые, без shear).
-	local f = fPlain
-	if f == undefined do
-		try ( f = args.Font ) catch ( ORM_logExcept "argsFont" (getCurrentException() as string) )
-	local fIt = fItalic
-	if fIt == undefined do fIt = f
-	if isInst do f = fIt
-	try ( g.DrawString txt f textBrush pt )
-	catch ( format "ModPropsLister: draw failed: %\n" (getCurrentException() as string) )
-	textBrush.Dispose()
-	true
 )
 
 
@@ -2546,10 +3240,11 @@ fn ORM_drawListItem args fPlain fItalic =
 -- ======================================================================
 rollout rollout_mods "Modifiers"
 (
-	dotNetControl lst_mods "System.Windows.Forms.ListBox" height:130 width:180 align:#left offset:[-4,0]
+	dotNetControl lst_mods "System.Windows.Forms.DataGridView" height:130 width:180 align:#left offset:[-4,0]
 
-	-- Шрифты (plain/italic): как в рабочей Italic-версии — rollout-локальные, создаются
-	-- в on open и ЗАКРЕПЛЯЮТСЯ за контролом (lst_mods.Font), поэтому живые для GDI+.
+	-- Шрифты (plain/italic): rollout-локальные, создаются в on open. Плоский шрифт
+	-- закрепляется за контролом (DefaultCellStyle.Font) и жив для GDI+; курсив
+	-- применяется к ячейкам строк-инстансов (см. ORM_listSetItems).
 	local fontND
 	local fontItalicND
 
@@ -2557,8 +3252,6 @@ rollout rollout_mods "Modifiers"
 	-- глобал-функции читают число кадров из загруженной bitmap (см. ORM_loadIconFrames).
 	local locIconCount = 13
 
-	checkbutton btn_toggle "️" images:#(icon_path, undefined, locIconCount, 10, 9, 9, 9, true) \
-		align:#right width:24 height:25 tooltip:"Enable/disable modifier" offset:[0,-140]
 	button btn_inst "" images:#(icon_path, undefined, locIconCount, 7, 7, 7, 7, true) \
 		width:24 height:25 align:#right offset:[0,0] \
 		tooltip:"Convert selected modifier to instance.\nAll objects will share one instance of the first found modifier."
@@ -2574,26 +3267,27 @@ rollout rollout_mods "Modifiers"
 	button btn_refresh "" images:#(icon_path, undefined, locIconCount, 13, 13, 13, 13, true) \
 	align:#right tooltip:"Re-read the stack: update the list and properties"
 
-	on lst_mods DrawItem sender args do
-		ORM_drawListItem args fontND fontItalicND
-
-	on lst_mods SelectedIndexChanged sender args do
+	on lst_mods SelectionChanged sender args do
 		ORM_listSelectChanged()
 
-	on btn_toggle changed st do
+	-- Клик по иконке глаза (колонка 0) тоггает enabled как кнопка On/Off.
+	-- Клик по тексту (колонка 1) — только выбор строки (SelectionChanged выше).
+	on lst_mods CellMouseClick sender args do
 	(
+		if args.ColumnIndex != 0 or args.RowIndex < 0 do return false
+		local rowIdx = args.RowIndex + 1
+		if rowIdx > g_orm_listItems.count do return false
+		local info = g_orm_listItems[rowIdx]
+		if classOf info != Array or info.count < 2 or info[1] != "mod" do return false
+		local modIdx = info[2]
+		if modIdx < 1 or modIdx > g_orm_result.modDataList.count do return false
 		-- Смешанное состояние (часть модов вкл, часть выкл):
-		-- спрашиваем пользователя через popupmenu, а не переключаем вслепую (см. архитектура п. 2)
-		local modIdx = 0
-		if classOf g_orm_selInfo == Array and g_orm_selInfo.count > 0 \
-			and g_orm_selInfo[1] == "mod" do modIdx = g_orm_selInfo[2]
+		-- спрашиваем пользователя через popupmenu, а не переключаем вслепую (см. архитектура п. 2).
+		-- Пункты меню (Enable/Disable) сами зовут ORM_toggleSelected.
 		if ORM_isMixedEnabled modIdx then
-		(
-			if (popUpMenu rmc_toggle) == undefined do
-				ORM_setToggleUI (ORM_getLiveEnabled modIdx) mixedState:(ORM_isMixedEnabled modIdx)
-		)
+			popUpMenu rmc_toggle
 		else
-			ORM_toggleSelected st
+			ORM_toggleSelected (not (ORM_getLiveEnabled modIdx))
 	)
 
 	on btn_delete pressed do
@@ -2608,13 +3302,15 @@ rollout rollout_mods "Modifiers"
 		if modDataIdx < 1 or modDataIdx > g_orm_modClasses.count do return false
 		-- Запоминаем позицию строки в списке, чтобы после удаления выделение
 		-- осталось на активном модификаторе под тем же индексом (следующем в стеке).
-		local prevIdx0 = rollout_mods.lst_mods.SelectedIndex   -- 0-based
+		local prevIdx0 = -1
+		try ( prevIdx0 = rollout_mods.lst_mods.CurrentRow.Index ) \
+			catch ( ORM_logExcept "delPrevRow" (getCurrentException() as string) )
 		if ORM_onDeleteMod modDataIdx do
 		(
 			ORM_rebuildNow()
-			local cnt = rollout_mods.lst_mods.Items.Count
+			local cnt = rollout_mods.lst_mods.Rows.Count
 			if cnt > 0 and prevIdx0 >= 0 do
-				rollout_mods.lst_mods.SelectedIndex = amin prevIdx0 (cnt - 1)
+				ORM_selectRow (amin prevIdx0 (cnt - 1))
 		)
 	)
 
@@ -2639,7 +3335,23 @@ rollout rollout_mods "Modifiers"
 			if g_orm_debug do format "ModPropsLister[inst]: modDataIdx out of range, bail\n"
 			return false
 		)
-		if ORM_onInstancifyMod modDataIdx do ORM_rebuildNow()
+		-- Запоминаем текущий выбранный элемент ДО конвертации: после неё стек меняется,
+		-- и обычный grid-захват в ORM_refreshUI может не восстановить ту же строку.
+		-- Callbacks на время конвертации приостановлены (g_orm_suspendRefresh), поэтому
+		-- форс-рестор (g_orm_forceRestore) применится в финальном ORM_rebuildNow.
+		local prevIdx0 = -1
+		try ( prevIdx0 = rollout_mods.lst_mods.CurrentRow.Index ) \
+			catch ( ORM_logExcept "instPrevRow" (getCurrentException() as string) )
+		if prevIdx0 >= 0 and prevIdx0 < g_orm_listItems.count then
+			g_orm_forceRestore = #(
+				deepcopy g_orm_listItems[prevIdx0 + 1],
+				try ( rollout_mods.lst_mods.Rows.Item[prevIdx0].Cells.Item[1].Value as string ) catch ( "" )
+			)
+		else
+			g_orm_forceRestore = #()
+		local applied = ORM_onInstancifyMod modDataIdx
+		if not applied do g_orm_forceRestore = #()
+		if applied do ORM_rebuildNow()
 	)
 
 	on chk_geom    changed st do ORM_onFilterChanged()
@@ -2675,8 +3387,8 @@ rollout rollout_mods "Modifiers"
 		-- Присвоение в отдельном try: при повторном показе floater контрол может быть
 		-- ещё не готов — это НЕ должно прерывать создание курсива.
 		fontND = dotNetObject "System.Drawing.Font" "Segoe UI" 9.0 (fsClass.Regular)
-		try ( lst_mods.Font = fontND ) catch (
-			if g_orm_debug do format "ModPropsLister: lst_mods.Font assign failed: %\n" (getCurrentException() as string)
+		try ( lst_mods.DefaultCellStyle.Font = fontND ) catch (
+			if g_orm_debug do format "ModPropsLister: lst_mods.DefaultCellStyle.Font assign failed: %\n" (getCurrentException() as string)
 		)
 		-- Курсив строится от ЖИВОГО fontND.FontFamily (строковый "Segoe UI" даёт мёртвый шрифт).
 		fontItalicND = dotNetObject "System.Drawing.Font" fontND.FontFamily fontND.Size fsClass.Italic
@@ -2732,6 +3444,10 @@ fn ORM_updateFloaterHeight =
 	local maxH = g_orm_maxFloaterH
 	if newH > maxH do newH = maxH
 	if newH < 200 do newH = 200
+	-- Guard: если высота не изменилась — не трогаем size (лишний ресайз floater'а
+	-- при переключении модификаторов давал заметное моргание всего интерфейса).
+	-- newH float, size[2] integer — округляем до целого для сравнения.
+	if (newH as integer) == g_orm_floater.size[2] do return true
 	try ( g_orm_floater.size = [g_orm_floater.size[1], newH] ) \
 		catch ( ORM_logExcept "floaterResize" (getCurrentException() as string) )
 	true
@@ -2779,7 +3495,7 @@ fn ORM_showUI result =
 
 	addRollout rollout_mods g_orm_floater
 
-	-- dotNet-список: owner-draw + иконки глаза из BMP + курсив для инстансов
+	-- dotNet-сетка: BMP-глаз (кликабельный) + имя, курсив для инстансов
 	ORM_initModList()
 
 	-- Галочки фильтра по типам из глобального состояния (прочитанного из INI)
@@ -2799,15 +3515,13 @@ fn ORM_showUI result =
 	)
 
 	ORM_listSetItems listItems
-	ORM_setToggleUI false
-	rollout_mods.btn_toggle.enabled = false
 	rollout_mods.btn_delete.enabled = false
 	rollout_mods.btn_inst.enabled = false
 
 	-- При открытии сразу выделяем первый элемент списка (верхний модификатор стека);
-	-- SelectedIndex вызывает SelectedIndexChanged → ORM_listSelectChanged → ORM_onListSelect
+	-- выбор строки вызывает SelectionChanged → ORM_listSelectChanged → ORM_onListSelect
 	if listItems.count > 0 do
-		rollout_mods.lst_mods.SelectedIndex = 0
+		ORM_selectRow 0
 
 	addRollout rollout_about g_orm_floater
 
