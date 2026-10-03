@@ -13,6 +13,7 @@ Pankovea utilities for working in 3ds Max with architectural visualization
 - [Corona Toggles](#corona-toggles)
 - [Crop To Atlas](#crop-to-atlas)
 - [Distribute](#distribute)
+- [Mass Import Grid](#mass-import-grid)
 - [Link Material](#link-material)
 - [Extract Instance](#extract-instance)
 - [Instance All](#instance-all)
@@ -298,6 +299,69 @@ Features:
 * Works inside EditPoly even when the modifier is instanced on multiple objects.
 * Distributes grouped objects.
 * Requires being in the appropriate selection mode to run.
+
+[back (contents)](#contents)
+## Mass Import Grid
+[Version 0.1 (2026.09.25)](usermacros/%23PankovScripts-MassImportGrid.mcr)
+
+Mass import of assets: every file is imported, grouped, measured and placed
+into a grid on the XY plane. The macro has no rollout of its own.
+
+Workflow:
+1. The standard file picker opens right after the run (multi-select, all supported
+   formats by default) and the import starts immediately. You can pass the files
+   directly instead of using the dialog - see "Running without the dialog".
+2. Each file is imported into the scene (`*.max` is merged, `*.fbx` / `*.obj` /
+   `*.dae` / `*.dwg` / `*.dxf` are imported) and the resulting nodes are grouped
+   together.
+3. The size of the group is measured by its world bounding box
+   (the box of every node in the subtree is unioned, degenerate boxes are ignored).
+4. Groups are laid out in a grid on the XY plane: columns = `ceil(sqrt(N))`,
+   **variable cell** - every column has its own width and every row its own
+   height (the max of the boxes inside them), plus a gap in percent.
+   **Z is left untouched** - only X and Y are changed.
+5. The whole batch is a single Undo step (`Undo Item: Mass Import Grid`).
+6. Finally, Zoom Extents on the imported result (if `migZoomExtents` is on).
+
+Default settings are local variables at the top of the `.mcr`, edit them in the
+file. Nothing is written anywhere, `3dsMax.ini` is not used:
+* **migGapPct** - free space around an object as a percentage of its largest
+  bounding box dimension (default `10.0`). Cell = box × (1 + %/100)
+* **migCols** - `0` = auto (`ceil(sqrt(N))`), otherwise a fixed column count
+* **migAnchor** - `1` = centre of the bounding box (default), `2` = the min corner
+* **migCenterGrid** - `true`: the whole block is centred on X/Y; `false` - from zero
+* **migNameFromFile** - rename each group after its file name
+* **migSortFiles** - sort files by name (deterministic layout order)
+* **migZoomExtents** - `true`: after the import, frame the result in the viewport
+  (Zoom Extents on the selection, and the selection is the imported nodes)
+
+Running without the dialog (from the Listener or from a script):
+```maxscript
+-- a folder: every supported file inside it
+macros.run "Pankovea_MassImportGrid" "run @\"D:\\Models\\Props\""
+-- specific files
+macros.run "Pankovea_MassImportGrid" "run #(\"D:\\a.fbx\", \"D:\\b.max\")"
+```
+
+Notes:
+* A file that yields a single node is not wrapped into a group - the node itself
+  is used (and renamed if the option is on).
+* `*.dwg` / `*.dxf` go through the built-in AutoCAD importer with `#noPrompt`, so
+  no settings dialog is shown and the last saved options (scale/units/layers) are
+  used. To change them, do one manual `File > Import` and configure AutoCAD
+  Import. If the AutoCAD DWG/DXF plug-in is not installed, the file ends up in
+  the error list.
+* Cells are variable, so an oversized asset stretches only its own column and row
+  instead of the whole batch.
+* Failed files are reported in a message box, the rest is imported normally.
+* The last used folder is stored in the global variable `PankovMIG_LastDir` - it
+  survives re-`fileIn`-ing the macro within a session but is never written to disk.
+  After a 3ds Max restart it is reset. You can inspect it in the Listener:
+  `PankovMIG_LastDir`.
+* Multi-select uses the .NET OpenFileDialog (the native Max dialog takes a single
+  file only). If the .NET dialog fails, the reason is printed to the Listener
+  (`[MassImport] .NET OpenFileDialog недоступен: ...`), a message box appears and
+  the script falls back to picking a folder.
 
 [back (contents)](#contents)
 ## Extract Missing Maps
