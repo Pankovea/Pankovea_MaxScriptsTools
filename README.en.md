@@ -186,7 +186,7 @@ Creates a camera from the current perspective view depending on the active rende
 [back (contents)](#contents)
 
 ## Batch Views Manager
-[Version 2026.09.05](usermacros/%23PankovScripts-BatchViewsManager.mcr)
+[Version 2026.10.03](usermacros/%23PankovScripts-BatchViewsManager.mcr)
 
 A utility to manage 3ds Max batch rendering (Batch Render).
 
@@ -196,6 +196,7 @@ Batch Views:
 * Double click toggles views on/off and collapses/expands a group
 * Aspect ratio presets (3:2, 4:3, 16:9, ...) aware of frame orientation
 * **Preserve MegaPix** mode — change the aspect ratio while keeping the pixel count
+* Resolution math: explicitly entered values are applied as-is; the grid snap (16/8) acts only on recalculated sides (LOCK, Preserve MegaPix, aspect ratio, MPix)
 * Scale: global resolution multiplier for preview/final of all views.
   - Base resolution is stored in the view name (`CamA (1920x1080)`); the global scale applies as a single multiplier to all views
   - **Apply** bakes the current scaled size as the new base and resets the scale to 100%
@@ -206,6 +207,7 @@ Cameras:
 * Lens and shooting parameters configuration
 * Camera rename that updates view names when a view contains the camera name
 * Supports Corona, V-Ray, Physical cameras
+* Broom button — select in the scene all cameras not used in any batch view
 
 Scene States:
 * A replacement for the standard Scene States dialog. Everything in one window — create, rename, update and delete scene states.

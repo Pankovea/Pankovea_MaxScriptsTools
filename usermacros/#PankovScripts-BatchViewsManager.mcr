@@ -39,13 +39,26 @@
 *    — аспект притягивается к ближайшему из g_standardAspects (g_aspectTolerance);
 *    — H = W / аспект, затем кратно g_gridH (16, допуск 8).
 * 4. Галка "Snap" (по умолчанию ВКЛ, сохраняется в INI): включает/выключает
-*    конвейер 2-3 целиком. Единая точка входа — snapResolution(w, h).
-*    Для целей с заданными мегапикселями (поле Мпикс, Preserve MegaPix) —
-*    snapResolutionKeepMP(w, h, mpPx): кандидат «точные пиксели × стандартная
-*    пропорция» соревнуется со стандартным списком/сеткой по близости к цели.
-*
-* ВВОД РАЗМЕРОВ (блок Render output в roll_batch)
-* =================================================
+ *    конвейер 2-3 целиком. Единая точка входа — snapResolution(w, h).
+ *    Для целей с заданными мегапикселями (поле Мпикс, Preserve MegaPix) —
+ *    snapResolutionKeepMP(w, h, mpPx): кандидат «точные пиксели × стандартная
+ *    пропорция» соревнуется со стандартным списком/сеткой по близости к цели.
+ *
+ * ЕДИНЫЙ РАСЧЁТ — resolveRes(mode, ...), режим сообщает, ЧТО меняется.
+ * Приоритеты (что снэпается — только пересчитанные значения):
+ *   П1. ЯВНЫЕ ЗНАЧЕНИЯ verbatim: пара #wh (готовые WxH — в т.ч. applyFieldRes)
+ *       и введённая сторона в #width/#height остаются как есть, кратность
+ *       к ним НЕ применяется.
+ *   П2. LOCK (chk_ratio) при #width/#height: вторая сторона пересчитывается —
+ *       при Preserve MegaPix из пикселей вида, иначе из пропорции ratio;
+ *       кратность применяется ТОЛЬКО к пересчитанной стороне (g_gridW/g_gridH).
+ *   П3. #ratio / #mp: обе стороны вычисляются (при preserve — под новый ratio
+ *       с сохранением MP, иначе ширина сохраняется); работает полная кратность
+ *       (KeepMP или обычный snapResolution). #swap — строгая перестановка, без снэпа.
+ *   Всё это выключит галка Snap (lockSnap != false).
+ *
+ * ВВОД РАЗМЕРОВ (блок Render output в roll_batch)
+ * =================================================
 * СЦЕНА: если камера вида стоит в каком-либо вьюпорте, любое изменение его
 * разрешения сразу применяется к сцене (renderWidth/renderHeight) —
 * syncSceneResFromView(); критерий именно камера во вьюпорте, а не совпадение
@@ -59,8 +72,8 @@
 * "MPix" (txt_out_mp): показывает мегапиксели показанных WxH (updateMpixField);
 * ввод значения пересчитывает W/H под текущие пропорции. Событие галки Preserve
 * MegaPix меняет ТОЛЬКО активность этого поля. Гаснет также без Override/вида.
-*   applyFieldRes(w,h)  — ввод размеров (снэп + LOCK), force:true — всегда;
-*   applyRatio(r)       — ввод пропорции;
+*   applyFieldRes(w,h)  — ввод готовой пары WxH (verbatim по П1);
+ *   applyRatio(r)       — ввод пропорции;
 *   applyViewRes(w,h)   — применение размера (без снэпа);
 *   applyMultiFieldRes(m,v) — см. МАССОВОЕ РЕДАКТИРОВАНИЕ.
 *
@@ -207,7 +220,7 @@ macroScript Pankovea_BatchViewsManager
 			"fileSpecialChars", "The file name contained invalid characters — they were replaced:\n{0}") #(
 			"netNameTooLongList", "Net render (Backburner) is on, but these views exceed the 256 name limit:{0}\nThey may fail when submitted to Backburner. Shorten the names or file names.") #(
 			"applyAsBase", "Apply {0}x{1} as base for this view?") #(
-			"batchViewsInfoMsg", "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state (checkbox unchanged).\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all.") #(
+			"batchViewsInfoMsg", "Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged); clicking the checkbox toggles the view\n  (with Ctrl/Shift multi-select — all selected).\n— Group checkbox — enable/disable all views in the group (mixed state shows as \"—\").\n— Triangle or double click on a group — collapse/expand.\n— Double click on a view — apply the view to the scene: camera + resolution + scene state.\n— Ctrl/Shift — multi-select: enable/disable and move up/down act on all selected items\n  and on all views inside selected groups.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down,\n  enable/disable (selected) and enable/disable all.") #(
 			"deleteView", "Delete this view(s)?") #(
 			"selectStateToApply", "Select a scene state to apply.") #(
 			"cantRestoreState", "Can't restore scene state:\n{0}") #(
@@ -276,7 +289,7 @@ macroScript Pankovea_BatchViewsManager
 	local g_roll_global
 	local g_roll_states
 	local g_roll_lang
-	local g_version = "1.0.1 (2026-09-05)"
+	local g_version = "1.0.2 (2026-10-03)"
 	local g_repoUrl = "https://github.com/Pankovea"
 	local g_last_opened_tab = "Cams"
 
@@ -292,6 +305,7 @@ macroScript Pankovea_BatchViewsManager
 	local g_view_name = ""
 	local g_view_path = undefined
 	local g_active_view = undefined
+	local g_lastCollapse = #(0, 0)  -- #(timestamp ms, realIdx): анти-двойной тоггл треугольника
 	local PROP_COLLAPSED = "▶"
 	local PROP_EXPANDED = "▼"
 
@@ -641,10 +655,29 @@ macroScript Pankovea_BatchViewsManager
 			default: ( )
 		)
 		if tw == undefined or th == undefined or tw <= 0 or th <= 0 do return #(sw, sh)
-		-- Swap — без снэпа: перестановка сторон должна быть точной (снэп мог бы
-		-- сменить разрешение, напр. 1872x2816 -> 2000x3000)
-		if not lockSnap or mode == #swap do return #(tw as integer, th as integer)
-		-- ФАЗА СНЭПА — единственная во всём скрипте для путей ввода:
+		-- ПРИОРИТЕТ 1: явные значения — как есть, снэп к ним НЕ применяется.
+		--   #wh (готовая пара WxH) и введённая сторона в #width/#height остаются verbatim;
+		--   вторая сторона пересчитывается (и снэпается) только при активных режимах.
+		case mode of (
+			#swap: ( return #(tw as integer, th as integer) )
+			#wh: ( return #(tw as integer, th as integer) )
+			#width: (
+				if not lockSnap or not (preserve or (lock and ratio != undefined and ratio > 0)) \
+					then return #(tw as integer, th as integer)
+				-- ПРИОРИТЕТ 2: вторая сторона вычислена — кратность только к ней.
+				local snapH = tryRoundToMultiple th g_gridH (g_gridTolerance / 2)
+				return #(tw as integer, (if snapH > 0 then snapH else th))
+			)
+			#height: (
+				if not lockSnap or not (preserve or (lock and ratio != undefined and ratio > 0)) \
+					then return #(tw as integer, th as integer)
+				-- ПРИОРИТЕТ 2: вторая сторона вычислена — кратность только к ней.
+				local snapW = tryRoundToMultiple tw g_gridW g_gridTolerance
+				return #((if snapW > 0 then snapW else tw), th as integer)
+			)
+		)
+		-- ПРИОРИТЕТ 3: #ratio / #mp — обе стороны вычислены, работает кратность.
+		if not lockSnap do return #(tw as integer, th as integer)
 		local res = if preserve or mode == #mp then \
 			snapResolutionKeepMP tw th (if mode == #mp then mpPx else srcPx) \
 			else snapResolution tw th
@@ -726,7 +759,7 @@ macroScript Pankovea_BatchViewsManager
 	fn sanitizeFileName fname = (
 		if fname == undefined then return ""
 		local rx = dotNetObject "System.Text.RegularExpressions.Regex" \
-			("[\\\\/:*?\"<>|" + (bit.intAsChar 0) + "-" + (bit.intAsChar 31) + "]")
+			"[\\\\/:*?\"<>|\\x00-\\x1F]"
 		local cleaned = rx.Replace fname "_"
 		while cleaned.count > 0 do (
 			local last = substring cleaned cleaned.count 1
@@ -1566,9 +1599,11 @@ macroScript Pankovea_BatchViewsManager
 		dotNetControl lst_cams "System.Windows.Forms.ListBox" height:265 offset:[-10, 0]
 		button btn_cams_info "?" width:20 height:18 align:#right offset:[10,-23] tooltip:"Single click — preview camera parameters and resolution in the UI (scene unchanged).\nDouble click — activate the camera and load its resolution into the scene."
 		
-		button btn_pick_pathrev_cam "<<" width:60 align:#left across:3 tooltip:"Previous camera" offset:[-10, 0]
+		button btn_pick_pathrev_cam "<<" width:60 align:#left across:4 tooltip:"Previous camera" offset:[-10, 0]
 		button btn_s "Select" width:80 align:#center tooltip:"Select active camera" offset:[-10, 0]
 		button btn_next_cam ">>" width:60 align:#right tooltip:"Next camera" offset:[-10, 0]
+		button btn_select_unused "🧹" width:24 height:18 align:#right offset:[-6, 0] \
+			tooltip:"Select in the scene all cameras\nthat are not used in any batch view.\n(Scene selection — not the list.)"
 
 		group "Parameters" (
 			label lbl_fl "Focal length" align:#left across:2
@@ -1962,6 +1997,22 @@ macroScript Pankovea_BatchViewsManager
 			messageBox (L10N.trMsg "createdBatchViews" args:#(created)) title:(L10N.trMsg "titleCameras")
 		)
 
+	-- SELECT UNUSED CAMS IN SCENE (мультивыделение в списке не поддерживается,
+		-- поэтому выделяем прямо в сцене камеры, у которых нет ни одного batch view)
+		on btn_select_unused pressed do (
+			local used = #()
+			for i = 1 to batchRenderMgr.NumViews do (
+				local v = batchRenderMgr.GetView i
+				if v != undefined and isValidNode v.camera and findItem used v.camera == 0 do \
+					append used v.camera
+			)
+			local all = getCameraList()
+			local toSel = for cam in all where findItem used cam == 0 collect cam
+			if toSel.count == 0 do return false
+			max modify mode
+			select toSel
+		)
+
 	)
 	--) Конец ROLLOUT: CAMERAS
 	--------------------------------------------------------------
@@ -2019,15 +2070,15 @@ macroScript Pankovea_BatchViewsManager
 		--------------------------------
 		button btn_open_batch "Batch Views" width:80 height:25 align:#left offset:[-10,0]
 		button btn_refresh "🔄️ Refresh" width:125 height:25 align:#left offset:[75,-30] tooltip:"Update the views list"
-		button btn_views_info "?" width:20 height:25 align:#right offset:[15,-30] tooltip:"Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged).\n— Repeat click on a selected item — toggle enabled (view) / collapse or expand a group.\n— Double click on a view — apply the view to the scene (camera + resolution + scene state).\n— Ctrl/Shift — multi-select.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down, enable/disable."
-		dotNetControl lst_views "System.Windows.Forms.ListBox" height:265 offset:[-10,0]
+		button btn_views_info "?" width:20 height:25 align:#right offset:[15,-30] tooltip:"Batch Views list.\n\n— Single click — preview view parameters in the UI (scene unchanged); clicking the checkbox toggles the view.\n— Group checkbox — enable/disable all views in the group.\n— Triangle or double click on a group — collapse/expand.\n— Double click on a view — apply the view to the scene (camera + resolution + scene state).\n— Ctrl/Shift — multi-select.\n— Buttons on the left: refresh list, add, duplicate, delete, move up/down, enable/disable."
+		dotNetControl lst_views "System.Windows.Forms.DataGridView" height:265 offset:[-10,0] width:(roll_w - 48)
 
-		button btn_togleEnabled "☑️" align:#right width:24 height:25 tooltip:"Toggle enabled" offset:[14,-272]
-		button btn_togleEnabledAll "✓✓" align:#right width:24 height:25 tooltip:"Toggle enabled ALL" offset:[14,0]
-		button btn_up "↑" height:55 align:#right tooltip:"Move view/group up" offset:[14,2]
+		button btn_togleEnabledAll "✓✓" align:#right width:24 height:25 tooltip:"Toggle enabled ALL" offset:[14,-272]
+		button btn_select_nocam "🧹" align:#right width:24 height:25 tooltip:"Select views without a camera" offset:[14,0]
+		button btn_up "↑" height:55 align:#right tooltip:"Move view/group up" offset:[14,5]
 		button btn_add_sep "—" width:24 align:#right tooltip:"Add group\nGroups can be renamed via View Name field" offset:[14,0]
 		button btn_down "↓" height:55 align:#right tooltip:"Move view/group down" offset:[14,0]
-		button btn_dup "📋" width:24 height:25 align:#right offset:[14,2] tooltip:"Duplicate view"
+		button btn_dup "📋" width:24 height:25 align:#right offset:[14,0] tooltip:"Duplicate view"
 		button btn_rem "❌" width:24 height:25 align:#right offset:[14,0]
 
 		button btn_prev_view "<<" width:60 align:#left across:3 tooltip:"Previous view" offset:[-10, 0]
@@ -2069,7 +2120,7 @@ macroScript Pankovea_BatchViewsManager
 			checkbox chk_preserve_mp "Preserve MegaPix" align:#left offset:[3,0] \
 				tooltip:"When changing aspect ratio, keep total megapixels\nconstant by recalculating both dimensions.\nEntering one side (W or H): the other side keeps\nthe view's total pixels (rounded).\nSnaps to nearest standard resolution."
 			checkbox chk_snap "Use snap 16(8)px" checked:true align:#left across:2 \
-				tooltip:"Snap resolution to standard values.\n1. Standard resolution list (big MP tolerance, aspect protected).\n2. Grid multiples (W:32, H:16) + standard aspect.\nOff — values are used as-is."
+				tooltip:"Snap resolution to standard values.\n1. Standard resolution list (big MP tolerance, aspect protected).\n2. Grid multiples (W:32, H:16) + standard aspect.\nOnly RECALCULATED sides are snapped: explicit W/H input and the\nentered side stay verbatim (as typed).\nOff — values are used as-is."
 			checkbox chk_sync_views "Sync by Camera" align:#left offset:[3,0] \
 				tooltip:"On — update all batch views using this camera.\n'Base size' ON  — syncs the BASE size.\n'Base size' OFF — syncs the CURRENT (scaled) size."
 			button btn_copy_res "Copy active view res to all views" width:(roll_w - 35) height:25 offset:[0,6] \
@@ -2079,10 +2130,6 @@ macroScript Pankovea_BatchViewsManager
 			spinner spn_start_frame "Start" type:#integer range:[0,99999,0] fieldWidth:60 across:2 align:#left offset:[0,10]
 			spinner spn_end_frame "End" type:#integer range:[0,99999,100] fieldWidth:60 align:#left offset:[0,10]
 
-			-- Невидимый таймер: задержка применения вида по «второму клику»,
-			-- чтобы отличить его от двойного клика (двойной клик — вкл/выкл).
-			timer tmr_apply "applyTimer" interval:300 active:false
-
 		--) End Edit batch view
 
 
@@ -2090,41 +2137,59 @@ macroScript Pankovea_BatchViewsManager
 		-- В мульти-режиме: можно ли редактировать разрешение/кадры
 		-- (override общий ВКЛ или отличается между видами — редактирование разрешено)
 		local g_multi_ovr_editable = false
-		-- Клики: первый клик — выделение, повторный клик по уже выделенному → загрузка в сцену.
-		-- prev_sel — выделение на момент прошлого клика
-		local prev_sel = 0
-		-- Снапшот выделения на MouseDown (до применения клика). Owner-draw список
-		-- не перерисовывает строки сам — обычный клик после Ctrl-мультивыделения
-		-- снимает выделение с прочих строк молча; без снапшота их подсветка
-		-- «залипает» визуально. По снапшоту MouseUp инвалидирует потерявшие
-		-- выделение строки.
-		local g_selSnapshot = #()
-		-- Флаг: следующий MouseUp — хвост двойного клика (Windows шлёт MouseUp на каждый клик,
-		-- а MouseDoubleClick срабатывает между ними). По нему второй клик не делает второе действие.
-		local g_dblPending = false
-		-- Отложенное применение вида (realIdx) через tmr_apply: повторный клик = «применить в сцену»,
-		-- но если до тика придёт MouseDoubleClick — применение отменяется (двойной клик = вкл/выкл).
-		local g_pending_apply = 0
+		-- Модель кликов (DataGridView, 3 колонки: Chk + Tri + Name):
+		--   * галочка (колонка Chk, ReadOnly) — тоггл: вид — enabled; группа — вкл/выкл
+		--     всех видов группы. При Ctrl/Shift-мультивыделении тоггл тиражируется на
+		--     весь выделенный до клика набор, выделение восстанавливается.
+		--     Значение колонки меняет только код (CellMouseClick), нативный клик его не трогает.
+		--   * одинарный клик по строке — нативный мультивыбор (FullRowSelect, Ctrl/Shift)
+		--     + загрузка параметров в UI (сцена не меняется).
+		--   * треугольник (колонка Tri, глиф ▶/▼, только группы) — свернуть/развернуть.
+		--   * двойной клик по виду — применить вид к сцене; по группе — свернуть/развернуть.
+		-- Данные строки: Chk = view.enabled (вид) или агрегат-тристаит (группа);
+		-- Tri = ▶/▼ (группа) или "" (вид); Name = текст.
+		-- Ширина колонки галочки (px) следует RenderDeck (34px); глиф галочки виден
+		-- только при высоте строки ≥20 (проверено тестом на этом хосте).
 		--------------------------------
 
-		-- ПОРЯДОК СОБЫТИЙ WINFORMS (проверено тестовым скриптом, флоатер с ListBox, 3ds Max 2026):
-		--   Одинарный клик:  MouseDown → Click → SelectedIndexChanged → MouseUp
-		--   Двойной клик:     1-й клик: MouseDown → Click → SelectedIndexChanged → MouseUp
-		--                     2-й клик: MouseDown → DoubleClick → MouseDoubleClick → MouseUp
-		-- Итого РОВНО два MouseUp, Click на втором клике НЕ приходит — его заменяет DoubleClick.
-		-- Следствие: «чистого» разделения одинарного/двойного клика в MouseUp не существует —
-		-- первый клик двойного нажатия НЕ отличить от одиночного. Поэтому:
-		--   * «второй клик» по выделенному элементу (вид — загрузка в сцену, группа — свернуть/развернуть)
-		--     откладывается через tmr_apply;
-		--   * если до тика пришёл MouseDoubleClick — отложенное действие отменяется, вместо него
-		--     вид — вкл/выкл, группа — свернуть/развернуть;
-		--   * второй (хвостовой) MouseUp гасится флагом g_dblPending, иначе было бы лишнее действие.
+		-- МОДЕЛЬ ОБРАБОТКИ КЛИКОВ (DataGridView; CellMouseDown/CellMouseClick/CellDoubleClick):
+		--   CellMouseDown (col0) — захват выделения ДО клика (клик сбрасывает мультивыбор).
+		--   CellMouseClick (col0, галочка ReadOnly): вид — тоггл enabled + тираж на
+		--         захваченный набор + восстановление выделения;
+		--         группа — «голый» тоггл по агрегату (groupCheckStateOf).
+		--   CellMouseClick (col1, треугольник): группа → collapse/expand (doCollapseOnce).
+		--   CellDoubleClick: группы → collapse; виды → applyViewToScene + closeBatchWindow.
+		--   SelectionChanged: смена выделения/стрелки — превью параметров без изменения сцены.
+		-- Триггер отмены двойного тоггла треугольника — g_lastCollapse (anti-double-fire).
+		-- Выделение: нативное Ctrl/Shift-мультивыбор DGV (FullRowSelect), restore после listViews.
+		-- g_clickSelBefore ДОЛЖЕН быть объявлен ДО обработчиков, которые его читают
+		-- (CellMouseDown/CellMouseClick): rollout-локали видны только после объявления.
+		local g_clickSelBefore = #()
+		-- Drag-and-drop reorder state
+		local g_dragSrcRow = 0        -- UI index where drag started
+		local g_dragCurrentRow = 0     -- current UI index of dragged block
+		local g_dragging = false       -- drag in progress (cursor crossed adjacent row)
+		local g_dragFinished = false   -- drag just ended; suppress CellMouseClick
+		local g_dragSrcName = ""       -- имя перетаскиваемой строки — надёжный якорь через пересборки
+		local g_dragLastRegion = 0     -- регион (splitIntoGroups), где был курсор при последнем шаге
+		local g_dragWasSel = false     -- кликнутая строка уже входила в выделение (тащим весь мультивыбор)
+		local g_dragSet = #()          -- UI-индексы строк, которые тащим (весь мультивыбор либо одна строка)
+		local g_dragPinSet = #()       -- UI-индексы, которые должны быть выделены ВО ВРЕМЯ drag (пин-выделение)
+		local g_pinRestoring = false   -- защита от рекурсии при восстановлении пин-выделения
+		local g_dragArmed = false      -- взведён drag (левая кнопка нажата по строке, с которой можно тащить)
+		local g_buttonDown = false     -- левая кнопка физически нажата (сброс на MouseUp)
+		local g_moveSeen = false       -- мышь уже двигалась после нажатия (начался нативный marquee)
+		local g_supressSel = false     -- подавить обрабоку SelectionChanged (пересборка списка/удаление):
+		                               -- на мутациях Rows обращение к строкам из обработчика даёт AV
+		local g_syncPresetSel = false  -- подавить on drdwn_re_presets selected при программной
+		                               -- установке selection из syncPresetFromRatio (иначе событие
+		                               -- запускает applyRatio -> перерисовку -> снова syncPresetFromRatio)
 
 		-- Маппинг UI-индекс → реальный индекс batch view строится в listViews
 
 		-- Включить двойную буферизацию dotNet-контрола (свойство DoubleBuffered
-		-- защищённое — доступ через рефлексию). Owner-draw ListBox без неё мигает
-		-- при каждой перерисовке (выделение, Invalidate).
+		-- защищённое — доступ через рефлексию). DataGridView без неё мигает
+		-- при каждой перерисовке (выделение, пересборка строк).
 		fn enableDoubleBuffered ctrl = (
 			try (
 				-- BindingFlags: Instance | NonPublic (свойство DoubleBuffered защищённое)
@@ -2134,29 +2199,85 @@ macroScript Pankovea_BatchViewsManager
 			) catch ()
 		)
 
-		-- Инициализация dotNet ListBox
+		-- Инициализация DataGridView-списка: нативный мультивыбор (Ctrl/Shift) + колонка галочек.
 		fn initListBox = (
-			lst_views.BeginUpdate()
-			lst_views.Items.Clear()
-			lst_views.SelectionMode = (dotNetClass "System.Windows.Forms.SelectionMode").MultiExtended
-			lst_views.IntegralHeight = false
-			lst_views.DrawMode = (dotNetClass "System.Windows.Forms.DrawMode").OwnerDrawFixed
-			lst_views.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 40 40 43
-			lst_views.ForeColor = (dotNetClass "System.Drawing.Color").White
-			lst_views.EndUpdate()
-			enableDoubleBuffered lst_views
-			lst_views.Invalidate()
+			local grid = lst_views
+			local C = dotNetClass "System.Drawing.Color"
+			local DGVSel = dotNetClass "System.Windows.Forms.DataGridViewSelectionMode"
+			local BorderStyle = dotNetClass "System.Windows.Forms.BorderStyle"
+			grid.AllowUserToAddRows = false
+			grid.AllowUserToDeleteRows = false
+			grid.AllowUserToResizeRows = false
+			grid.AllowUserToResizeColumns = false
+			grid.ColumnHeadersVisible = false
+			grid.RowHeadersVisible = false
+			grid.ReadOnly = false
+			grid.MultiSelect = true
+			grid.SelectionMode = DGVSel.FullRowSelect
+			grid.BorderStyle = BorderStyle.None
+			grid.BackgroundColor = C.FromARGB 40 40 43
+			grid.GridColor = C.FromARGB 40 40 43
+			try (grid.CellBorderStyle = (dotNetClass "System.Windows.Forms.DataGridViewCellBorderStyle").None) catch ()
+			try (grid.EnableHeadersVisualStyles = false) catch ()
+			-- Высота строки ≥20: при 18 (и меньше) DataGridViewCheckBoxCell на этом
+			-- хосте не рисует глиф галочки вообще (проверено тестом: при 20+ виден,
+			-- ширина колонки не влияет). 20 — минимальный порог.
+			try (grid.RowTemplate.Height = 20) catch ()
+			try (grid.DefaultCellStyle.Font = dotNetObject "System.Drawing.Font" "Segoe UI" 8.0) catch ()
+			grid.DefaultCellStyle.BackColor = C.FromARGB 40 40 43
+			grid.DefaultCellStyle.ForeColor = C.White
+			grid.DefaultCellStyle.SelectionBackColor = (dotNetClass "System.Drawing.SystemColors").Highlight
+			grid.DefaultCellStyle.SelectionForeColor = (dotNetClass "System.Drawing.SystemColors").HighlightText
+			grid.Columns.Clear()
+			-- колока с галочками включения/выключения вида
+			local colChk = dotNetObject "System.Windows.Forms.DataGridViewCheckBoxColumn"
+			colChk.Name = "Chk"
+			colChk.Width = 22
+			colChk.ReadOnly = true
+			try (colChk.SortMode = (dotNetClass "System.Windows.Forms.DataGridViewColumnSortMode").NotSortable) catch ()
+			grid.Columns.Add colChk
+			-- Колонка-треугольник групп (col1): узкая, текстовый глиф ▶/▼ внутри ячейки.
+			-- Клик по ней — collapse/expand. Отдельная колонка убирает хит-тест по
+			-- координате X ячейки (args.X в CellMouseClick относителен к ячейке).
+			local colTri = dotNetObject "System.Windows.Forms.DataGridViewTextBoxColumn"
+			colTri.Name = "Tri"
+			colTri.Width = 22
+			colTri.ReadOnly = true
+			try (colTri.SortMode = (dotNetClass "System.Windows.Forms.DataGridViewColumnSortMode").NotSortable) catch ()
+			try (colTri.DefaultCellStyle.Alignment = (dotNetClass "System.Windows.Forms.DataGridViewContentAlignment").MiddleCenter) catch ()
+			grid.Columns.Add colTri
+			-- колонка с названием вида
+			local colName = dotNetObject "System.Windows.Forms.DataGridViewTextBoxColumn"
+			colName.Name = "Name"
+			colName.ReadOnly = true
+			colName.AutoSizeMode = (dotNetClass "System.Windows.Forms.DataGridViewAutoSizeColumnMode").Fill
+			try (colName.SortMode = (dotNetClass "System.Windows.Forms.DataGridViewColumnSortMode").NotSortable) catch ()
+			grid.Columns.Add colName
+			enableDoubleBuffered grid
 		)
 
 		fn getSel = (
-			local i = lst_views.SelectedIndex
-			if i >= 0 then i + 1 else 0
+			-- Текущая строка: сначала CurrentCell (строит DGV при клике), 
+			-- затем первая выделенная строка (восстановление/программное выделение),
+			-- иначе 0.
+			try (
+				if lst_views.Rows.Count == 0 do return 0
+				local cc = lst_views.CurrentCell
+				if cc != undefined and cc.RowIndex >= 0 and cc.RowIndex < lst_views.Rows.Count do return cc.RowIndex + 1
+			) catch ()
+			try (
+				if lst_views.Rows.Count > 0 and lst_views.SelectedRows.Count > 0 do return lst_views.SelectedRows.Item[0].Index + 1
+			) catch ()
+			0
 		)
 
 		fn setSel idx = (
-			local cnt = lst_views.Items.Count
-			if cnt == 0 do return false
-			lst_views.SelectedIndex = if idx > 0 then (amin idx cnt) - 1 else -1
+			if lst_views.Rows.Count == 0 do return false
+			try ( lst_views.ClearSelection() ) catch ()
+			if idx >= 1 and idx <= lst_views.Rows.Count do (
+				try ( lst_views.Rows.Item[idx - 1].Selected = true ) catch ()
+			)
+			true
 		)
 
 		-- Преобразовать UI-индекс lst_views в реальный индекс batchRenderMgr
@@ -2164,24 +2285,172 @@ macroScript Pankovea_BatchViewsManager
 			if uiIdx > 0 and uiIdx <= g_visibleIndices.count then g_visibleIndices[uiIdx] else 0
 		)
 
-		-- Включить/выключить вид по UI-индексу (группы не трогаем)
+		-- Включить/выключить вид по UI-индексу (группы не трогаем); синхронизирует
+		-- и ячейку галочки.
 		fn setViewCheckedAtUi uiIdx state = (
 			local realIdx = getRealIndex uiIdx
 			if realIdx <= 0 do return false
 			local the_view = batchRenderMgr.GetView realIdx
 			if the_view == undefined or isGroupView the_view do return false
 			the_view.enabled = state
-			lst_views.Invalidate()
+			setRowCheckUi uiIdx state
 			true
 		)
 
-		-- Все выделенные UI-индексы (1-based)
+		-- Установить галочку строки для ВИДА (двухсостояние 2-state).
+		-- Приводим к строгому MAXScript true/false: batchRenderViewOps.enabled может
+		-- приходить не как BooleanClass — в ячейку DGV должен попасть честный bool.
+		fn setRowCheckUi uiIdx state = (
+			if uiIdx < 1 or uiIdx > lst_views.Rows.Count do return false
+			local cell = lst_views.Rows.Item[uiIdx - 1].Cells.Item[0]
+			cell.Value = (state == true)
+			true
+		)
+
+		-- Трёхсостояние через null: DataGridViewCheckBoxCell при ThreeState=true и
+		-- Value=null рисует Indeterminate. null в MAXScript — undefined. DBNull.Value
+		-- брать нельзя: статическое ПОЛЕ dotNet не экспонируется (Unknown property),
+		-- а GetField — метод экземпляра Type, тоже недоступен (проверено на хосте).
+		fn setRowCheckStateUi uiIdx cs = (
+			if uiIdx < 1 or uiIdx > lst_views.Rows.Count do return false
+			local cell = lst_views.Rows.Item[uiIdx - 1].Cells.Item[0]
+			cell.ThreeState = true
+			local csStr = cs.ToString()
+			if csStr == "Checked" then cell.Value = true
+			else if csStr == "Indeterminate" then cell.Value = undefined
+			else cell.Value = false
+			true
+		)
+
+		-- Текущее состояние галочки строки как строка ("Checked"/"Unchecked"/"Indeterminate")
+		fn currentCheckStateStr uiIdx = (
+			try (
+				local v = (lst_views.Rows.Item[uiIdx - 1].Cells.Item[0]).Value
+				if v == undefined then "Indeterminate"
+				else (
+					local s = (v.ToString()).ToLower()
+					if s == "true" then "Checked"
+					else if s == "false" then "Unchecked"
+					else "Indeterminate"
+				)
+			) catch ( "Unchecked" )
+		)
+
+		-- Свернуть/развернуть группу ровно один раз за последовательность кликов
+		-- (CellClick на обоих щелчках двойного нажатия + CellDoubleClick давали бы
+		-- 2-3 тоггла подряд — гасим повторы тем же realIdx в течение 400 мс).
+		fn doCollapseOnce realIdx = (
+			local nowT = timestamp()
+			if g_lastCollapse[2] == realIdx and (nowT - g_lastCollapse[1]) < 400 do return false
+			g_lastCollapse = #(nowT, realIdx)
+			g_roll_batch.toggleGroupCollapse realIdx
+			true
+		)
+
+		-- Агрегат группы (реальный индекс заголовка): Checked если все виды вкл,
+		-- Unchecked если все выкл, Indeterminate если смешанные.
+		fn groupCheckStateOf grpReal = (
+			local cs = dotNetClass "System.Windows.Forms.CheckState"
+			local the_view = batchRenderMgr.GetView grpReal
+			if the_view == undefined do return cs.Unchecked
+			local enb = 0
+			local dsb = 0
+			for j = (grpReal + 1) to batchRenderMgr.NumViews do (
+				local v2 = batchRenderMgr.GetView j
+				if isGroupView v2 then exit
+				if v2.enabled then enb += 1 else dsb += 1
+			)
+			if enb > 0 and dsb > 0 then cs.Indeterminate
+			else if enb > 0 then cs.Checked
+			else cs.Unchecked
+		)
+
+		-- Обновить строку группы (UI-индекс) на основе агрегата её видов
+		fn refreshGroupRowAtUi uiIdx = (
+			local realIdx = getRealIndex uiIdx
+			if realIdx <= 0 do return false
+			local the_view = batchRenderMgr.GetView realIdx
+			if the_view == undefined or not (isGroupView the_view) do return false
+			setRowCheckStateUi uiIdx (groupCheckStateOf realIdx)
+			true
+		)
+
+		-- Включить/выключить ВСЕ виды группы по её реальному индексу (работает
+		-- и для скрытой свёрткой группы): правит view.enabled у всех детей, галочки
+		-- видимых строк; если группа свёрнута — пересобирает список (текст заголовка
+		-- несёт счётчик «n/m», его надо обновить; stripped - безопасный путь в MAXScript).
+		fn applyStateToGroup grpReal state = (
+			local the_view = batchRenderMgr.GetView grpReal
+			if the_view == undefined or not (isGroupView the_view) do return false
+			local collapsed = ((substring the_view.name 1 1) == PROP_COLLAPSED)
+			for j = (grpReal + 1) to batchRenderMgr.NumViews do (
+				local v2 = batchRenderMgr.GetView j
+				if isGroupView v2 then exit
+				v2.enabled = state
+				local u2 = findItem g_visibleIndices j
+				if u2 > 0 do setRowCheckUi u2 state
+			)
+			if collapsed then g_roll_batch.listViews restoreName:the_view.name
+			else refreshGroupRowAtUi (findItem g_visibleIndices grpReal)
+			true
+		)
+
+		-- Попадает ли вид (реальный индекс) в какую-либо группу; если да — обновить
+		-- агрегат строки группы.
+		fn refreshParentGroupCheck realIdx = (
+			for j = realIdx - 1 to 1 by -1 do (
+				local vj = batchRenderMgr.GetView j
+				if isGroupView vj then (
+					refreshGroupRowAtUi (findItem g_visibleIndices j)
+					return j
+				)
+			)
+			0
+		)
+
+		-- Выставить check state всех видимых строк по источникам истины (view.enabled
+		-- для видов, агрегат для групп). Вызывается после пересборки списка.
+		fn syncCheckStates = (
+			for ui = 1 to g_visibleIndices.count do (
+				local realIdx = g_visibleIndices[ui]
+				local the_view = batchRenderMgr.GetView realIdx
+				if the_view != undefined do (
+					if isGroupView the_view then setRowCheckStateUi ui (groupCheckStateOf realIdx)
+					else setRowCheckUi ui the_view.enabled
+				)
+			)
+		)
+
+		-- Все выделенные UI-индексы (1-based). Primary — полный проход по ВСЕМ строкам:
+		-- на этом хосте SelectedRows/SelectedCells при мультивыборе нередко отдают только
+		-- последнюю строку (SelectionMode FullRowSelect), поэтому канонический источник —
+		-- Row.Selected каждой строки. SelectedRows/SelectedCells/CurrentCell — страховка.
 		fn getSelectedUiIndices = (
 			local res = #()
-			local n = lst_views.Items.Count
-			for i = 1 to n do (
-				if lst_views.GetSelected (i - 1) do append res i
-			)
+			try (
+				for i = 0 to (lst_views.Rows.Count - 1) do (
+					if lst_views.Rows.Item[i].Selected do (
+						local vi = i + 1
+						if vi >= 1 and vi <= g_visibleIndices.count and findItem res vi == 0 do append res vi
+					)
+				)
+			) catch ()
+			if res.count == 0 do try (
+				for rrow in lst_views.SelectedRows do (
+					local vi = rrow.Index + 1
+					if vi >= 1 and vi <= g_visibleIndices.count and findItem res vi == 0 do append res vi
+				)
+			) catch ()
+			if res.count == 0 do try (
+				for cc in lst_views.SelectedCells do (
+					local vi = cc.RowIndex + 1
+					if vi >= 1 and vi <= g_visibleIndices.count and findItem res vi == 0 do append res vi
+				)
+			) catch ()
+			if res.count == 0 do try (
+				local cc = lst_views.CurrentCell
+				if cc != undefined and cc.RowIndex >= 0 and cc.RowIndex < g_visibleIndices.count do append res (cc.RowIndex + 1)
+			) catch ()
 			res
 		)
 
@@ -2216,12 +2485,12 @@ macroScript Pankovea_BatchViewsManager
 
 		-- Выделить ровно эти UI-индексы
 		fn setSelectedUiIndices uiIdxes = (
-			local n = lst_views.Items.Count
-			for i = 0 to n - 1 do lst_views.SetSelected i false
+			lst_views.ClearSelection()
 			for ui in uiIdxes do (
-				if ui >= 1 and ui <= n do lst_views.SetSelected (ui - 1) true
+				if ui >= 1 and ui <= lst_views.Rows.Count do (
+					try ( lst_views.Rows.Item[ui - 1].Selected = true ) catch ()
+				)
 			)
-			lst_views.Invalidate()
 		)
 
 
@@ -2265,7 +2534,9 @@ macroScript Pankovea_BatchViewsManager
 					if abs(g_presetRatios[i] - cmp) < g_presetTolerance then (idx = i; exit)
 				)
 			)
+			g_syncPresetSel = true
 			drdwn_re_presets.selection = idx
+			g_syncPresetSel = false
 			idx
 		)
 
@@ -2366,7 +2637,8 @@ macroScript Pankovea_BatchViewsManager
 			drdwn_re_presets,	-- общие базы: через applyRatio; разные базы: applyMultiFieldRes #ratio
 			chk_ratio,			-- TOGGLE-режим (LOCK), к видам не применяется; updateRatioUI мульти-aware
 			btn_swap,			-- общие базы: через applyViewRes; разные базы: applyMultiFieldRes #swap
-			chk_snap,			-- глобальный g_snap + applyFieldRes (on chk_snap changed)
+			chk_snap,			-- глобальный g_snap; при включении — пристрелка пары snapResolution
+								--		(on chk_snap changed; явные значения снэп не трогает — П1)
 			chk_preserve_mp,	-- TOGGLE-режим пересчёта, читается в applyRatio / applyMultiFieldRes / updateCopyResBtn
 			chk_sync_views,		-- on chk_sync_views changed
 			spn_start_frame,	-- on spn_start_frame
@@ -2675,9 +2947,11 @@ macroScript Pankovea_BatchViewsManager
 		-- Вид меняется местами с соседним элементом (в т.ч. с заголовком другой группы — так он переходит в неё);
 		-- выделенный заголовок двигает всю группу, меняясь с соседней группой целиком.
 		-- Возвращает новые реальные индексы первых элементов выбранных блоков.
-		fn moveSelectedViews direction = (
+		-- selOverride — реальные индексы, которые двигать (во время drag это g_dragPinSet,
+		-- т.к. live-выделение грида во время drag подерживается одной строкой: MultiSelect=false).
+		fn moveSelectedViews direction selOverride:undefined = (
 			local allData = collectAllViewData()
-			local selReal = getSelectedRealIdxs()
+			local selReal = if selOverride != undefined then selOverride else getSelectedRealIdxs()
 			if selReal.count == 0 do return #()
 			local mb = buildMoveBlocks allData selReal
 			local blocks = mb[1]
@@ -2763,11 +3037,8 @@ macroScript Pankovea_BatchViewsManager
 			if selUis.count == 0 then (
 				btn_up.enabled = false
 				btn_down.enabled = false
-				btn_togleEnabled.enabled = false
 				btn_rem.enabled = false
 			) else (
-				btn_togleEnabled.enabled = true
-				btn_togleEnabled.tooltip = "Toggle enabled (selected views + group contents)"
 				btn_up.enabled = canMoveSelectedAny #up
 				btn_down.enabled = canMoveSelectedAny #down
 				btn_rem.enabled = true
@@ -2791,7 +3062,7 @@ macroScript Pankovea_BatchViewsManager
 			if uiIdx < 1 then uiIdx = 1
 			if uiIdx > g_visibleIndices.count then uiIdx = g_visibleIndices.count
 			-- MultiExtended: SelectedIndex не снимает остальные выделения — чистим явно
-			lst_views.ClearSelected()
+			lst_views.ClearSelection()
 			setSel uiIdx
 			lst_views.Invalidate()
 			local realIdx = getRealIndex uiIdx
@@ -2816,7 +3087,7 @@ macroScript Pankovea_BatchViewsManager
 				if bv != undefined and bv.camera == cam then (
 					local uiIdx = findItem g_visibleIndices i
 					if uiIdx != 0 then (
-						lst_views.ClearSelected()
+						lst_views.ClearSelection()
 						setSel uiIdx
 					)
 					g_active_view = getViewParams i
@@ -2836,7 +3107,7 @@ macroScript Pankovea_BatchViewsManager
 					local uiIdx = findItem g_visibleIndices i
 					if uiIdx != 0 then (
 						-- MultiExtended: SelectedIndex не снимает остальные выделения — чистим явно
-						lst_views.ClearSelected()
+						lst_views.ClearSelection()
 						setSel uiIdx
 					)
 					g_active_view = getViewParams i
@@ -2850,7 +3121,7 @@ macroScript Pankovea_BatchViewsManager
 					if v != undefined and v.name == theName then (
 						local uiIdx = findItem g_visibleIndices i
 						if uiIdx != 0 then (
-							lst_views.ClearSelected()
+							lst_views.ClearSelection()
 							setSel uiIdx
 						)
 						g_active_view = getViewParams i
@@ -2917,10 +3188,12 @@ macroScript Pankovea_BatchViewsManager
 		fn listViews restoreName:"" = (
 			local gv = batchRenderMgr.GetView
 			local num = batchRenderMgr.numViews
-			local col = #()
+			local col = #()  -- элементы #(triText, nameText); triText — глиф ▶/▼ для групп
 			-- Запомнить текущее выделение (реальный индекс) и позицию прокрутки
 			local prevReal = getRealIndex (getSel())
-			local prevTop = if lst_views.Items.Count > 0 then lst_views.TopIndex else 0
+			local prevTop = 0
+			try ( prevTop = lst_views.FirstDisplayedScrollingRowIndex ) catch ()
+			if prevTop < 0 do prevTop = 0
 			g_visibleIndices = #()
 			local collapsed = false
 
@@ -2936,12 +3209,15 @@ macroScript Pankovea_BatchViewsManager
 						hasViews = true
 					)
 					if hasViews then (
+						-- Треугольник группы живёт в ОТДЕЛЬНОЙ колонке Tri; префикс ▶/▼
+						-- в имени больше не отображается (только хранит состояние).
 						local firstChar = substring the_view.name 1 1
 						if firstChar != PROP_COLLAPSED and firstChar != PROP_EXPANDED do (
 							the_view.name = PROP_EXPANDED + the_view.name
 							firstChar = PROP_EXPANDED
 						)
 						collapsed = (firstChar == PROP_COLLAPSED)
+						local nameText = stripCollapsePrefix the_view.name
 						if collapsed then (
 							local enb = 0
 							local dsb = 0
@@ -2950,30 +3226,50 @@ macroScript Pankovea_BatchViewsManager
 								if isGroupView v2 then exit
 								if v2.enabled then enb += 1 else dsb += 1
 							)
-							append col (the_view.name + "  " + (enb as string) + "/" + (enb + dsb) as string)
-						) else (
-							append col the_view.name
+							nameText = nameText + "  " + (enb as string) + "/" + (enb + dsb) as string
 						)
+						append col #(firstChar, nameText)
 						append g_visibleIndices i
 					) else (
-						append col the_view.name
+						-- Пустая группа: рендерится ТАК ЖЕ, как группа с видами — глиф ▶/▼
+						-- в отдельной колонке Tri, имя без префикса. Иначе у двух идущих подряд
+						-- заголовков первая группа выглядит как «обычный вид» с треугольником
+						-- прямо в имени (prefix-символ утекает в текст).
+						local firstCharE = substring the_view.name 1 1
+						if firstCharE == PROP_COLLAPSED or firstCharE == PROP_EXPANDED then (
+							append col #(firstCharE, stripCollapsePrefix the_view.name)
+						) else (
+							append col #("", the_view.name)
+						)
 						append g_visibleIndices i
 						collapsed = false
 					)
 				) else (
 					if not collapsed then (
-						append col the_view.name
+						append col #("", the_view.name)
 						append g_visibleIndices i
 					)
 				)
 			)
 
-			lst_views.BeginUpdate()
-			lst_views.Items.Clear()
-			for item in col do lst_views.Items.Add item
-			lst_views.EndUpdate()
+			g_supressSel = true
+			lst_views.Rows.Clear()
+			for ui = 1 to col.count do (
+				lst_views.Rows.Add()
+				local realIdx = g_visibleIndices[ui]
+				local the_view = batchRenderMgr.GetView realIdx
+				local row = lst_views.Rows.Item[ui - 1]
+				try ( row.Cells.Item[1].Value = col[ui][1] ) catch ()
+				try ( row.Cells.Item[2].Value = col[ui][2] ) catch ()
+				if isGroupView the_view then (
+					try ( row.DefaultCellStyle.BackColor = (dotNetClass "System.Drawing.Color").FromARGB 56 58 70 ) catch ()
+					try ( row.DefaultCellStyle.ForeColor = (dotNetClass "System.Drawing.Color").FromARGB 190 190 190 ) catch ()
+				)
+			)
+			syncCheckStates()
 			lst_views.Invalidate()
 			updateViewsListButtons()
+			g_supressSel = false
 
 			listCamerasForBatch()
 
@@ -2999,9 +3295,9 @@ macroScript Pankovea_BatchViewsManager
 			)
 			if selUi != 0 do setSel selUi
 			-- Восстановить позицию прокрутки (не сбрасывать к началу списка)
-			if prevTop >= 0 and lst_views.Items.Count > 0 then (
-				if prevTop >= lst_views.Items.Count do prevTop = lst_views.Items.Count - 1
-				lst_views.TopIndex = prevTop
+			if lst_views.Rows.Count > 0 do (
+				if prevTop >= lst_views.Rows.Count do prevTop = lst_views.Rows.Count - 1
+				try ( lst_views.FirstDisplayedScrollingRowIndex = prevTop ) catch ()
 			)
 		)
 
@@ -3077,15 +3373,13 @@ macroScript Pankovea_BatchViewsManager
 			true
 		)
 
-		-- Применить w/h с снэпом к выделенному виду.
-		-- force:true — применять всегда (ввод может отличаться от состояния вида,
-		-- даже если снэп его не меняет, напр. LOCK-пересчёт второй стороны).
-		-- force:false — применять, только если снэп реально изменил значения.
+		-- Применить готовую пару w/h к выделенному виду.
+		-- ПРИОРИТЕТ 1: явная пара применяется как есть, без снэпа.
+		-- (force сохранён для совместимости вызовов; различие снято — verbatim всегда).
 		fn applyFieldRes w h force:false = (
 			if w == undefined or h == undefined or w <= 0 or h <= 0 then return false
-			local smart = snapResolution w h
-			if not force and smart[1] == w and smart[2] == h then return false
-			applyViewRes smart[1] smart[2]
+			-- ПРИОРИТЕТ 1: явная пара WxH применяется как есть, без снэпа.
+			applyViewRes w h
 			true
 		)
 
@@ -3374,29 +3668,6 @@ macroScript Pankovea_BatchViewsManager
 			showResForBase base[1] base[2]
 		)
 
-		-- Цели переключения enabled: выделенные виды + все виды внутри выделенных групп
-		fn collectToggleTargets = (
-			local targets = #()
-			for ui in getSelectedUiIndices() do (
-				local realIdx = getRealIndex ui
-				if realIdx > 0 then (
-					local v = batchRenderMgr.GetView realIdx
-					if v != undefined then (
-						if isGroupView v then (
-							local bounds = getGroupBounds realIdx
-							for j = (bounds[1] + 1) to bounds[2] do (
-								local m = batchRenderMgr.GetView j
-								if not (isGroupView m) and findItem targets j == 0 do append targets j
-							)
-						) else (
-							if findItem targets realIdx == 0 do append targets realIdx
-						)
-					)
-				)
-			)
-			targets
-		)
-
 		-- Свернуть/развернуть группу (второй клик по выделенной группе)
 		fn toggleGroupCollapse realIdx = (
 			local the_view = batchRenderMgr.GetView realIdx
@@ -3431,7 +3702,6 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on roll_batch close do (
-			try ( tmr_apply.active = false ) catch ()
 			saveFloaterState()
 		)
 		on roll_batch rolledUp state do ( accordion roll_batch state )
@@ -3806,9 +4076,26 @@ macroScript Pankovea_BatchViewsManager
 			if isValidNode cam and (isKindOf cam camera) then select cam
 		)
 
-		-- SINGLE CLICK: группа — только выделение, вид — загрузка параметров;
-		-- 2+ выделенных видов — режим массового редактирования.
-		on lst_views SelectedIndexChanged sender args do (
+		-- SINGLE CLICK: группа — только выделение + имя; вид — загрузка параметров;
+		-- 2+ выделенных видов — режим массового редактирования. Смена выделения, отрисовка
+		-- и Ctrl/Shift-мультивыбор — нативные (DataGridView FullRowSelect).
+		on lst_views SelectionChanged sender args do (
+			-- Подавлено на время пересборки списка/удаления: обработчик бегает по
+			-- Rows, а во время мутаций (Rows.Clear и т.п.) это даёт AccessViolation.
+			if g_supressSel do return false
+			-- Во время drag нативный DGV выполняет marquee-выделение ПОСЛЕ нашего
+			-- MouseMove и сбрасывает Selection на hover-строку. Возвращаем пин ПОСЛЕ
+			-- нативного изменения. То же для «взведённого» pending-состояния: кнопка
+			-- нажата и мышь уже двигалась — marquee начался ещё до пересечения границы
+			-- строки. Обычные клики (без движения) петлёй не задеваются: g_moveSeen=false.
+			if (g_dragging or (g_dragArmed and g_buttonDown and g_moveSeen)) and not g_pinRestoring and g_dragPinSet.count > 0 then (
+				g_pinRestoring = true
+				try ( setSelectedUiIndices g_dragPinSet ) catch ()
+				g_pinRestoring = false
+			)
+			if g_dragging or (g_dragArmed and g_buttonDown and g_moveSeen) do (
+				return false
+			)
 			local index = getSel()
 			if index <= 0 do return false
 			if isMultiEdit() then (
@@ -3828,203 +4115,318 @@ macroScript Pankovea_BatchViewsManager
 			)
 		)
 
-		-- Снапшот выделения ДО применения клика (WinForms меняет выделение на
-		-- MouseDown, поэтому к MouseUp/SelectedIndexChanged прежний набор уже
-		-- недоступен — сравнивать не с чем).
-		on lst_views MouseDown sender args do (
-			g_selSnapshot = getSelectedUiIndices()
+		-- CellMouseDown: левый клик — захватить выделение (для тоггла галочки)
+		-- и инициировать drag-трекинг (source row + g_dragSet).
+		-- Drag стартует при захвате строки, которая УЖЕ в выделении (тогда тянем ВЕСЬ
+		-- мультивыбор) либо одиночной невыбранной строки. Ctrl/Shift-клик по НЕвыбранной
+		-- строке drag НЕ стартует — иначе случайное шевеление мыши двигало бы строки,
+		-- ломая multi-select для дублирования/удаления.
+		on lst_views CellMouseDown sender args do (
+			if (args.Button.ToString()) == "Left" do (
+				g_clickSelBefore = getSelectedUiIndices()
+				local modHeld = false
+				try (
+					local mk = ((dotNetClass "System.Windows.Forms.Control").ModifierKeys) as integer
+					modHeld = (bit.and mk 0x30000) != 0
+				) catch ( modHeld = false )
+				local row = args.RowIndex + 1
+				g_dragWasSel = false
+				if row >= 1 and row <= g_visibleIndices.count do (
+					g_dragWasSel = findItem g_clickSelBefore row > 0
+				)
+				-- Drag стартует при захвате строки: если строка УЖЕ была в выделении —
+				-- тянем ВЕСЬ мультивыбор (g_dragSet), иначе — только её. Ctrl/Shift-клик по
+				-- НЕвыбранной строке лишь расширяет выделение: drag не стартует, чтобы
+				-- случайное шевеление мыши не сдвигало строки во время multi-select.
+				if row >= 1 and row <= g_visibleIndices.count and (not modHeld or g_dragWasSel) then (
+					g_dragSrcRow = row
+					g_dragCurrentRow = row
+					g_dragging = false
+					g_dragFinished = false
+					g_dragLastRegion = 0
+					g_dragSrcName = ""
+					g_dragArmed = true
+					g_buttonDown = true
+					g_moveSeen = false
+					if g_dragWasSel then g_dragSet = deepcopy g_clickSelBefore
+					else g_dragSet = #(row)
+					g_dragPinSet = deepcopy g_dragSet
+					local rn = getRealIndex row
+					if rn > 0 do (
+						try ( g_dragSrcName = (batchRenderMgr.GetView rn).name ) catch ()
+					)
+				) else (
+					g_dragSrcRow = 0
+					g_dragSrcName = ""
+					g_dragSet = #()
+					g_dragPinSet = #()
+					g_dragArmed = false
+					g_buttonDown = false
+					g_moveSeen = false
+				)
+			)
 		)
 
-		-- Одиночный клик без Ctrl/Shift:
-		--   первый клик — только выделение (галочка не меняется);
-		--   повторный клик по выделенному элементу → загрузка вида в сцену (с задержкой через
-		--   tmr_apply, чтобы отличить от двойного клика); группа — свернуть/развернуть.
-		-- Ctrl/Shift+клик — только управление выделением, галку не трогаем.
-		-- Двойной клик по виду — вкл/выкл (см. MouseDoubleClick).
-		-- Windows шлёт MouseUp на каждый клик; при двойном клике хвостовые MouseUp гасятся
-		-- флагом g_dblPending, а отложенное применение отменяется в MouseDoubleClick.
-		-- Invalidate() после клика убирает залипшие подсветки старых строк.
-		on lst_views MouseUp sender args do (
+		-- CellMouseClick: левый клик.
+		--   Если только что завершился drag (g_dragFinished) — пропускаем,
+		--   чтобы не тогглить галочку и не сворачивать группу после перетаскивания.
+		--   col0 (галочка, ReadOnly): вид — тоггл enabled; группа — «голый» тоггл по
+		--         агрегату (groupCheckStateOf). Тиражируется на ВЕСЬ набор, выделенный
+		--         до клика (g_clickSelBefore), а не на сброшенный кликом. Выделение
+		--         восстанавливается.
+		--   col1 (треугольник группы): collapse/expand (doCollapseOnce).
+		--   col2 (имя): ничего — только выделение/превью (SelectionChanged).
+		on lst_views CellMouseClick sender args do (
+			if g_dragFinished do ( g_dragFinished = false; return false )
 			if (args.Button.ToString()) != "Left" do return false
-			local uiIdx = (lst_views.IndexFromPoint args.X args.Y) + 1
-
-			-- Строки из снапшота MouseDown, потерявшие выделение этим жестом
-			-- (типовой случай: обычный клик по одному виду после Ctrl-мультивыделения —
-			-- WinForms снял выделение с остальных ещё на MouseDown, но owner-draw
-			-- продолжал рисовать старую подсветку). До возвратов ниже: клик по пустой
-			-- области (uiIdx == 0) тоже снимает выделение. Хвостовой MouseUp двойного
-			-- клика здесь безвреден — его снапшот совпадает с текущим состоянием.
-			for si in g_selSnapshot do (
-				if si >= 1 and si <= lst_views.Items.Count and si != uiIdx \
-					and not (lst_views.GetSelected (si - 1)) do (
-					local r = lst_views.GetItemRectangle (si - 1)
-					lst_views.Invalidate r
+			local r = args.RowIndex + 1
+			if r < 1 or r > g_visibleIndices.count do return false
+			local c = args.ColumnIndex
+			if c < 0 do return false
+			if c == 0 then (
+				local selSet = g_clickSelBefore
+				g_clickSelBefore = #()
+				if selSet.count == 0 or (findItem selSet r) == 0 do selSet = #(r)
+				local targets = #()
+				for su in selSet do (
+					local rr = getRealIndex su
+					if rr > 0 and findItem targets rr == 0 do append targets rr
 				)
-			)
-
-			if uiIdx <= 0 or uiIdx > g_visibleIndices.count do return false
-
-			-- Второй клик двойного нажатия: действие уже сделал первый клик (или MouseDoubleClick),
-			-- этот MouseUp — просто хвост двойного клика.
-			if g_dblPending do (
-				g_dblPending = false
-				return false
-			)
-
-			local modStr = (dotNetClass "System.Windows.Forms.Control").ModifierKeys.ToString()
-			if matchPattern modStr pattern:"*Control*" or matchPattern modStr pattern:"*Shift*" do (
-				prev_sel = 0
-				g_pending_apply = 0
-				tmr_apply.active = false
+				-- Тоггл по реальным индексам выделенного набора (не гадаем по live-selection).
+				for tr in targets do (
+					local tv = batchRenderMgr.GetView tr
+					if tv == undefined do continue
+					if isGroupView tv then (
+						applyStateToGroup tr (not (groupCheckStateOf tr == "Checked"))
+					) else (
+						local uiIdx = findItem g_visibleIndices tr
+						if uiIdx > 0 then (
+							local newVal = not (tv.enabled == true)
+							tv.enabled = newVal
+							setRowCheckUi uiIdx newVal
+							refreshParentGroupCheck tr
+						)
+					)
+				)
+				-- Вернуть выделение (клик по галочке сбросил его) и показать результат.
+				setSelectedUiIndices selSet
 				lst_views.Invalidate()
+				updateViewsListButtons()
 				return false
 			)
-
-			local realIdx = getRealIndex uiIdx
-			local the_view = if realIdx > 0 then batchRenderMgr.GetView realIdx else undefined
-
-			if uiIdx == prev_sel and getSel() == uiIdx and (getSelectedUiIndices()).count == 1 then (
-				-- повторный клик по единственному выделенному элементу:
-				-- вид — применить в сцену, группа — свернуть/развернуть (отложено через
-				-- tmr_apply, чтобы отличить от двойного клика).
-				-- Список при этом не трогаем: содержимое не меняется, полная
-				-- перерисовка здесь была бы лишним «обновлением»/миганием.
-				if the_view != undefined then (
-					tmr_apply.active = false
-					g_pending_apply = realIdx
-					tmr_apply.active = true
-				)
-			) else (
-				-- новый выбор: только выделяем, галочку не трогаем.
-				-- У owner-draw списка в хостинге 3ds Max нативной перерисовки строк при
-				-- смене выделения нет (см. камеры — там нативная отрисовка, поэтому контрол
-				-- сам обновляет выделение). Поэтому перерисовываем только изменившиеся
-				-- строки (старую и новую), а не весь список — полная перерисовка давала
-				-- мигание всего списка при каждом выборе.
-				local oldUi = prev_sel
-				prev_sel = uiIdx
-				g_pending_apply = 0
-				tmr_apply.active = false
-				if oldUi > 0 and oldUi <= lst_views.Items.Count and oldUi != uiIdx do (
-					local r = lst_views.GetItemRectangle (oldUi - 1)
-					lst_views.Invalidate r
-				)
-				if uiIdx > 0 and uiIdx <= lst_views.Items.Count do (
-					local r = lst_views.GetItemRectangle (uiIdx - 1)
-					lst_views.Invalidate r
+			if c == 1 do (
+				local realIdxT = getRealIndex r
+				if realIdxT > 0 then (
+					local tv = batchRenderMgr.GetView realIdxT
+					if tv != undefined and isGroupView tv do doCollapseOnce realIdxT
 				)
 			)
+			false
 		)
 
-		-- Нативного чекбокса больше нет (plain ListBox) — toggle делает MouseDoubleClick
-
-		-- OWNER DRAW: у групп галочки нет, у видов рисуем квадрат-галочку сами
-		on lst_views DrawItem sender args do (
-			local idx = args.Index
-			if idx < 0 do return false
-			local rect = args.Bounds
-			local g = args.Graphics
-			local realIdx = getRealIndex (idx + 1)
-			local the_view = undefined
-			local isGroup = false
-			if realIdx > 0 do (
-				the_view = batchRenderMgr.GetView realIdx
-				if the_view != undefined do isGroup = isGroupView the_view
-			)
-			local isSelected = lst_views.GetSelected idx
-
-			local backBrush = dotNetObject "System.Drawing.SolidBrush" (
-				if isSelected then (dotNetClass "System.Drawing.SystemColors").Highlight else lst_views.BackColor
-			)
-			g.FillRectangle backBrush rect
-			backBrush.Dispose()
-
-			if the_view == undefined do return false
-
-			local textColor
-			if isSelected then
-				textColor = (dotNetClass "System.Drawing.SystemColors").HighlightText
-			else if isGroup then
-				textColor = (dotNetClass "System.Drawing.Color").FromARGB 190 190 190
-			else
-				textColor = lst_views.ForeColor
-
-			local x = rect.X + 2
-			if not isGroup then (
-				local boxSize = 12
-				local boxRect = dotNetObject "System.Drawing.Rectangle" x (rect.Y + ((rect.Height - boxSize) / 2)) boxSize boxSize
-				local borderPen = (dotNetClass "System.Drawing.Pens").Gray
-				g.DrawRectangle borderPen boxRect
-				if the_view.enabled then (
-					local blueColor = (dotNetClass "System.Drawing.Color").FromARGB 0 122 204
-					local fillBrush = dotNetObject "System.Drawing.SolidBrush" blueColor
-					g.FillRectangle fillBrush boxRect
-					fillBrush.Dispose()
-					local pen2 = (dotNetClass "System.Drawing.Pens").White
-					local cx = boxRect.X
-					local cy = boxRect.Y
-					g.DrawLine pen2 (cx + 3) (cy + 7) (cx + 6) (cy + 9)
-					g.DrawLine pen2 (cx + 6) (cy + 9) (cx + 10) (cy + 3)
-				)
-				x += boxSize + 7
-			)
-
-			local textBrush = dotNetObject "System.Drawing.SolidBrush" textColor
-			local textRect = dotNetObject "System.Drawing.RectangleF" (x as float) (rect.Y as float) ((rect.Width - (x - rect.X)) as float) (rect.Height as float)
-			local sf = dotNetObject "System.Drawing.StringFormat"
-			sf.LineAlignment = (dotNetClass "System.Drawing.StringAlignment").Center
-			sf.FormatFlags = (dotNetClass "System.Drawing.StringFormatFlags").NoWrap
-			sf.Trimming = (dotNetClass "System.Drawing.StringTrimming").EllipsisCharacter
-			g.DrawString (lst_views.Items.Item[idx] as string) args.Font textBrush textRect sf
-			sf.Dispose()
-			textBrush.Dispose()
-		)
-
-		on lst_views MouseDoubleClick sender args do (
-			local idx = lst_views.IndexFromPoint args.X args.Y
-			if idx < 0 do return false
-			local realIdx = getRealIndex (idx + 1)
+		-- Двойной клик: вид — применить к сцене + закрыть нативное окно; группа — свернуть.
+		-- Двойной клик по галке (колонка Chk) не относим к действиям строки.
+		on lst_views CellDoubleClick sender args do (
+			local r = args.RowIndex + 1
+			if r < 1 or r > g_visibleIndices.count do return false
+			local c = args.ColumnIndex
+			if c < 0 do return false
+			if c == 0 do return false
+			local realIdx = getRealIndex r
 			if realIdx <= 0 do return false
 			local the_view = batchRenderMgr.GetView realIdx
 			if the_view == undefined do return false
 			closeBatchWindow()
-			-- Windows шлёт MouseUp на каждый клик + ещё раз после MouseDoubleClick.
-			-- Гасим следующие MouseUp: действие двойного клика уже сделано здесь.
-			g_dblPending = true
-			-- Отменить отложенное действие «второго клика» — двойной клик = toggle.
-			tmr_apply.active = false
-			g_pending_apply = 0
-			-- Двойной клик: группа — свернуть/развернуть, вид — вкл/выкл enabled.
 			if isGroupView the_view then (
-				toggleGroupCollapse realIdx
+				doCollapseOnce realIdx
 			) else (
-				setViewCheckedAtUi (idx + 1) (not the_view.enabled)
+				-- Применение не меняет содержимое списка (имя и галочка те же),
+				-- поэтому список не перестраиваем — иначе он лишний раз мигает.
+				applyViewToScene the_view
+				getViewParams realIdx
 			)
 		)
 
-		-- Тик таймера: отложенное действие по «второму клику» — вид: применить в сцену, группа: свернуть/развернуть.
-		on tmr_apply tick do (
-			tmr_apply.active = false
-			local idx = g_pending_apply
-			g_pending_apply = 0
-			if idx > 0 then (
-				local uiIdx = findItem g_visibleIndices idx
-				if uiIdx > 0 and uiIdx == getSel() then (
-					local the_view = batchRenderMgr.GetView idx
-					if the_view != undefined then (
-						if isGroupView the_view then (
-							toggleGroupCollapse idx
-						) else (
-							-- Применение вида не меняет содержимое списка (имя и галочка те же),
-							-- поэтому список не перестраиваем — иначе он лишний раз мигает.
-							closeBatchWindow()
-							applyViewToScene the_view
-							getViewParams idx
-						)
+		-- ─── DRAG-AND-DROP REORDER ────────────────────────────────────
+		-- Логика: CellMouseDown фиксирует исходную строку и выделение.
+		-- Как только курсор пересекает соседнюю строку — начинается drag:
+		-- moveSelectedViews #up/#down (та же логика, что и кнопки ↑/↓),
+		-- listViews(), восстановление выделения. На MouseUp — финализация.
+		-- multi-select с Ctrl/Shift работает нативно; если в выделении
+		-- заголовок группы — moveSelectedViews двигает всю группу целиком.
+		-- Курсор drag: ищется готовый «кулак» grab.cur (см. getDragCursor);
+		-- если файла нет — открытая ладонь Cursors.Hand.
+		fn getDragCursor = (
+			local p = pathConfig.appendPath (getDir #userIcons) "grab.cur"
+			if doesFileExist p do (
+				try ( return dotNetObject "System.Windows.Forms.Cursor" p ) catch ()
+			)
+			try ( return (dotNetClass "System.Windows.Forms.Cursors").Hand ) catch ()
+			undefined
+		)
+		on lst_views MouseMove sender args do (
+			if g_dragSrcRow == 0 do return false
+			g_moveSeen = true
+			local ht = lst_views.HitTest args.X args.Y
+			local targetRow = ht.RowIndex + 1
+			if targetRow < 1 or targetRow > g_visibleIndices.count do return false
+
+			-- Пин-выделение: вернуть drag-набор на КАЖДОМ шаге MouseMove (ДО проверки
+			-- смены строки). Нативный DGV при движении мыши по строкам меняет Selection
+			-- на hover-строку (это происходит ПОСЛЕ нашего обработчика, SelectionChanged
+			-- его тоже восстанавливает) — без этого, пока строка под курсором не меняется
+			-- (в т.ч. когда группа ещё не может сдвинуться), выделение сбрасывается.
+			if g_dragging and g_dragPinSet.count > 0 do setSelectedUiIndices g_dragPinSet
+			if targetRow == g_dragCurrentRow do return false
+
+			-- Пересечение соседней строки → drag
+			if not g_dragging do (
+				g_dragging = true
+				-- MultiSelect=false на время drag УБИВАЕТ нативный marquee-выбор строк
+				-- (как в примере RenderDeck) — но ТОЛЬКО для одиночного drag:
+				-- при drag мультивыбора он остаётся true, чтобы весь набор подсвечивался
+				-- целиком (marquee гасит пин-восстановитель в SelectionChanged).
+				try ( lst_views.MultiSelect = (g_dragSet.count <= 1) ) catch ()
+				if g_dragSet.count > 0 do setSelectedUiIndices g_dragSet
+				local cur = undefined
+				try ( cur = getDragCursor() ) catch ()
+				if cur != undefined do lst_views.Cursor = cur
+			)
+
+			-- ── DRAG ЗАГОЛОВКА ГРУППЫ (ОДИНОЧНЫЙ): АТОМАРНО, МОНОТОННО ──
+			-- Группа (в т.ч. пустая) двигается ТОЛЬКО целиком. Целевой слот зависит ТОЛЬКО
+			-- от строки под курсором (монотонно по вертикали), а не от текущей позиции группы:
+			-- группа встаёт ПЕРЕД регионом, если курсор в его верхней половине, и ПОСЛЕ —
+			-- если в нижней. Целевая позиция всегда граница региона, поэтому группа никогда
+			-- не вклинивается внутрь чужой группы и не разрывает её; «скакание» вверх-вниз
+			-- исключено (позиция не пересчитывается от текущего положения группы).
+			local srcReal = 0
+			if g_dragSrcName != "" do (
+				for i2 = 1 to g_visibleIndices.count do (
+					if (batchRenderMgr.GetView g_visibleIndices[i2]).name == g_dragSrcName do (
+						srcReal = g_visibleIndices[i2]
+						exit
 					)
 				)
 			)
+			if srcReal == 0 do srcReal = getRealIndex g_dragSrcRow
+			local srcView = if srcReal > 0 then batchRenderMgr.GetView srcReal else undefined
+			if srcView != undefined and isGroupView srcView and g_dragSet.count == 1 then (
+				local allData = collectAllViewData()
+				if allData.count == 0 do return false
+				local gb = getGroupBounds srcReal
+				if gb[2] < gb[1] do return false
+				local targetReal = getRealIndex targetRow
+				if targetReal <= 0 do return false
+				-- Курсор внутри собственной группы → место прежнее
+				if targetReal >= gb[1] and targetReal <= gb[2] do return false
+				local regions = splitIntoGroups allData
+				local r2 = findGroupForView regions targetReal
+				if r2 == 0 do return false
+				-- Плоские границы региона под курсором
+				local rStart = 0
+				local rEnd = 0
+				local fx = 0
+				for ri = 1 to regions.count do (
+					for vd in regions[ri] do (
+						fx += 1
+						if ri == r2 then (
+							if rStart == 0 do rStart = fx
+							rEnd = fx
+						)
+					)
+				)
+				if rStart == 0 do return false
+				local upperHalf = ((targetReal - rStart) < (rEnd - targetReal))
+				-- Группа целиком (заголовок + виды)
+				local moved = for i = gb[1] to gb[2] collect allData[i]
+				local gbLen = gb[2] - gb[1] + 1
+				local rest = #()
+				for i = 1 to allData.count do (
+					if i < gb[1] or i > gb[2] do append rest allData[i]
+				)
+				-- Индексы региона r2 в «rest» (сдвиг, если регион был ниже группы)
+				local rStartN = if rStart > gb[2] then rStart - gbLen else rStart
+				local rEndN = if rEnd > gb[2] then rEnd - gbLen else rEnd
+				local insertPos = if upperHalf then rStartN else (rEndN + 1)
+				if insertPos < 1 do insertPos = 1
+				if insertPos > (rest.count + 1) do insertPos = rest.count + 1
+				-- Группа уже на целевом слоте → не перестраиваем
+				if insertPos == gb[1] do return false
+				local newData = #()
+				for i = 1 to (insertPos - 1) do append newData rest[i]
+				for mv in moved do append newData mv
+				for i = insertPos to rest.count do append newData rest[i]
+				closeBatchWindow()
+				rebuildBatchViews newData
+				listViews()
+				local newUi = 0
+				if g_dragSrcName != "" do (
+					for i2 = 1 to g_visibleIndices.count do (
+						if (batchRenderMgr.GetView g_visibleIndices[i2]).name == g_dragSrcName do (
+							newUi = i2
+							exit
+						)
+					)
+				)
+				if newUi > 0 then (
+					setSel newUi
+					g_dragCurrentRow = newUi
+					g_dragSrcRow = newUi
+					g_dragPinSet = #(newUi)
+				)
+				updateViewsListButtons()
+				return false
+			)
+			-- ── END DRAG ЗАГОЛОВКА ГРУППЫ ──────────────────────────────
+
+			-- Один шаг: moveSelectedViews (пересоздаёт batch views, список, выделение)
+			local dir = if targetRow > g_dragCurrentRow then #down else #up
+			local dragReals = #()
+			for ui in g_dragPinSet do (
+				local rr = getRealIndex ui
+				if rr > 0 and findItem dragReals rr == 0 do append dragReals rr
+			)
+			local newReal = if dragReals.count > 0 then moveSelectedViews dir selOverride:dragReals else moveSelectedViews dir
+			if newReal.count > 0 do (
+				listViews()
+				local selUis = #()
+				for r in newReal do (
+					local ui = findItem g_visibleIndices r
+					if ui > 0 and findItem selUis ui == 0 do append selUis ui
+				)
+				if selUis.count > 0 do setSelectedUiIndices selUis
+				g_dragCurrentRow = selUis[1]
+				g_dragPinSet = deepcopy selUis
+				updateViewsListButtons()
+			)
 		)
+
+		on lst_views MouseUp sender args do (
+			if g_dragging do (
+				g_dragFinished = true
+				try (
+					local cur = (dotNetClass "System.Windows.Forms.Cursors").Default
+					lst_views.Cursor = cur
+				) catch ()
+				-- Вернуть мультивыбор и подсветить ВЕСЬ перемещённый набор целиком
+				-- (во время drag MultiSelect=false подсвечивалась только одна строка).
+				try ( lst_views.MultiSelect = true ) catch ()
+				if g_dragPinSet.count > 0 do setSelectedUiIndices g_dragPinSet
+				updateViewsListButtons()
+			)
+			g_dragSrcRow = 0
+			g_dragCurrentRow = 0
+			g_dragging = false
+			g_dragSrcName = ""
+			g_dragLastRegion = 0
+			g_dragSet = #()
+			g_dragPinSet = #()
+			g_dragArmed = false
+			g_buttonDown = false
+			g_moveSeen = false
+		)
+		-- ─── END DRAG-AND-DROP ────────────────────────────────────────
 
 		on btn_views_info pressed do (
 			messageBox (L10N.trMsg "batchViewsInfoMsg") title:(L10N.trMsg "titleBatchViews")
@@ -4075,14 +4477,35 @@ macroScript Pankovea_BatchViewsManager
 				g_batch_view = undefined
 				g_view_name = ""
 				g_active_view = undefined
+				-- Подавить обработку SelectionChanged: setSel 0 + эвенты на мутациях Rows
+				-- в listViews не должны триггерить пробег по строкам (AccessViolation).
+				g_supressSel = true
 				setSel 0
 				listViews()
+				g_supressSel = false
 				updateViewsListButtons()
 			)
 			delGroupsCtx = #()
 			delPlainsCtx = #()
 		)
 		--) Конец КОНТЕКСТНОЕ МЕНЮ УДАЛЕНИЯ (rollout-локали)
+
+		-- ВЫДЕЛИТЬ ВСЕ ВИДЫ БЕЗ КАМЕРЫ (не группы) — удаление дальше обычной кнопкой ❌
+		on btn_select_nocam pressed do (
+			local selUis = #()
+			for i = 1 to batchRenderMgr.NumViews do (
+				local v = batchRenderMgr.GetView i
+				if v != undefined and not (isGroupView v) then (
+					local c = try ( v.camera ) catch ( undefined )
+					if c == undefined or not (isValidNode c) do (
+						local ui = findItem g_visibleIndices i
+						if ui > 0 and findItem selUis ui == 0 do append selUis ui
+					)
+				)
+			)
+			if selUis.count > 0 then setSelectedUiIndices selUis
+			else lst_views.ClearSelection()
+		)
 
 		-- DELETE VIEW / GROUP (одно выделение или несколько)
 		on btn_rem pressed do (
@@ -4206,11 +4629,11 @@ macroScript Pankovea_BatchViewsManager
 					append takenGroups grpStripped
 					local newGrpFull = if hasPrefix then srcPrefix + grpStripped else grpStripped
 
-					local hdrCopy = copy hdr
+					local hdrCopy = deepcopy hdr
 					hdrCopy.name = newGrpFull
 					append copyData hdrCopy
 					for i = (rg[1] + 1) to rg[2] do (
-						local vd = copy allData[i]
+						local vd = deepcopy allData[i]
 						local oldName = vd.name
 						local newName = duplicateViewName oldName undefined
 						local newClean = getCleanViewName newName
@@ -4234,7 +4657,7 @@ macroScript Pankovea_BatchViewsManager
 					)
 				) else (
 					-- ОДИНОЧНЫЙ ВИД
-					local vd = copy hdr
+					local vd = deepcopy hdr
 					local oldName = vd.name
 					local newName = duplicateViewName oldName undefined
 					local newClean = getCleanViewName newName
@@ -4267,7 +4690,7 @@ macroScript Pankovea_BatchViewsManager
 
 			-- Показать список и выделить ВСЕ созданные копии (блоком после последнего источника)
 			listViews()
-			lst_views.ClearSelected()
+			lst_views.ClearSelection()
 			local newReal = #()
 			for i = (insertAfter + 1) to (insertAfter + copyData.count) do (
 				if i <= batchRenderMgr.numViews do append newReal i
@@ -4292,25 +4715,12 @@ macroScript Pankovea_BatchViewsManager
 			updateViewsListButtons()
 		)
 
-		-- TOGGLE ENABLED (группа = все виды в ней, одиночный вид = один)
-		on btn_togleEnabled pressed do (
-			local selReal = getSelectedRealIdxs()
-			if selReal.count == 0 do return false
-			local targets = collectToggleTargets()
-			if targets.count == 0 do return false
-			closeBatchWindow()
-			local anyOff = false
-			for r in targets do (
-				if not (batchRenderMgr.GetView r).enabled do (anyOff = true; exit)
-			)
-			-- любая выключенная цель → включаем все; все включены → выключаем все
-			for r in targets do (batchRenderMgr.GetView r).enabled = anyOff
-			restoreSelectionByReal selReal
-			updateViewsListButtons()
-		)
-
 		-- TOGGLE ENABLED ALL
 		on btn_togleEnabledAll pressed do (
+			-- Выделение собираем ДО closeBatchWindow: закрытие нативного окна триггерит
+			-- внутреннее обновление, которое сбрасывает выделение lst_views,
+			-- и восстановить было бы уже нечего.
+			local savedSel = getSelectedRealIdxs()
 			closeBatchWindow()
 			local num = batchRenderMgr.numViews
 			local enb = 0
@@ -4327,6 +4737,13 @@ macroScript Pankovea_BatchViewsManager
 				if not (isGroupView the_view) do the_view.enabled = action
 			)
 			listViews()
+			local selUis = #()
+			for r in savedSel do (
+				local ui = findItem g_visibleIndices r
+				if ui > 0 and findItem selUis ui == 0 do append selUis ui
+			)
+			if selUis.count > 0 then setSelectedUiIndices selUis else setSel 0
+			updateViewsListButtons()
 		)
 
 		-- MOVE SELECTED UP (вид — свободно, в т.ч. в другую группу; заголовок — вся группа)
@@ -4365,7 +4782,7 @@ macroScript Pankovea_BatchViewsManager
 
 			listViews()
 			-- Выделить созданный заголовок (только его, сбросив мультивыбор)
-			lst_views.ClearSelected()
+			lst_views.ClearSelection()
 			for i = 1 to g_visibleIndices.count do (
 				if (batchRenderMgr.GetView g_visibleIndices[i]).name == sep_name do (
 					setSel i; exit
@@ -4404,13 +4821,13 @@ macroScript Pankovea_BatchViewsManager
 
 		on chk_snap changed state do (
 			g_snap = state
-			-- При включении — пристрелять активный вид через единый расчёт
-			-- (#wh: пара как есть -> фаза снэпа)
+			-- При включении — пристрелять активный вид: снэп ПАРЫ как есть
+			-- (явные значения при прямом вводе снэп не трогает — см. resolveRes).
 			if state do (
 				local src = getFieldSpaceSrc()
 				if src != undefined do (
-					local t = resolveRes mode:#wh w:src[1] h:src[2] val:src[1] val2:src[2]
-					applyViewRes t[1] t[2]
+					local smart = snapResolution src[1] src[2]
+					applyViewRes smart[1] smart[2]
 				)
 			)
 		)
@@ -4506,8 +4923,8 @@ macroScript Pankovea_BatchViewsManager
 			local oldW = txt_out_w.text as integer
 			local oldH = txt_out_h.text as integer
 			if oldW == undefined or oldH == undefined or oldW <= 0 or oldH <= 0 do return false
-			-- Единый расчёт: swap (стороны меняются местами, пропорция обратная);
-			-- снэп — в фазе resolveRes, результат применяем как есть
+			-- Единый расчёт: swap — строгая перестановка сторон (verbatim, без снэпа —
+			-- перестановка должна быть точной: снэп мог бы сменить пару, напр. 1872x2816 -> 2000x3000)
 			local t = resolveRes mode:#swap w:oldW h:oldH
 			txt_out_ratio.text = ((oldW as float) / oldH) as string
 			updateMpixField()
@@ -4517,6 +4934,8 @@ macroScript Pankovea_BatchViewsManager
 		)
 
 		on drdwn_re_presets selected idx do (
+			-- Программная синхронизация из syncPresetFromRatio — без применения
+			if g_syncPresetSel do return false
 			-- Мульти-режим, разные базы: применяем как btn_copy_res (предупреждение о пропорциях)
 			if isMultiEdit() and txt_out_w.text == "*" then (
 				if idx > 1 do (
