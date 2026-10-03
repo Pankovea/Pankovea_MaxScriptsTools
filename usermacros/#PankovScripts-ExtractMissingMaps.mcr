@@ -4,7 +4,7 @@
 	buttonText:"Extract Maps"
 	icon: #("pankov_ExtractMissing", 1)
 (
-	local VERSION = "v0.1 (2026.08.16)"
+	local VERSION = "v0.3 (2026.10.03)"
 	local iniFile = "$temp/ExtractMapsFromArchive.ini"
 	local iniSection = getFilenameFile (getThisScriptFilename())
 	local myRollout
@@ -32,14 +32,19 @@
 		"msgErrNoDest", "Specify the destination folder!") #(
 		"msgErrEmptyList", "The list of missing files is empty.") #(
 		"msgWarnNo7zip", "7-Zip not found. Expected: {0}\nArchives will be skipped.\nDownload: {1}") #(
-		"extractRollout.btnDeleteSelected", "Delete selected objects") #(
+		"extractRollout.btnImportMax", "1. Import .max + textures") #(
+		"extractRollout.btnImportMax.tooltip", "Merge the selected .max file from the source archive (or folder) — silently, all objects. Then automatically extract and relink the needed textures from the archive. Clean up with the Delete button (step 2).") #(
+		"extractRollout.btnDeleteSelected", "2. Delete selected objects") #(
 		"extractRollout.btnDeleteSelected.tooltip", "Delete selected objects and their textures from scene and disk. Undo restores objects (textures on disk are not restored).") #(
 		"msgDelConfirmHeader", "Delete {0} objects and their textures?") #(
 		"msgDelItems", "Delete") #(
+		"msgDelIfUnused", "Delete if textures not used") #(
+		"msgDelForce", "Delete textures anyway") #(
+		"msgDelRecursive", "Delete recursively (incl. other objects using these textures)") #(
 		"msgDelObjCount", "Objects deleted: {0}") #(
 		"msgDelMatCleared", "Cleared unused multi-material slots: {0} (in {1} materials)") #(
 		"msgDelUndoName", "Delete selected objects and their textures") #(
-		"msgDelDone", "Deleted: {0} objects, {1} textures from disk.") #(
+		"msgDelDone", "Deleted: {0} objects, {1} textures from disk, {2} textures protected.") #(
 		"msgBtnRunNo7z", "FIND → RELINK") #(
 		"msgInfoSelectObj", "Select objects in the scene.") #(
 		"msgInfoNoMatMissing", "No missing files found in the materials of the selected objects.") #(
@@ -52,6 +57,10 @@
 		"msgResultSuccess", "Relinked from folder: {0}\nExtracted from archives: {1}\nRelinked in scene: {2}\nLeft missing: {3}\n\nSave the scene!") #(
 		"msgResultNoRelink", "Extracted: {0}\n(relinking was not performed)") #(
 		"msgErrEmptyListAll", "The list of assets is empty.") #(
+		"msgImportNoMax", "No .max files found in the archive/folder.") #(
+		"msgImportMergeFailed", "Failed to merge the scene file.") #(
+		"msgImportMerged", "Merged: {0}, objects: {1}") #(
+		"msgImportExtAct", "Textures extracted: {0}, relinked in scene: {1} (from {2} needed files).\nStep 1/2 done — now delete unwanted objects (step 2).") #(
 		"msgInfoNoMatAll", "No assets found in the materials of the selected objects.") #(
 		"msgCanceled", "Canceled by user.") #(
 
@@ -75,6 +84,7 @@
 		"stCanceled", "Canceled") #(
 		"stReady", "Ready") #(
 		"stPreparing", "Preparing...") #(
+		"stMerging", "Merging scene file...") #(
 		"stTaken", "Taken from selection: {0}") #(
 		"stExcluded", "Excluded files: {0}") #(
 		"stSearchAll", "Searching for assets...") #(
@@ -281,7 +291,96 @@
 			if ATSOps.NumFilesSelected() > 0 do ok = ATSOps.SetPathOnSelection newPath
 			ATSOps.ClearSelection()
 		) catch ()
+		-- прямое переписывание пути в картах, которые ATS не видит (V-Ray BlendMtl массивы и т.п.)
+		relinkBitmapPathsByMap #(#(toLower (cleanFilename orig), newPath))
 		ok
+	)
+
+	-- Возвращает #(имяСвойстваСФайлом, значение) для карт, у которых путь лежит
+	-- в поле, отличном от стандартного "filename" (VRayBitmap/VRayHDRI — HDRIMapName,
+	-- Redshift — tex0_filename..., CoronaBitmap/Arnold ai_Image — filename и т.п.).
+	-- Для процедурных карт без файла возвращает undefined.
+	fn getMapFileProp m =
+	(
+		if m == undefined then return undefined
+		local n = try ( getNumSubTexmaps m ) catch 0
+		-- если карта имеет subtexmaps, это контейнер (не файловая карта) — не проверяем поля
+		if n > 0 then return undefined
+		local fields = #("filename", "HDRIMapName", "tex0_filename", "tex1_filename", "tex2_filename", "tex3_filename", "tex4_filename")
+		for f in fields do
+			if isProperty m (f as name) then
+			(
+				local v = try ( getProperty m (f as name) ) catch undefined
+				if v != undefined and (classof v) == String and v != "" then return #(f as name, v)
+			)
+		undefined
+	)
+
+	-- Собрать сами bitmap-карты материала (рекурсивно, включая V-Ray BlendMtl массивы).
+	-- Возвращает пары #(карта, имяФайловогоСвойства) — для перезаписи пути через setProperty.
+	fn collectBitmapMaps mat &outMaps =
+	(
+		if mat == undefined then return undefined
+		local fp = getMapFileProp mat
+		if fp != undefined then
+		(
+			appendIfUnique outMaps #(mat, fp[1])
+			return undefined
+		)
+		local tmp = try (getProperty mat #texmap_blend) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+				if tmp[i] != undefined then collectBitmapMaps tmp[i] outMaps
+		tmp = try (getProperty mat #coatMtl) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+				if tmp[i] != undefined then collectBitmapMaps tmp[i] outMaps
+		tmp = try (getProperty mat #baseMtl) catch undefined
+		if tmp != undefined then collectBitmapMaps tmp outMaps
+		local n = getNumSubTexmaps mat
+		for i = 1 to n do
+		(
+			local sub = getSubTexmap mat i
+			if sub != undefined then collectBitmapMaps sub outMaps
+		)
+		if isKindOf mat MultiMaterial then
+			for i = 1 to mat.numsubs do
+				if mat[i] != undefined then collectBitmapMaps mat[i] outMaps
+	)
+	
+	-- Прямое переписывание путей bitmap-карт сцены и ME: берём карты, файл которых
+	-- не существует на диске (ещё потерян), и у которых имя совпадает с одним из targets.
+	-- targets: #( #(имяФайлаНижнийРегистр, новыйПутьПолный), ... )
+	fn relinkBitmapPathsByMap targets =
+	(
+		local allMaps = #()
+		for o in objects do
+			if o.material != undefined then collectBitmapMaps o.material allMaps
+		-- материал, висящий только в Material Editor (нужно найти для V-Ray/сложных карт)
+		for i = 1 to meditmaterials.count do
+		(
+			local m = try ( meditmaterials[i] ) catch undefined
+			if m != undefined then collectBitmapMaps m allMaps
+		)
+		local n = 0
+		for pair in allMaps do
+		(
+			local bm = pair[1]
+			local field = pair[2]
+			local cur = try ((getProperty bm field) as string) catch ""
+			if cur != "" and not (doesFileExist cur) then
+			(
+				local cn = toLower (cleanFilename cur)
+				for t in targets do
+					if t[1] == cn then
+					(
+						if (toLower cur) != (toLower t[2]) then
+							try ( setProperty bm field t[2]; n += 1 ) catch ()
+						exit
+					)
+			)
+		)
+		n
 	)
 
 	-- Переназначение группы файлов в одну папку (сохраняя имена файлов)
@@ -302,6 +401,10 @@
 				)
 				ATSOps.ClearSelection()
 			) catch ()
+			-- прямое переписывание путей в картах, которых ATS не видит
+			local targets = #()
+			for o in origs do append targets #(toLower (cleanFilename o), folder + "\\" + (filenameFromPath o))
+			n += relinkBitmapPathsByMap targets
 		)
 		n
 	)
@@ -310,12 +413,20 @@
 	fn materialUsesFile mat targetLower =
 	(
 		if mat == undefined then return false
-		if isKindOf mat BitmapTexture then
-		(
-			local bmap = mat.filename
-			if bmap != undefined and (toLower (cleanFilename bmap)) == targetLower then return true
-			return false
-		)
+		-- карта с известным файловым свойством (filename / HDRIMapName / tex0_filename...)
+		local fp = getMapFileProp mat
+		if fp != undefined then
+			return (toLower (cleanFilename fp[2])) == targetLower
+		local tmp = try (getProperty mat #texmap_blend) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+				if tmp[i] != undefined and (materialUsesFile tmp[i] targetLower) then return true
+		tmp = try (getProperty mat #coatMtl) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+				if tmp[i] != undefined and (materialUsesFile tmp[i] targetLower) then return true
+		tmp = try (getProperty mat #baseMtl) catch undefined
+		if tmp != undefined and (materialUsesFile tmp targetLower) then return true
 		local n = getNumSubTexmaps mat
 		for i = 1 to n do
 		(
@@ -332,11 +443,31 @@
 	fn findMapAndParent mat targetLower =
 	(
 		if mat == undefined then return undefined
-		if isKindOf mat BitmapTexture then
+		local fp = getMapFileProp mat
+		if fp != undefined then
 		(
-			local bmap = mat.filename
-			if bmap != undefined and (toLower (cleanFilename bmap)) == targetLower then return #(undefined, mat)
+			if (toLower (cleanFilename fp[2])) == targetLower then return #(undefined, mat)
 			return undefined
+		)
+		local tmp = try (getProperty mat #texmap_blend) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+			(
+				local r = findMapAndParent tmp[i] targetLower
+				if r != undefined then return #(mat, r[2])
+			)
+		tmp = try (getProperty mat #coatMtl) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+			(
+				local r = findMapAndParent tmp[i] targetLower
+				if r != undefined then return #(mat, r[2])
+			)
+		tmp = try (getProperty mat #baseMtl) catch undefined
+		if tmp != undefined then
+		(
+			local r = findMapAndParent tmp targetLower
+			if r != undefined then return #(mat, r[2])
 		)
 		local n = getNumSubTexmaps mat
 		for i = 1 to n do
@@ -360,12 +491,26 @@
 	fn collectTexturesFromMaterial mat &outTex =
 	(
 		if mat == undefined then return undefined
-		if isKindOf mat BitmapTexture then
+		-- если карта хранит файл в любом известном файловом свойстве (в т.ч. VRayBitmap/VRayHDRI
+		-- HDRIMapName, Redshift tex0_filename и т.п.) — собираем путь и не углубляемся
+		local fp = getMapFileProp mat
+		if fp != undefined then
 		(
-			local bmap = mat.filename
-			if bmap != undefined then appendIfUnique outTex bmap
+			appendIfUnique outTex fp[2]
 			return undefined
 		)
+		-- V-Ray BlendMtl (V-Ray 4+): карты/подматериалы лежат в массивах
+		-- texmap_blend[], coatMtl[] и baseMtl, которые getNumSubTexmaps не видит.
+		local tmp = try (getProperty mat #texmap_blend) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+				if tmp[i] != undefined then collectTexturesFromMaterial tmp[i] outTex
+		tmp = try (getProperty mat #coatMtl) catch undefined
+		if tmp != undefined and classof tmp == Array then
+			for i = 1 to tmp.count do
+				if tmp[i] != undefined then collectTexturesFromMaterial tmp[i] outTex
+		tmp = try (getProperty mat #baseMtl) catch undefined
+		if tmp != undefined then collectTexturesFromMaterial tmp outTex
 		local n = getNumSubTexmaps mat
 		for i = 1 to n do
 		(
@@ -405,29 +550,55 @@
 	-- Контекст для rcmenu удаления (popUpMenu не блокирует: on picked срабатывает после возврата)
 	global g_extractMA_roll = undefined
 	global g_extractMA_delCtx = #()
-
+	-- Контекст и обработчик выбора .max для импорта (dotNet ContextMenuStrip: как rmc_confirm_delete, обработчик срабатывает после закрытия меню)
+	global g_extractMA_importCtx = #()
+	global g_extractMA_importMenu = undefined   -- ссылка на живое меню (чтобы не собрал GC), как REMS_tcmMenu
+	fn extractMaOnImportPick sender args =
+	(
+		global g_extractMA_importCtx
+		local files = g_extractMA_importCtx
+		local idx = try (sender.Tag as integer) catch (0)
+		if idx > 0 and idx <= files.count and g_extractMA_roll != undefined then
+			g_extractMA_roll.importMaxAfterPick files[idx]
+	)
+	-- Обёртка вызова удаления: до попапа список сохраняется без deepCopy (см. btnDeleteSelected),
+	-- здесь берём его и очищаем контекст. undo восстанавливает объекты и слоты (файлы — нет).
+	fn delObjectsByMode mode =
+	(
+		local objList = g_extractMA_delCtx
+		g_extractMA_delCtx = #()
+		if objList == undefined or objList.count == 0 do return false
+		undo label:(L10N.trMsg "msgDelUndoName") on
+		(
+			g_extractMA_roll.deleteSelectedObjectsAndTextures objList mode:mode
+		)
+	)
 	-- Контекстное меню подтверждения удаления выделенных объектов с текстурами.
 	-- popUpMenu не блокирует выполнение: on <item> picked срабатывает после возврата из popUpMenu.
 	-- Отмена = клик вне меню (ни один picked не сработает — операция безопасно не выполнится).
+	-- Режим удаления передаётся в deleteSelectedObjectsAndTextures:
+	--   #ifUnused   — удалять текстуры, только если они нигде больше не используются (текущее поведение)
+	--   #force      — удалять текстуры в любом случае (даже если используются другими объектами)
+	--   #recursive  — к выделению добавить все объекты, использующие те же материалы, затем как #force
 	rcmenu rmc_confirm_delete (
 		menuItem mi_header "" enabled:false
 		separator sep_del
 		menuItem mi_delete ""
+		separator sep_del2
+		menuItem mi_force ""
+		menuItem mi_recursive ""
 
 		on rmc_confirm_delete open do (
 			mi_header.text = L10N.trMsg "msgDelConfirmHeader" args:#(g_extractMA_delCtx.count)
 			mi_delete.text = L10N.trMsg "msgDelItems"
+			mi_force.text = L10N.trMsg "msgDelForce"
+			mi_recursive.text = L10N.trMsg "msgDelRecursive"
 		)
-		on mi_delete picked do (
-			local objList = g_extractMA_delCtx
-			g_extractMA_delCtx = #()
-			-- undo: восстанавливает удалённые объекты и очищенные слоты (файлы с диска — нет)
-			undo label:(L10N.trMsg "msgDelUndoName") on
-			(
-				g_extractMA_roll.deleteSelectedObjectsAndTextures objList
-			)
-		)
+		on mi_delete picked do delObjectsByMode #ifUnused
+		on mi_force picked do delObjectsByMode #force
+		on mi_recursive picked do delObjectsByMode #recursive
 	)
+
 	rollout extractRollout "Extract Missing Assets from Archive" width:500
 	(
 		group "Missing assets" (
@@ -437,15 +608,17 @@
 				tooltip:"On: missing files only. Off: all scene assets."
 
 			label lblCount "Missing files: 0" height:16 align:#left
-			listbox lbxMissing items:#() height:13 width:475 multiSelect:true
+			dotNetControl lbxMissing "System.Windows.Forms.ListBox" height:195 width:475
 
 			button btnSelScene "Select in scene" width:150 height:24 across:3 align:#left
 			button btnLoadMat "Load to material editor" width:150 height:24 align:#center
 			button btnExclude "Exclude from search" width:150 height:24 align:#right
 		)
 		group "Options" (
-			label lblSource "Archive or folder for searching:" align:#left
-			edittext edtSource text:"" width:350
+			label lblSource "DropZone: Place to search for missing files" align:#left \
+				tooltip:"Drop archive or folder onto the field or onto the missing-assets list below."
+			dotNetControl edtSource "System.Windows.Forms.TextBox" width:350 height:20
+
 			button btnBrowseFile "File" width:55 align:#right offset:[0, -26]
 			button btnBrowseFolder "Folder" width:55 align:#right  offset:[-60, -26]
 
@@ -461,7 +634,9 @@
 				tooltip:"On: keep the parent folder/archive of the found texture. Off: put everything into the destination root."
 		)
 
-		button btnDeleteSelected "Delete selected objects with textures" height:20 width:210 align:#right \
+		button btnImportMax "1. Import .max + textures" height:20 width:228 align:#right across:2 \
+			tooltip:"Merge the selected .max file from the source archive and extract+relink needed textures automatically"
+		button btnDeleteSelected "2. Delete selected objects with textures" height:20 width:230 align:#left \
 			tooltip:"Delete selected objects and their textures from scene (with undo) and from disk (no undo)"
 		button btnRun "FIND → EXTRACT → RELINK" height:40 width:475 align:#center
 		
@@ -486,8 +661,9 @@
 
 		fn refreshMissingList list =
 		(
-			lbxMissing.items = list
-			lbxMissing.selection = 0
+			lbxMissing.Items.Clear()
+			for s in list do lbxMissing.Items.Add s
+			lbxMissing.SelectedIndex = -1
 			if chkOnlyMissing.checked then
 				lblCount.text = L10N.trMsg "lblCountFormat" args:#(list.count)
 			else
@@ -520,12 +696,9 @@
 
 		fn getSelectedIndices =
 		(
-			local s = lbxMissing.selection
 			local idxs = #()
-			if s != 0 then
-			(
-				if classof s == Array then idxs = s else append idxs s
-			)
+			for i = 0 to (lbxMissing.SelectedIndices.Count - 1) do
+				append idxs ((lbxMissing.SelectedIndices.GetValue i) + 1)
 			idxs
 		)
 
@@ -569,10 +742,329 @@
 			if sevenZipPath() == "" then btnRun.text = L10N.trMsg "msgBtnRunNo7z"
 		)
 
+		-- Полный список .max-файлов в архиве (для кнопки импорта)
+		fn listMaxFilesInArchive archivedPath =
+		(
+			local res = #()
+			if sevenZipPath() == "" then return res
+			local lres = run7z ("l \"" + archivedPath + "\" -r -spd -slt -bso1 -bsp0")
+			local gotFirst = false
+			for line in (filterString lres[2] "\n") do
+			(
+				if (matchPattern line pattern:"Path = *") then
+				(
+					if not gotFirst then
+						gotFirst = true
+					else
+					(
+						local sp = trimRight (substring line 8 -1) "\r"
+						if sp.count > 0 and (toLower (getFileNameType sp)) == ".max" then
+							append res sp
+					)
+				)
+			)
+			res
+		)
+
+		-- Извлечение одного .max из архива во временную папку; возвращает путь
+		fn extractMaxFromArchive archivedPath storedPath tmpDir =
+		(
+			local ok = ensureDir tmpDir
+			if not ok then return undefined
+			local args = "e \"" + archivedPath + "\" -o\"" + tmpDir + "\" \"" + storedPath + "\" -y -aos -spd -bso1 -bsp0"
+			local r = run7z args
+			local localPath = tmpDir + "\\" + (filenameFromPath (substituteString storedPath "/" "\\"))
+			if doesFileExist localPath then localPath else undefined
+		)
+
+		-- Полный список содержимого архива (импорт: сопоставление текстур)
+		fn listArchivePaths archivedPath =
+		(
+			local res = #()
+			if sevenZipPath() == "" then return res
+			local lres = run7z ("l \"" + archivedPath + "\" -r -spd -slt -bso1 -bsp0")
+			local gotFirst = false
+			for line in (filterString lres[2] "\n") do
+			(
+				if (matchPattern line pattern:"Path = *") then
+				(
+					if not gotFirst then
+						gotFirst = true
+					else
+					(
+						local sp = trimRight (substring line 8 -1) "\r"
+						if sp.count > 0 then append res sp
+					)
+				)
+			)
+			res
+		)
+		
+		-- Merge всего содержимого выбранного .max (молча) + авто-извлечение нужных
+		-- текстур из того же архива и relink. Вызывается напрямую (1 .max) или из
+		-- обработчика popup (несколько). Возвращает список смёрженных нод (#() при ошибке).
+		fn importMaxAfterPick chosen =
+		(
+			local srcPath = trimRight edtSource.text "\\"
+			local destPath = trimRight edtDest.text "\\"
+
+			local tmpMax = undefined
+			if isArchiveFile srcPath then
+			(
+				local tmpDir = (getDir #temp) + "\\ExtractMapsFromArchive_max"
+				tmpMax = extractMaxFromArchive srcPath chosen tmpDir
+				if tmpMax == undefined then
+				(
+					logText ((L10N.trMsg "msgImportMergeFailed") + "\n")
+					return #()
+				)
+			)
+			else tmpMax = chosen
+
+			lblStatus.text = L10N.trMsg "stMerging"
+			local mergedNodes = #()
+			local ok = false
+			try
+			(
+				ok = mergeMAXFile tmpMax \
+					#select #autoRenameDups #useMergedMtlDups #mergeChildren \
+					quiet:true mergedNodes:&mergedNodes
+			) catch ( format ">>> importMAXFile: %\n" (getCurrentException()) )
+			-- временный .max после мержа удаляем
+			if isArchiveFile srcPath and tmpMax != undefined then
+				try ( deleteFile tmpMax ) catch ()
+
+			if not ok then
+			(
+				logText ((L10N.trMsg "msgImportMergeFailed") + "\n")
+				return #()
+			)
+			logText ((L10N.trMsg "msgImportMerged" args:#(chosen, mergedNodes.count)) + "\n")
+
+			-- авто-этап: найти потерянные текстуры импортированных нод в ТОМ ЖЕ архиве и извлечь+relink
+			-- (эквивалент FIND→EXTRACT→RELINK для нового сценария)
+			extractMA_missingFiles = #()
+			local tex = #()
+			for n in mergedNodes do
+				if n.material != undefined then collectTexturesFromMaterial n.material &tex
+			for t in tex do appendIfUnique extractMA_missingFiles t
+			refreshMissingList extractMA_missingFiles
+			local toExtract = #()
+			for t in tex do
+			(
+				local clean = cleanFilename t
+				if (findItem toExtract clean) == 0 then append toExtract clean
+			)
+			-- прямое переназначение отрелинковывается в конце; извлекаем из архива/папки в dest
+			local extractDirs = #()
+			local nFound = 0
+			-- источник файла .max: текстуры ищем в папке рядом с ним
+			local searchPath = if isDirectory srcPath then srcPath else (getFilenamePath srcPath)
+			if toExtract.count > 0 then
+			(
+				if not (isArchiveFile srcPath) then
+				(
+					-- папка: ищем файлы по имени напрямую
+					local folderFiles = collectFiles searchPath true
+					local filesByName = for f in folderFiles collect (toLower (filenameFromPath f))
+					for clean in toExtract do
+					(
+						local c = toLower clean
+						local idx = findItem filesByName c
+						if idx != 0 then
+						(
+							local target = folderFiles[idx]
+							local tdir = destSubDir target destPath chkKeepPath.checked
+							local tFull = tdir + "\\" + (filenameFromPath target)
+							if (toLower tFull) == (toLower target) then nFound += 1
+							else
+							(
+								if (ensureDir tdir) and (copyFileOverwrite target tFull) then
+								(
+									appendIfUnique extractDirs tdir
+									nFound += 1
+								)
+							)
+						)
+					)
+				)
+				else
+				(
+					local storedPaths = listArchivePaths srcPath
+					local matchedStored = #()
+					for clean in toExtract do
+					(
+						local c = toLower clean
+						for sp in storedPaths do
+						(
+							local spName = toLower (filenameFromPath (substituteString sp "/" "\\"))
+							if spName == c and (findItem matchedStored sp) == 0 then append matchedStored sp
+						)
+					)
+					if matchedStored.count > 0 then
+					(
+						local targets = #()
+						for sp in matchedStored do
+						(
+							local spWin = substituteString sp "/" "\\"
+							local fname = filenameFromPath spWin
+							local tdir = destSubDir spWin destPath chkKeepPath.checked
+							append targets #(sp, tdir, tdir + "\\" + fname)
+						)
+						local groups = #()
+						for t in targets do
+						(
+							local gi = 0
+							for k = 1 to groups.count do
+								if groups[k][1] == t[2] then (gi = k; exit)
+							if gi == 0 then append groups #(t[2], #(t[1]))
+							else append groups[gi][2] t[1]
+						)
+						for g in groups do
+						(
+							ensureDir g[1]
+							appendIfUnique extractDirs g[1]
+							local incArgs = ""
+							for sp in g[2] do incArgs += " \"" + sp + "\""
+							local args = "e \"" + srcPath + "\" -o\"" + g[1] + "\"" + incArgs + " -r -y -aos -spd -bso1 -bsp0"
+							run7z args
+						)
+						for t in targets do if doesFileExist t[3] then nFound += 1
+					)
+				)
+			)
+			removeEmptyDirs destPath destPath
+
+			-- relink извлечённого
+			local relinked = 0
+			if chkRelink.checked and extractDirs.count > 0 then
+			(
+				for ed in extractDirs do
+				(
+					local group = #()
+					for i = 1 to extractMA_missingFiles.count do
+					(
+						local clean = cleanFilename extractMA_missingFiles[i]
+						if doesFileExist (ed + "\\" + clean) then append group extractMA_missingFiles[i]
+					)
+					if group.count > 0 then relinked += relinkBatch group ed
+				)
+				ATSOps.Refresh()
+			)
+
+			lblStatus.text = L10N.trMsg "stReady"
+			logText ((L10N.trMsg "msgImportExtAct" args:#(nFound, relinked, extractMA_missingFiles.count)) + "\n")
+			mergedNodes
+		)
+
+		-- Этап 1: импорт .max в сцену. Валидация + сбор списка .max + выбор (popup у курсора,
+		-- если несколько). Собственно merge и авто-извлечение — в importMaxAfterPick.
+		fn importMaxStart =
+		(
+			local srcPath = trimRight edtSource.text "\\"
+			local destPath = trimRight edtDest.text "\\"
+			if not (doesFileExist srcPath) then
+			(
+				messageBox (L10N.trMsg "msgErrNoSource") title:(L10N.trMsg "titleError")
+				return false
+			)
+			if destPath == "" then
+			(
+				messageBox (L10N.trMsg "msgErrNoDest") title:(L10N.trMsg "titleError")
+				return false
+			)
+			makeDir destPath
+
+			local maxFiles = #()
+			if (isArchiveFile srcPath) then
+			(
+				if sevenZipPath() == "" then
+				(
+					logText ((L10N.trMsg "msgWarnNo7zip" args:#(sevenZipPaths as string, "https://www.7-zip.org/")) + "\n")
+					return false
+				)
+				maxFiles = listMaxFilesInArchive srcPath
+			)
+			else if (isDirectory srcPath) then
+			(
+				for f in (collectFiles srcPath true) do
+					if (toLower (getFileNameType f)) == ".max" then append maxFiles f
+			)
+			else if (toLower (getFileNameType srcPath)) == ".max" then
+				maxFiles = #(srcPath)
+
+			if maxFiles.count == 0 then
+			(
+				logText ((L10N.trMsg "msgImportNoMax") + "\n")
+				return false
+			)
+
+			if maxFiles.count == 1 then
+			(
+				importMaxAfterPick maxFiles[1]
+			)
+			else
+			(
+				-- popup у курсора: пункт на каждый .max (стиль dotNet ContextMenuStrip из REMS).
+				-- Для папки показываем путь, относительный выбранной папке (как записи в архиве).
+				global g_extractMA_importCtx = maxFiles
+				local cms = dotNetObject "System.Windows.Forms.ContextMenuStrip"
+				cms.ShowImageMargin = false
+				cms.ShowCheckMargin = false
+				local isDir = isDirectory srcPath
+				for i = 1 to maxFiles.count do
+				(
+					local label = maxFiles[i] as string
+					if isDir then
+					(
+						local rel = label
+						if rel.count > srcPath.count then rel = substring rel (srcPath.count + 1) -1
+						if rel.count > 0 and (substring rel 1 1) == "\\" then rel = substring rel 2 -1
+						if rel.count > 0 then label = rel
+					)
+					local item = cms.Items.Add label
+					item.Tag = i
+					dotNet.AddEventHandler item "Click" extractMaOnImportPick
+				)
+				global g_extractMA_importMenu = cms
+				cms.Show (dotNetClass "System.Windows.Forms.Cursor").Position
+			)
+			true
+		)
+		
 		-- Удаление выделенных объектов и их текстур (без отмены, вызывается из rcmenu)
-		fn deleteSelectedObjectsAndTextures objList =
+		-- mode: #ifUnused — удалять текстуры, только если нигде больше не используются (текущее поведение)
+		--       #force    — удалять текстуры в любом случае (даже если используются другими объектами)
+		--       #recursive — к выделению добавить все объекты, использующие те же материалы, затем как #force
+		fn deleteSelectedObjectsAndTextures objList mode:#ifUnused =
 		(
 			if objList == undefined or objList.count == 0 do return false
+			-- отсеиваем уже удалённые/невалидные узлы (напр. члены удалённой группы)
+			objList = for o in objList where isValidNode o collect o
+			if objList.count == 0 do return false
+
+			-- рекурсивный режим: расширить список объектами, чьи материалы используют те же
+			-- текстуры (не только побайтово те же материалы — находим и «другие» материалы,
+			-- у которых в любой карте встречается тот же файл текстуры)
+			if mode == #recursive then
+			(
+				-- оставшиеся у выделенных объектов файлы текстур
+				local texFiles = #()
+				local tmpTex = #()
+				for obj in objList do
+					if obj.material != undefined then collectTexturesFromMaterial obj.material &tmpTex
+				for t in tmpTex do appendIfUnique texFiles (toLower (cleanFilename t))
+				print ("[Cleanup] recursive: textures of selection = " + (texFiles as string))
+				for o in objects do
+					if (findItem objList o) == 0 and o.material != undefined then
+					(
+						local matches = false
+						for tf in texFiles do
+							if materialUsesFile o.material tf then ( matches = true; exit )
+						if matches then append objList o
+					)
+			)
+
 			-- 1) собрать текстуры и материалы выделенных объектов
 			local textures = #()
 			local materials = #()
@@ -587,7 +1079,7 @@
 			)
 
 			-- 2) удалить объекты из сцены
-			for obj in objList do delete obj
+			for obj in objList where isValidNode obj do delete obj
 			logText ((L10N.trMsg "msgDelObjCount" args:#(objList.count)) + "\n")
 
 			-- 3) очистить слоты мультиматериала, субматериалы которых больше не используются
@@ -659,15 +1151,24 @@
 			-- 4) неиспользуемые текстуры. Текстура «используется», только если есть у материала,
 			--    назначенного на объект сцены. Материал, висящий в слоте ME (map-library), а также
 			--    очищенные слоты мультиматериалов, файлы с диска НЕ защищают.
+			--    #force/#recursive: защиту игнорируем и удаляем всё.
 			local sceneTexFinal = collectSceneTextureNames ()
-			print ("[Cleanup] step4: candidate textures from deleted objects = " + ((for t in textures collect (cleanFilename t)) as string))
+			print ("[Cleanup] step4: mode=" + (mode as string) + ", candidate textures from deleted objects = " + ((for t in textures collect (cleanFilename t)) as string))
 			print ("[Cleanup] step4: scene objects-only assets (" + (sceneTexFinal.count as string) + "): " + (sceneTexFinal as string))
 			local unused = #()
+			local protected = #()
 			for t in textures do
-				if (findItem sceneTexFinal (toLower (cleanFilename t))) == 0 then appendIfUnique unused t
+			(
+				local inScene = (findItem sceneTexFinal (toLower (cleanFilename t))) != 0
+				if mode == #ifUnused and inScene then
+					appendIfUnique protected t
+				else
+					appendIfUnique unused t
+			)
 			print ("[Cleanup] step4: unused (to delete) = " + ((for t in unused collect (cleanFilename t)) as string))
+			print ("[Cleanup] step4: protected = " + ((for t in protected collect (cleanFilename t)) as string))
 
-			-- 5) удалить неиспользуемые текстуры с диска
+			-- 5) удалить текстуры с диска
 			local deletedCount = 0
 			for t in unused do
 			(
@@ -682,7 +1183,7 @@
 					print ("[Cleanup] step4: \"" + (cleanFilename t) + "\" already missing on disk")
 			)
 
-			logText ((L10N.trMsg "msgDelDone" args:#(objList.count, deletedCount)) + "\n")
+			logText ((L10N.trMsg "msgDelDone" args:#(objList.count, deletedCount, protected.count)) + "\n")
 			lblStatus.text = L10N.trMsg "stReady"
 			true
 		)
@@ -691,7 +1192,7 @@
 		(
 			-- ccылка на rollout для rcmenu (обработчики rcmenu — члены скоупа макроса)
 			global g_extractMA_roll = extractRollout
-			-- настройка dotNet-лога: свойства применяются только после создания окна
+			-- dotNet-лог: обычный лог (только текст)
 			edtLog.ReadOnly = true
 			edtLog.Multiline = true
 			edtLog.WordWrap = true
@@ -699,6 +1200,21 @@
 			edtLog.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").FixedSingle
 			edtLog.BackColor = (dotNetClass "System.Drawing.Color").FromArgb 68 68 68
 			edtLog.ForeColor = (dotNetClass "System.Drawing.Color").FromArgb 255 255 255
+
+			-- drag'n'drop на поле edtSource (dotNet TextBox): AllowDrop включается только после создания окна,
+			-- обработчики DragEnter/DragDrop объявлены штатными хендлерами rollout (on edtSource DragEnter/DragDrop)
+			edtSource.AllowDrop = true
+			-- поле в цвет интерфейса (тёмная тема)
+			edtSource.BackColor = (dotNetClass "System.Drawing.Color").FromArgb 68 68 68
+			edtSource.ForeColor = (dotNetClass "System.Drawing.Color").FromArgb 255 255 255
+			edtSource.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").FixedSingle
+
+			-- список потерянных ассетов = DropZone (принимает drop файла/архива)
+			lbxMissing.BackColor = (dotNetClass "System.Drawing.Color").FromArgb 68 68 68
+			lbxMissing.ForeColor = (dotNetClass "System.Drawing.Color").FromArgb 255 255 255
+			lbxMissing.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").FixedSingle
+			lbxMissing.IntegralHeight = false
+			lbxMissing.AllowDrop = true
 
 			-- очистка лога
 			edtLog.text = ""
@@ -744,6 +1260,52 @@
 
 		on btnBrowseDest pressed do
 			(local d = getSavePath(); if d != undefined do edtDest.text = d)
+
+		-- drag'n'drop DropZone: поле edtSource + большой лог edtLog (обе зоны принимают drop)
+		-- AllowDrop включается в on extractRollout open, подсветка зоны при наведении (DragEnter/DragLeave)
+		fn dropzoneEffect e =
+		(
+			local df = (dotNetClass "System.Windows.Forms.DataFormats").FileDrop
+			e.Effect = if e.Data.GetDataPresent df then \
+				(dotNetClass "System.Windows.Forms.DragDropEffects").Copy \
+				else (dotNetClass "System.Windows.Forms.DragDropEffects").None
+		)
+
+		fn dropzonePath e =
+		(
+			local df = (dotNetClass "System.Windows.Forms.DataFormats").FileDrop
+			if not (e.Data.GetDataPresent df) then return ""
+			local paths = e.Data.GetData df
+			if paths == undefined then return ""
+			local p = try (paths[1] as string) catch ""
+			if p == "" then try (p = paths.GetValue 0 as string) catch ""
+			p
+		)
+		
+		fn dropzoneHi src is_active =
+		(
+			src.BackColor = if is_active then (dotNetClass "System.Drawing.Color").FromArgb 30 120 200 \
+				else (dotNetClass "System.Drawing.Color").FromArgb 68 68 68
+		)
+		
+		fn dropzoneAccept e src =
+		(
+			local p = dropzonePath e
+			if p != "" then
+			(
+				edtSource.text = p
+				logText ("Drop: " + p + "\n")
+			)
+			dropzoneHi src false
+		)
+
+		on edtSource DragEnter e do ( dropzoneEffect e; dropzoneHi edtSource true )
+		on edtSource DragDrop e do ( dropzoneAccept e edtSource )
+		on edtSource DragLeave e do ( dropzoneHi edtSource false )
+
+		on lbxMissing DragEnter e do ( dropzoneEffect e; dropzoneHi lbxMissing true )
+		on lbxMissing DragDrop e do ( dropzoneAccept e lbxMissing )
+		on lbxMissing DragLeave e do ( dropzoneHi lbxMissing false )
 
 		on btnRescan pressed do
 		(
@@ -892,6 +1454,10 @@
 			refreshMissingList extractMA_missingFiles
 			lblStatus.text = L10N.trMsg "stExcluded" args:#(idxs.count)
 		)
+		on btnImportMax pressed do
+		(
+			importMaxStart()
+		)
 		on btnDeleteSelected pressed do
 		(
 			local selObjs = selection as array
@@ -900,7 +1466,8 @@
 				logText (L10N.trMsg "msgInfoSelectObj" + "\n")
 				return false
 			)
-			g_extractMA_delCtx = deepCopy selObjs
+			-- поверхностная копия массива ссылок: deepCopy создаёт копии-призраки, которых нет в сцене
+			g_extractMA_delCtx = for o in selObjs collect o
 			popUpMenu rmc_confirm_delete
 		)
 		on btnCancel pressed do

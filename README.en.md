@@ -301,7 +301,7 @@ Features:
 
 [back (contents)](#contents)
 ## Extract Missing Maps
-[Version 2026.08.16](usermacros/%23PankovScripts-ExtractMissingMaps.mcr)
+[Version 2026.10.03](usermacros/%23PankovScripts-ExtractMissingMaps.mcr)
 
 This is an analogue of Relink Bitmaps, but with a specific purpose.
 It can also find lost textures in the specified folder. But at the same time, it scans archives (zip, 7z, rar).
@@ -311,6 +311,8 @@ And if there are files from the list of lost ones in the archive, it extracts th
 - You can search for textures only in selected objects
 - You can modify the list by removing elements
 - It can be used as an Asset Collector
+- Import .max from archive/folder: merge the scene file and automatically extract and relink the missing textures (step 1), then delete unwanted objects (step 2)
+- Delete selected objects: removes objects from the scene and their textures from disk (if not used by other objects, force, or recursively together with objects using the same textures), with Undo
 
 **Need installed [7-zip](https://www.7-zip.org/)**
 
